@@ -62,6 +62,9 @@ static func build(seed := 0) -> Battle:
 				"B":
 					spawns[1].append(p)
 
+	for y in range(BUILDING.position.y, BUILDING.end.y):
+		for x in range(BUILDING.position.x, BUILDING.end.x):
+			map.set_terrain(Vector2i(x, y), TacticalMap.Terrain.INDOOR)
 	_wall_rect(map, BUILDING)
 	for pair in DOORS:
 		map.set_edge(pair[0], pair[1], Cover.NONE)

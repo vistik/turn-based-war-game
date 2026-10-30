@@ -1,6 +1,6 @@
 # Combat engine prototype
 
-Square-grid tactical combat inspired by UFO: Enemy Unknown and XCOM 2. Single height level, hotseat.
+Square-grid tactical combat inspired by UFO: Enemy Unknown and XCOM 2. Single height level. Play against the AI, hotseat, or watch AI vs AI.
 
 ## Decisions
 
@@ -19,6 +19,7 @@ Square-grid tactical combat inspired by UFO: Enemy Unknown and XCOM 2. Single he
 | Overwatch | Fires once at the first enemy that moves in sight. 70% aim, the moving target gets no cover. Lasts until the owner's next turn |
 | Destruction | Grenades destroy all objects and walls in the blast. Objects leave rubble |
 | Turns | Each team moves all its units, in any order. The turn ends automatically when nobody can act |
+| AI | Utility AI per team (`TacticalAI`). Plays fair: knows only what its team sees, plus last-seen positions. Each step it scores every unit's plans (shoot, grenade, medkit, reload, overwatch, hunker, move then follow up) by expected damage, kill chance, incoming danger, cover, range and approach, and runs the best. Grows impatient after quiet rounds to break overwatch standoffs |
 | RNG | Seeded `RandomNumberGenerator` per battle, so battles are reproducible and testable |
 
 ## Architecture
@@ -27,18 +28,21 @@ Square-grid tactical combat inspired by UFO: Enemy Unknown and XCOM 2. Single he
   - `Battle` is the engine. Commands (`move`, `shoot`, …) check `can_*`, change state and return **event dictionaries**.
   - `TacticalMap` (terrain, objects, wall edges, cover), `LineOfSight`, `Pathfinder`, `CombatRules` (tunable numbers and hit formula), `Unit`, `Weapon`.
   - `SkirmishScenario`: the hand-made test map and rosters.
-- `scripts/view/battle_view.gd`: draws everything with `_draw()` and plays events back with animations. It never changes game state directly.
+- `scripts/combat/tactical_ai.gd`: the AI. It issues the same commands a player does, one per `act()` call.
+- `scripts/view/battle_view.gd`: input, menus, AI turn pacing and event playback (speed 1x/2x/4x/instant). It never changes game state directly.
+- `scripts/view/terrain_painter.gd`, `soldier_painter.gd`: procedural art. Soldiers are small 3D models (capsules and balls) projected through the view, so they face, walk, crouch and fall correctly from any rotation. The ground is on its own layer that only repaints when it changes.
 - `scripts/view/view_projection.gd`: grid ↔ screen maths for iso/top-down and rotation. The view keeps positions in grid space and only projects at draw time.
-- `tests/run_tests.gd`: headless engine tests.
+- `tests/run_tests.gd`: headless engine and AI tests. `tests/simulate.gd`: AI vs AI batch games for tuning.
 
 ```
 Godot --headless --path . -s tests/run_tests.gd
+Godot --headless --path . -s tests/simulate.gd -- 30   # games [first seed]
 ```
 
 ## Next candidates
 
 - Height levels: tile elevation, aim bonus from high ground, ladders
-- Simple AI to replace hotseat
+- AI personalities and difficulty levels, smarter path choice around overwatch
 - More abilities and items, ammo types, armor shred on weapons
 - Map loading from files or an editor
 - Missed shots damaging cover

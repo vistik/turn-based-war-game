@@ -258,3 +258,31 @@ func test_projection_round_trips() -> void:
 				var back := proj.unproject(proj.project(g))
 				check(back.distance_to(g) < 0.001, "round trip iso=%s rotation=%d %s -> %s" % [iso, rotation, g, back])
 			check_eq(proj.tile_at(proj.project(Vector2(7.5, 3.5))), Vector2i(7, 3), "tile picking iso=%s rotation=%d" % [iso, rotation])
+
+
+func test_ai_games_finish() -> void:
+	var simulate: GDScript = load("res://tests/simulate.gd")
+	for seed in [3, 11]:
+		var result: Dictionary = simulate.play(seed)
+		check(result["winner"] != -1, "AI vs AI game %d ends with a winner (rounds %d)" % [seed, result["rounds"]])
+
+
+func test_ai_takes_the_kill() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(2, 2)], ["Rifleman", 1, Vector2i(5, 2)], ["Rifleman", 1, Vector2i(15, 15)]])
+	battle.units[1].hp = 1
+	var ai := TacticalAI.new(battle, 0)
+	var shots := []
+	while battle.current_team == 0 and battle.winner == -1:
+		shots.append_array(ai.act().filter(func(e: Dictionary) -> bool: return e["type"] == "shot"))
+	check_eq(shots.size(), 1, "AI shoots during its turn")
+	check_eq(shots[0].get("target") if not shots.is_empty() else null, 1, "at the wounded enemy")
+
+
+func test_ai_does_not_see_through_fog() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(1, 1)], ["Rifleman", 1, Vector2i(14, 14)]])
+	for x in 16:
+		battle.map.set_edge(Vector2i(x, 7), Vector2i(x, 8), Cover.FULL)
+	var ai := TacticalAI.new(battle, 0)
+	ai.act()
+	check(ai._seen_enemies().is_empty(), "enemy behind the wall is unseen")
+	check(ai._last_seen.is_empty(), "and not remembered")

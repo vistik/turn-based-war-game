@@ -2,7 +2,7 @@ class_name TacticalMap
 extends RefCounted
 ## Grid data for a battle: terrain, cover objects standing on tiles, and walls on the edges between tiles.
 
-enum Terrain { FLOOR, ROUGH, RUBBLE }
+enum Terrain { FLOOR, ROUGH, RUBBLE, INDOOR }
 
 ## North, east, south, west.
 const DIRS4 := [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
@@ -10,8 +10,8 @@ const DIRS8 := [
 	Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0),
 	Vector2i(1, -1), Vector2i(1, 1), Vector2i(-1, 1), Vector2i(-1, -1),
 ]
-const TERRAIN_NAMES := ["Floor", "Rough ground", "Rubble"]
-const TERRAIN_COST := [1.0, 2.0, 2.0]
+const TERRAIN_NAMES := ["Grass", "Rough ground", "Rubble", "Indoor floor"]
+const TERRAIN_COST := [1.0, 2.0, 2.0, 1.0]
 const DIAGONAL_FACTOR := 1.5
 ## Extra cost for climbing over a half-height wall.
 const VAULT_COST := 1.0

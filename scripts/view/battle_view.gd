@@ -1,15 +1,21 @@
 extends Node2D
-## Top-down view of a Battle: draws the grid, takes hotseat input and plays back engine events.
+## View of a Battle: draws the grid (isometric or top-down), takes hotseat input and plays back engine events.
 ## Placeholder art only: everything is drawn with primitives in _draw().
 
-const TILE := 28
-const ORIGIN := Vector2(16, 24)
-const PANEL_X := 704.0
+const PANEL_WIDTH := 400.0
 const TEAM_COLORS := [Color("4aa3ff"), Color("ff6150")]
 const TEAM_NAMES := ["Blue", "Red"]
-const TERRAIN_COLORS := [Color("3a4237"), Color("4a4a30"), Color("4b3f37")]
+const TERRAIN_COLORS := [Color("4b5a45"), Color("6a6440"), Color("5a5048")]
+const ROCK_COLOR := Color("8d939b")
+const CRATE_COLOR := Color("a07a3f")
+const WALL_COLOR := Color("c3c7cc")
+const LOW_WALL_COLOR := Color("b8a070")
 const MOVE_COLOR := Color("4aa3ff")
 const DASH_COLOR := Color("f5c542")
+## Heights in tiles of things standing on the map, and the half-thickness of walls.
+const FULL_HEIGHT := 1.0
+const HALF_HEIGHT := 0.45
+const WALL_THICKNESS := 0.07
 const KEY_ACTIONS := {
 	KEY_1: "shoot", KEY_2: "overwatch", KEY_3: "hunker", KEY_4: "reload",
 	KEY_5: "grenade", KEY_6: "medkit", KEY_TAB: "next", KEY_ENTER: "end", KEY_KP_ENTER: "end",
@@ -19,6 +25,9 @@ const ACTION_BUTTONS := [
 	["grenade", "5 Grenade"], ["medkit", "6 Medkit"], ["next", "Tab Next unit"], ["end", "Enter End turn"],
 ]
 const SHOT_LABELS := {"miss": "MISS", "graze": "GRAZE", "hit": "HIT", "crit": "CRITICAL"}
+const ZOOM_MIN := 0.35
+const ZOOM_MAX := 2.0
+const PAN_SPEED := 700.0
 
 enum Mode { MOVE, SHOOT, GRENADE, MEDKIT }
 
@@ -28,12 +37,16 @@ var mode := Mode.MOVE
 var hover := Vector2i(-1, -1)
 var busy := false
 
+var _proj: ViewProjection
+var _camera: Camera2D
+var _dragging := false
 var _reach := {}
+var _move_tiles := {}
 var _visible_tiles := {}
 var _seen_units := {}
 var _target_odds := {}
 var _flankers: Array[Unit] = []
-## Presentation state that trails the engine while events play back.
+## Presentation state that trails the engine while events play back. Positions are in grid space.
 var _display_pos := {}
 var _display_hp := {}
 var _revealed := {}
@@ -42,6 +55,7 @@ var _effects := []
 var _overlay_state := ""
 
 var _font: Font
+var _panel: PanelContainer
 var _turn_label: Label
 var _unit_info: RichTextLabel
 var _target_info: RichTextLabel
@@ -54,14 +68,22 @@ var _overlay_label: Label
 func _ready() -> void:
 	_font = ThemeDB.fallback_font
 	battle = SkirmishScenario.build()
+	_proj = ViewProjection.new(Vector2(battle.map.width, battle.map.height))
+	_camera = Camera2D.new()
+	_camera.zoom = Vector2(1.0, 1.0)
+	add_child(_camera)
 	for u in battle.units:
 		_display_pos[u.id] = _center(u.pos)
 		_display_hp[u.id] = u.hp
 	_build_ui()
+	_focus(Vector2(battle.map.width, battle.map.height) * 0.5, false)
 	_run(battle.start())
 
 
 func _process(delta: float) -> void:
+	_pan_with_keys(delta)
+	if not busy and _overlay_state == "":
+		_set_hover(_mouse_tile())
 	if not busy and _floaters.is_empty() and _effects.is_empty():
 		return
 	for item in _floaters + _effects:
@@ -78,13 +100,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event is InputEventKey and event.pressed and not event.echo:
 			_dismiss_overlay()
 		return
+	if _handle_camera_input(event):
+		get_viewport().set_input_as_handled()
+		return
 	if busy:
 		return
-	if event is InputEventMouseMotion:
-		_set_hover(_tile_at(get_local_mouse_position()))
-	elif event is InputEventMouseButton and event.pressed:
+	if event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_LEFT:
-			_on_click(_tile_at(get_local_mouse_position()))
+			_on_click(_mouse_tile())
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
 			_set_mode(Mode.MOVE)
 	elif event is InputEventKey and event.pressed and not event.echo:
@@ -92,9 +115,58 @@ func _unhandled_input(event: InputEvent) -> void:
 			_set_mode(Mode.MOVE)
 		elif KEY_ACTIONS.has(event.keycode):
 			_on_action(KEY_ACTIONS[event.keycode])
+		else:
+			return
 	else:
 		return
 	get_viewport().set_input_as_handled()
+
+
+## Zoom, drag, rotate and view toggle. Returns true when the event was used.
+func _handle_camera_input(event: InputEvent) -> bool:
+	if event is InputEventMouseButton:
+		match event.button_index:
+			MOUSE_BUTTON_WHEEL_UP when event.pressed:
+				_zoom_by(1.1)
+			MOUSE_BUTTON_WHEEL_DOWN when event.pressed:
+				_zoom_by(1.0 / 1.1)
+			MOUSE_BUTTON_MIDDLE:
+				_dragging = event.pressed
+			_:
+				return false
+		return true
+	if event is InputEventMouseMotion and _dragging:
+		_camera.position -= event.relative / _camera.zoom
+		return true
+	if event is InputEventKey and event.pressed and not event.echo:
+		match event.keycode:
+			KEY_Q:
+				_rotate_view(-1)
+			KEY_E:
+				_rotate_view(1)
+			KEY_V:
+				_toggle_view()
+			KEY_F:
+				if selected != null:
+					_focus(_display_pos[selected.id])
+			_:
+				return false
+		return true
+	return false
+
+
+func _pan_with_keys(delta: float) -> void:
+	var dir := Vector2.ZERO
+	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
+		dir.x -= 1
+	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
+		dir.x += 1
+	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):
+		dir.y -= 1
+	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
+		dir.y += 1
+	if dir != Vector2.ZERO and _overlay_state == "":
+		_camera.position += dir.normalized() * PAN_SPEED * delta / _camera.zoom.x
 
 
 func _on_click(tile: Vector2i) -> void:
@@ -128,13 +200,23 @@ func _on_click(tile: Vector2i) -> void:
 
 
 func _on_action(action: String) -> void:
+	match action:
+		"rotate_left":
+			_rotate_view(-1)
+			return
+		"rotate_right":
+			_rotate_view(1)
+			return
+		"toggle_view":
+			_toggle_view()
+			return
 	if busy or _overlay_state != "" or battle.winner != -1:
 		return
 	if action == "end":
 		_run(battle.end_turn())
 		return
 	if action == "next":
-		_select(_next_ready_unit(selected))
+		_select(_next_ready_unit(selected), true)
 		return
 	if selected == null:
 		return
@@ -186,12 +268,14 @@ func _dismiss_overlay() -> void:
 		return
 	_overlay_state = ""
 	_overlay.hide()
-	_select(_next_ready_unit(null))
+	_select(_next_ready_unit(null), true)
 
 
-func _select(u: Unit) -> void:
+func _select(u: Unit, focus := false) -> void:
 	selected = u
 	mode = Mode.MOVE
+	if focus and u != null:
+		_focus(_display_pos[u.id])
 	_refresh()
 
 
@@ -211,6 +295,12 @@ func _set_hover(tile: Vector2i) -> void:
 	queue_redraw()
 
 
+func _mouse_tile() -> Vector2i:
+	if get_viewport().get_mouse_position().x >= _panel.global_position.x:
+		return Vector2i(-1, -1)
+	return _proj.tile_at(get_local_mouse_position())
+
+
 func _next_ready_unit(after: Unit) -> Unit:
 	var ready := battle.alive_units(battle.current_team).filter(func(u: Unit) -> bool: return u.actions > 0)
 	if ready.is_empty():
@@ -218,11 +308,52 @@ func _next_ready_unit(after: Unit) -> Unit:
 	return ready[(ready.find(after) + 1) % ready.size()]
 
 
+# --- Camera ---
+
+## The screen x offset that centres things in the map area left of the side panel.
+func _view_shift() -> Vector2:
+	return Vector2(PANEL_WIDTH * 0.5, 0) / _camera.zoom.x
+
+
+func _focus(grid: Vector2, animate := true) -> void:
+	var target := _proj.project(grid) + _view_shift()
+	if animate:
+		create_tween().tween_property(_camera, "position", target, 0.25).set_trans(Tween.TRANS_SINE)
+	else:
+		_camera.position = target
+
+
+func _focused_grid() -> Vector2:
+	return _proj.unproject(_camera.position - _view_shift())
+
+
+func _zoom_by(factor: float) -> void:
+	var focus := _focused_grid()
+	var zoom := clampf(_camera.zoom.x * factor, ZOOM_MIN, ZOOM_MAX)
+	_camera.zoom = Vector2(zoom, zoom)
+	_focus(focus, false)
+
+
+func _rotate_view(turns: int) -> void:
+	var focus := _focused_grid()
+	_proj.rotation = posmod(_proj.rotation + turns, 4)
+	_focus(focus, false)
+	queue_redraw()
+
+
+func _toggle_view() -> void:
+	var focus := _focused_grid()
+	_proj.isometric = not _proj.isometric
+	_focus(focus, false)
+	queue_redraw()
+
+
 # --- Engine calls and event playback ---
 
 func _run(events: Array) -> void:
 	busy = true
 	_reach = {}
+	_move_tiles = {}
 	queue_redraw()
 	for e: Dictionary in events:
 		await _play_event(e)
@@ -257,7 +388,7 @@ func _play_event(e: Dictionary) -> void:
 			await _wait(0.5)
 		"explosion":
 			var u := battle.get_unit(e["unit"])
-			_effects.append({"kind": "explosion", "at": _center(e["center"]), "radius": e["radius"] * TILE + TILE * 0.5, "age": 0.0, "life": 0.5})
+			_effects.append({"kind": "explosion", "at": _center(e["center"]), "radius": e["radius"] + 0.5, "age": 0.0, "life": 0.5})
 			_log_line("%s throws a grenade, destroying %d pieces of cover." % [u.name, e["destroyed"]])
 			await _wait(0.5)
 		"status":
@@ -291,11 +422,11 @@ func _play_shot(e: Dictionary) -> void:
 	var from: Vector2 = _display_pos[shooter.id]
 	var to: Vector2 = _display_pos[target.id]
 	if e["result"] == "miss":
-		to += Vector2.from_angle(randf() * TAU) * TILE * 0.8
+		to += Vector2.from_angle(randf() * TAU) * 0.8
 	_effects.append({"kind": "tracer", "from": from, "to": to, "age": 0.0, "life": 0.35})
 	await _wait(0.3)
 	var label: String = SHOT_LABELS[e["result"]]
-	_float(_display_pos[target.id] + Vector2(0, -12), "%s (%d%%)" % [label, e["chance"]], Color.WHITE if e["result"] != "crit" else Color("ffb84d"))
+	_float(_display_pos[target.id], "%s (%d%%)" % [label, e["chance"]], Color.WHITE if e["result"] != "crit" else Color("ffb84d"))
 	_log_line("%s%s shoots at %s: %s (%d%%)" % ["Overwatch: " if e["reaction"] else "", shooter.name, target.name, label, e["chance"]])
 	await _wait(0.25)
 
@@ -315,8 +446,9 @@ func _wait(seconds: float) -> void:
 	await get_tree().create_timer(seconds).timeout
 
 
+## Rising text over a grid position.
 func _float(at: Vector2, text: String, color: Color) -> void:
-	_floaters.append({"text": text, "at": at + Vector2(0, -16), "color": color, "age": 0.0, "life": 1.2})
+	_floaters.append({"text": text, "at": at, "color": color, "age": 0.0, "life": 1.2})
 
 
 func _flash(message: String) -> void:
@@ -335,6 +467,10 @@ func _refresh() -> void:
 			_seen_units[u.id] = true
 	var can_act := selected != null and battle.can_act(selected) == ""
 	_reach = battle.reachable(selected) if can_act and mode == Mode.MOVE else {}
+	_move_tiles.clear()
+	for p: Vector2i in _reach:
+		if _reach[p]["cost"] <= selected.mobility + 0.001:
+			_move_tiles[p] = true
 	_target_odds.clear()
 	if can_act and mode == Mode.SHOOT:
 		for e in battle.visible_enemies(selected):
@@ -466,14 +602,21 @@ func _show_overlay(state: String, text: String, color: Color) -> void:
 func _build_ui() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
-	var panel := PanelContainer.new()
-	panel.position = Vector2(PANEL_X, ORIGIN.y)
-	panel.size = Vector2(1280 - PANEL_X - 16, TILE * battle.map.height)
-	layer.add_child(panel)
+	_panel = PanelContainer.new()
+	_panel.set_anchors_preset(Control.PRESET_RIGHT_WIDE)
+	_panel.offset_left = -PANEL_WIDTH
+	_panel.offset_right = -12
+	_panel.offset_top = 12
+	_panel.offset_bottom = -12
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.1, 0.11, 0.13)
+	style.set_corner_radius_all(6)
+	_panel.add_theme_stylebox_override("panel", style)
+	layer.add_child(_panel)
 	var margin := MarginContainer.new()
 	for side in ["left", "right", "top", "bottom"]:
 		margin.add_theme_constant_override("margin_" + side, 10)
-	panel.add_child(margin)
+	_panel.add_child(margin)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 8)
 	margin.add_child(box)
@@ -487,12 +630,7 @@ func _build_ui() -> void:
 	var actions := HFlowContainer.new()
 	box.add_child(actions)
 	for spec: Array in ACTION_BUTTONS:
-		var button := Button.new()
-		button.text = spec[1]
-		button.focus_mode = Control.FOCUS_NONE
-		button.pressed.connect(_on_action.bind(spec[0]))
-		actions.add_child(button)
-		_buttons[spec[0]] = button
+		_add_button(actions, spec[0], spec[1])
 
 	box.add_child(HSeparator.new())
 	_target_info = _rich_label(150)
@@ -503,8 +641,14 @@ func _build_ui() -> void:
 	_log.scroll_following = true
 	_log.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	box.add_child(_log)
+
+	var view_row := HBoxContainer.new()
+	box.add_child(view_row)
+	_add_button(view_row, "rotate_left", "Q Rotate left")
+	_add_button(view_row, "rotate_right", "E Rotate right")
+	_add_button(view_row, "toggle_view", "V Iso / top-down")
 	var help := Label.new()
-	help.text = "LMB select / move / target    RMB or Esc cancel"
+	help.text = "LMB select / move / target   RMB, Esc cancel\nWASD or middle drag pan   Wheel zoom   F focus unit"
 	help.add_theme_font_size_override("font_size", 12)
 	help.modulate = Color(1, 1, 1, 0.6)
 	box.add_child(help)
@@ -524,6 +668,15 @@ func _build_ui() -> void:
 	_overlay.add_child(_overlay_label)
 
 
+func _add_button(parent: Control, action: String, text: String) -> void:
+	var button := Button.new()
+	button.text = text
+	button.focus_mode = Control.FOCUS_NONE
+	button.pressed.connect(_on_action.bind(action))
+	parent.add_child(button)
+	_buttons[action] = button
+
+
 func _rich_label(min_height: float) -> RichTextLabel:
 	var label := RichTextLabel.new()
 	label.bbcode_enabled = true
@@ -536,139 +689,237 @@ func _rich_label(min_height: float) -> RichTextLabel:
 # --- Drawing ---
 
 func _draw() -> void:
-	_draw_tiles()
-	_draw_edges()
-	_draw_fog()
-	_draw_mode_overlay()
-	_draw_units()
+	_draw_ground()
+	_draw_ground_overlays()
+	_draw_world()
+	_draw_markers()
 	_draw_effects()
 
 
-func _draw_tiles() -> void:
+func _draw_ground() -> void:
 	var map := battle.map
 	for y in map.height:
 		for x in map.width:
 			var p := Vector2i(x, y)
-			var rect := _rect(p)
 			var terrain := map.get_terrain(p)
-			draw_rect(rect, TERRAIN_COLORS[terrain])
-			draw_rect(rect, Color(0, 0, 0, 0.25), false, 1.0)
-			var c := rect.get_center()
+			var color: Color = TERRAIN_COLORS[terrain]
+			if (x + y) % 2 == 1:
+				color = color.darkened(0.06)
+			draw_colored_polygon(_tile_poly(p), color)
+			var center := _center(p)
 			if terrain == TacticalMap.Terrain.ROUGH:
-				for o: Vector2 in [Vector2(-6, -5), Vector2(5, -2), Vector2(-2, 6)]:
-					draw_line(c + o, c + o + Vector2(2, -4), Color("6b6a40"), 1.5)
+				for o: Vector2 in [Vector2(-0.22, -0.18), Vector2(0.2, -0.05), Vector2(-0.05, 0.22)]:
+					var at := _proj.project(center + o)
+					draw_line(at, _proj.project(center + o, 0.18) + Vector2(2, 0), Color("8f8752"), 2.0)
 			elif terrain == TacticalMap.Terrain.RUBBLE:
-				for o: Vector2 in [Vector2(-6, -4), Vector2(4, 3), Vector2(-3, 7), Vector2(6, -6)]:
-					draw_rect(Rect2(c + o, Vector2(3, 3)), Color("736255"))
-			match map.get_object(p):
-				Cover.HALF:
-					draw_rect(rect.grow(-5), Color("8a6d3b"))
-					draw_rect(rect.grow(-5), Color("5c4524"), false, 2.0)
-				Cover.FULL:
-					draw_rect(rect.grow(-1), Color("6e737a"))
-					draw_rect(rect.grow(-4), Color("878c93"), false, 2.0)
-			if _reach.has(p) and p != selected.pos:
-				var dash: bool = _reach[p]["cost"] > selected.mobility + 0.001
-				draw_rect(rect, (DASH_COLOR if dash else MOVE_COLOR) * Color(1, 1, 1, 0.18))
+				for o: Vector2 in [Vector2(-0.2, -0.15), Vector2(0.15, 0.1), Vector2(-0.1, 0.25), Vector2(0.22, -0.22)]:
+					draw_colored_polygon(_diamond(center + o, 0.08), Color("80746a"))
+			if not _visible_tiles.has(p):
+				draw_colored_polygon(_tile_poly(p), Color(0, 0, 0, 0.45))
+	for y in map.height:
+		for x in map.width:
+			draw_polyline(_tile_outline(Vector2i(x, y)), Color(0, 0, 0, 0.18), 1.0)
 
 
-func _draw_edges() -> void:
-	var edges := battle.map.get_edges()
-	for key: Vector3i in edges:
-		var a := ORIGIN + Vector2(key.x + 1, key.y) * TILE if key.z == 0 else ORIGIN + Vector2(key.x, key.y + 1) * TILE
-		var b := a + (Vector2(0, TILE) if key.z == 0 else Vector2(TILE, 0))
-		if edges[key] == Cover.FULL:
-			draw_line(a, b, Color("c9ccd1"), 4.0)
-		else:
-			draw_dashed_line(a, b, Color("c9a86b"), 3.0, 5.0)
-
-
-func _draw_fog() -> void:
-	for y in battle.map.height:
-		for x in battle.map.width:
-			if not _visible_tiles.has(Vector2i(x, y)):
-				draw_rect(_rect(Vector2i(x, y)), Color(0, 0, 0, 0.5))
-
-
-func _draw_mode_overlay() -> void:
-	if busy or selected == null or not battle.map.in_bounds(hover):
+func _draw_ground_overlays() -> void:
+	if busy or selected == null:
 		return
+	if mode == Mode.MOVE and not _reach.is_empty():
+		for p: Vector2i in _reach:
+			if p != selected.pos:
+				draw_colored_polygon(_tile_poly(p), (MOVE_COLOR if _move_tiles.has(p) else DASH_COLOR) * Color(1, 1, 1, 0.12))
+		_draw_region_border(_reach, DASH_COLOR)
+		_draw_region_border(_move_tiles, MOVE_COLOR)
+	if not battle.map.in_bounds(hover):
+		return
+	draw_polyline(_tile_outline(hover), Color(1, 1, 1, 0.8), 2.0)
 	match mode:
 		Mode.MOVE:
 			if _reach.has(hover) and hover != selected.pos:
-				_draw_path_preview()
+				var color := MOVE_COLOR if _move_tiles.has(hover) else DASH_COLOR
+				var points := PackedVector2Array([_proj.project(_center(selected.pos))])
+				for p in Pathfinder.path_to(_reach, hover):
+					points.append(_proj.project(_center(p)))
+				draw_polyline(points, color, 3.0)
+				draw_polyline(_ground_circle(_center(hover), 0.3), color, 2.5)
 		Mode.GRENADE:
-			var center := _center(selected.pos)
-			draw_arc(center, CombatRules.GRENADE_RANGE * TILE, 0, TAU, 96, Color(1, 0.7, 0.3, 0.35), 1.5)
+			draw_polyline(_ground_circle(_center(selected.pos), CombatRules.GRENADE_RANGE), Color(1, 0.7, 0.3, 0.5), 1.5)
 			if battle.can_throw_grenade(selected, hover) == "":
 				for p in battle.map.tiles_in_radius(hover, CombatRules.GRENADE_RADIUS):
-					draw_rect(_rect(p), Color(1, 0.55, 0.1, 0.35))
-				draw_line(center, _center(hover), Color(1, 0.7, 0.3, 0.6), 1.5)
-			else:
-				var c := _center(hover)
-				draw_line(c - Vector2(6, 6), c + Vector2(6, 6), Color.RED, 2.0)
-				draw_line(c - Vector2(-6, 6), c + Vector2(-6, 6), Color.RED, 2.0)
+					draw_colored_polygon(_tile_poly(p), Color(1, 0.55, 0.1, 0.4))
 		Mode.MEDKIT:
 			for u in battle.alive_units(selected.team):
 				if battle.can_use_medkit(selected, u) == "":
-					draw_arc(_display_pos[u.id], 14, 0, TAU, 32, Color("6bff8a"), 2.0)
+					draw_polyline(_ground_circle(_display_pos[u.id], 0.45), Color("6bff8a"), 2.5)
 
 
-func _draw_path_preview() -> void:
-	var cost: float = _reach[hover]["cost"]
-	var color := DASH_COLOR if cost > selected.mobility + 0.001 else MOVE_COLOR
-	var points := PackedVector2Array([_center(selected.pos)])
-	for p in Pathfinder.path_to(_reach, hover):
-		points.append(_center(p))
-	draw_polyline(points, color, 2.5)
-	var end := _center(hover)
-	draw_arc(end, 8, 0, TAU, 24, color, 2.0)
-	# Cover shields on each side of the destination, like XCOM.
-	for d: Vector2i in TacticalMap.DIRS4:
-		var c := battle.map.cover_toward(hover, d)
-		if c == Cover.NONE:
-			continue
-		var at := end + Vector2(d) * TILE * 0.36 - Vector2(4, 4)
-		draw_rect(Rect2(at, Vector2(8, 8)), Color("8fd3ff"), c == Cover.FULL)
-		if c == Cover.HALF:
-			draw_rect(Rect2(at + Vector2(0, 4), Vector2(8, 4)), Color("8fd3ff"))
-	for e in _flankers:
-		draw_dashed_line(end, _display_pos[e.id], Color(1, 0.3, 0.3, 0.7), 1.5, 6.0)
-	if color == DASH_COLOR:
-		draw_string(_font, end + Vector2(-14, -12), "DASH", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, DASH_COLOR)
+## Outlines the boundary of a set of tiles, like XCOM's move range border.
+func _draw_region_border(tiles: Dictionary, color: Color) -> void:
+	var corners := [Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)]
+	for p: Vector2i in tiles:
+		for i in 4:
+			if not tiles.has(p + TacticalMap.DIRS4[i]):
+				var a: Vector2 = Vector2(p) + corners[i]
+				var b: Vector2 = Vector2(p) + corners[(i + 1) % 4]
+				draw_line(_proj.project(a), _proj.project(b), color, 2.5)
 
 
-func _draw_units() -> void:
+## Objects, walls and units, painted back to front.
+func _draw_world() -> void:
+	var map := battle.map
+	var items := []
+	for y in map.height:
+		for x in map.width:
+			var p := Vector2i(x, y)
+			if map.get_object(p) != Cover.NONE:
+				items.append([_proj.depth(_center(p)), "object", p])
+	for key: Vector3i in map.get_edges():
+		var pair := TacticalMap.edge_tiles(key)
+		items.append([_proj.depth((_center(pair[0]) + _center(pair[1])) * 0.5), "edge", key])
+	var focus: Array[Vector2] = []
+	if map.in_bounds(hover):
+		focus.append(_center(hover))
 	for u in battle.units:
-		var at: Vector2 = _display_pos[u.id]
-		var color: Color = TEAM_COLORS[u.team]
-		if _display_hp[u.id] <= 0:
-			draw_line(at - Vector2(6, 6), at + Vector2(6, 6), color.darkened(0.4), 3.0)
-			draw_line(at - Vector2(-6, 6), at + Vector2(-6, 6), color.darkened(0.4), 3.0)
+		if _is_drawn(u):
+			items.append([_proj.depth(_display_pos[u.id]) + 0.01, "unit", u])
+			if _display_hp[u.id] > 0:
+				focus.append(_display_pos[u.id])
+	items.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+
+	for item: Array in items:
+		match item[1]:
+			"object":
+				var p: Vector2i = item[2]
+				var full := map.get_object(p) == Cover.FULL
+				var rect := Rect2(Vector2(p), Vector2.ONE).grow(-0.04 if full else -0.17)
+				var color := ROCK_COLOR if full else CRATE_COLOR
+				if not _visible_tiles.has(p):
+					color = color.darkened(0.45)
+				_draw_prism(rect, FULL_HEIGHT if full else HALF_HEIGHT, color, _occludes(_center(p), focus))
+			"edge":
+				var key: Vector3i = item[2]
+				var pair := TacticalMap.edge_tiles(key)
+				var full: bool = map.get_edges()[key] == Cover.FULL
+				var rect := Rect2(key.x + 1 - WALL_THICKNESS, key.y, WALL_THICKNESS * 2, 1) if key.z == 0 \
+						else Rect2(key.x, key.y + 1 - WALL_THICKNESS, 1, WALL_THICKNESS * 2)
+				var color := WALL_COLOR if full else LOW_WALL_COLOR
+				if not _visible_tiles.has(pair[0]) and not _visible_tiles.has(pair[1]):
+					color = color.darkened(0.45)
+				_draw_prism(rect, FULL_HEIGHT if full else HALF_HEIGHT, color, _occludes(rect.get_center(), focus))
+			"unit":
+				_draw_unit(item[2])
+
+
+func _is_drawn(u: Unit) -> bool:
+	if _display_hp[u.id] <= 0:
+		return true
+	return u.team == battle.current_team or _seen_units.has(u.id) or _revealed.has(u.id)
+
+
+## Whether a tall thing at grid point g stands in front of any focus point, hiding it.
+func _occludes(g: Vector2, focus: Array[Vector2]) -> bool:
+	if not _proj.isometric:
+		return false
+	var r := _proj.rotate_grid(g)
+	for f in focus:
+		var rf := _proj.rotate_grid(f)
+		if r.x + r.y > rf.x + rf.y + 0.1 and r.x > rf.x - 0.7 and r.y > rf.y - 0.7 and r.distance_to(rf) < 2.6:
+			return true
+	return false
+
+
+## A box standing on the grid rect. Iso shows top and the two viewer-facing sides; top-down shows the top with a shadow.
+func _draw_prism(rect: Rect2, height: float, color: Color, faded: bool) -> void:
+	var a := _proj.rotate_grid(rect.position)
+	var b := _proj.rotate_grid(rect.end)
+	var lo := Vector2(minf(a.x, b.x), minf(a.y, b.y))
+	var hi := Vector2(maxf(a.x, b.x), maxf(a.y, b.y))
+	var corners := [lo, Vector2(hi.x, lo.y), hi, Vector2(lo.x, hi.y)]
+	var alpha := 0.3 if faded else 1.0
+	var top := PackedVector2Array()
+	for c: Vector2 in corners:
+		top.append(_proj.project_rotated(c, height))
+	if _proj.isometric:
+		for side: Array in [[1, 2, color.darkened(0.25)], [3, 2, color.darkened(0.45)]]:
+			var c0: Vector2 = corners[side[0]]
+			var c1: Vector2 = corners[side[1]]
+			var face := PackedVector2Array([
+				_proj.project_rotated(c0), _proj.project_rotated(c1),
+				_proj.project_rotated(c1, height), _proj.project_rotated(c0, height),
+			])
+			var shade: Color = side[2]
+			draw_colored_polygon(face, Color(shade, alpha))
+	else:
+		var shadow := PackedVector2Array()
+		for point in top:
+			shadow.append(point + Vector2(1, 1) * height * 7.0)
+		draw_colored_polygon(shadow, Color(0, 0, 0, 0.35))
+	draw_colored_polygon(top, Color(color.lightened(0.12), alpha))
+	top.append(top[0])
+	draw_polyline(top, Color(color.darkened(0.5), alpha), 1.0)
+
+
+func _draw_unit(u: Unit) -> void:
+	var g: Vector2 = _display_pos[u.id]
+	var color: Color = TEAM_COLORS[u.team]
+	var ground := _proj.project(g)
+	if _display_hp[u.id] <= 0:
+		draw_line(ground - Vector2(7, 4), ground + Vector2(7, 4), color.darkened(0.4), 3.0)
+		draw_line(ground - Vector2(-7, 4), ground + Vector2(-7, 4), color.darkened(0.4), 3.0)
+		return
+	draw_colored_polygon(_ground_circle(g, 0.3, false), Color(0, 0, 0, 0.35))
+	if u == selected:
+		draw_polyline(_ground_circle(g, 0.42), Color.WHITE, 2.5)
+	if mode == Mode.SHOOT and _target_odds.has(u.id):
+		var hovered := battle.map.in_bounds(hover) and battle.unit_at(hover) == u
+		draw_polyline(_ground_circle(g, 0.45), Color("ff4040") if hovered else Color("ff8080"), 3.0 if hovered else 1.5)
+	var head := _proj.project(g, 0.75)
+	if _proj.isometric:
+		draw_rect(Rect2(ground.x - 7, head.y, 14, ground.y - head.y), color.darkened(0.35))
+	draw_circle(head, 11, color)
+	draw_arc(head, 11, 0, TAU, 24, color.darkened(0.55), 1.5)
+	draw_string(_font, head + Vector2(-8, 5), u.role[0], HORIZONTAL_ALIGNMENT_CENTER, 16, 13, Color.BLACK)
+
+
+## Unit HP, status and target labels, drawn above everything so walls never hide them.
+func _draw_markers() -> void:
+	for u in battle.units:
+		if _display_hp[u.id] <= 0 or not _is_drawn(u):
 			continue
-		if u.team != battle.current_team and not _seen_units.has(u.id) and not _revealed.has(u.id):
-			continue
-		if u == selected:
-			draw_arc(at, 14, 0, TAU, 32, Color.WHITE, 2.0)
-		if mode == Mode.SHOOT and _target_odds.has(u.id):
-			var hovered := battle.map.in_bounds(hover) and battle.unit_at(hover) == u
-			draw_arc(at, 14, 0, TAU, 32, Color("ff4040") if hovered else Color("ff8080"), 3.0 if hovered else 1.5)
-			draw_string(_font, at + Vector2(-16, -16), "%d%%" % _target_odds[u.id], HORIZONTAL_ALIGNMENT_CENTER, 32, 12, Color.WHITE)
-		draw_circle(at, 10, color)
-		draw_arc(at, 10, 0, TAU, 24, color.darkened(0.5), 1.5)
-		draw_string(_font, at + Vector2(-8, 5), u.role[0], HORIZONTAL_ALIGNMENT_CENTER, 16, 13, Color.BLACK)
-		# HP pips under the unit.
-		var pip_w := 22.0 / u.max_hp
+		var top := _proj.project(_display_pos[u.id], 0.75) + Vector2(0, -15)
+		var pip_w := 24.0 / u.max_hp
+		draw_rect(Rect2(top + Vector2(-13, -1), Vector2(26, 5)), Color(0, 0, 0, 0.6))
 		for i in u.max_hp:
-			var pip := Rect2(at + Vector2(-11 + i * pip_w, 11), Vector2(pip_w - 1, 3))
-			draw_rect(pip, Color("6bff8a") if i < _display_hp[u.id] else Color(0, 0, 0, 0.6))
+			draw_rect(Rect2(top + Vector2(-12 + i * pip_w, 0), Vector2(pip_w - 1, 3)), Color("6bff8a") if i < _display_hp[u.id] else Color("3a3a3a"))
 		if u.team == battle.current_team:
 			for i in u.actions:
-				draw_circle(at + Vector2(12, -10 + i * 6), 2.0, Color("f5c542"))
-		if u.overwatch:
-			draw_string(_font, at + Vector2(-13, -12), "OW", HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color("ffd34d"))
-		if u.hunkered:
-			draw_string(_font, at + Vector2(-13, -12), "HUNK", HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color("8fd3ff"))
+				draw_circle(top + Vector2(17 + i * 6, 1), 2.5, Color("f5c542"))
+		var status := "OVERWATCH" if u.overwatch else ("HUNKERED" if u.hunkered else "")
+		if status != "":
+			draw_string(_font, top + Vector2(-40, -5), status, HORIZONTAL_ALIGNMENT_CENTER, 80, 10, Color("ffd34d") if u.overwatch else Color("8fd3ff"))
+		if mode == Mode.SHOOT and _target_odds.has(u.id):
+			draw_string(_font, top + Vector2(-30, -18), "%d%%" % _target_odds[u.id], HORIZONTAL_ALIGNMENT_CENTER, 60, 15, Color.WHITE)
+	if busy or selected == null or not battle.map.in_bounds(hover) or mode != Mode.MOVE or not _reach.has(hover) or hover == selected.pos:
+		return
+	# Cover shields on each side of the move destination, and lines to enemies that would flank it.
+	var center := _center(hover)
+	for d: Vector2i in TacticalMap.DIRS4:
+		var c := battle.map.cover_toward(hover, d)
+		if c != Cover.NONE:
+			_draw_shield(_proj.project(center + Vector2(d) * 0.36, 0.5), c == Cover.FULL)
+	for e in _flankers:
+		draw_dashed_line(_proj.project(center, 0.5), _proj.project(_display_pos[e.id], 0.5), Color(1, 0.3, 0.3, 0.8), 2.0, 6.0)
+	if not _move_tiles.has(hover):
+		draw_string(_font, _proj.project(center) + Vector2(-30, 20), "DASH", HORIZONTAL_ALIGNMENT_CENTER, 60, 12, DASH_COLOR)
+
+
+func _draw_shield(at: Vector2, full: bool) -> void:
+	var shape := PackedVector2Array([at + Vector2(-6, -7), at + Vector2(6, -7), at + Vector2(6, 1), at + Vector2(0, 7), at + Vector2(-6, 1)])
+	draw_colored_polygon(shape, Color("8fd3ff") if full else Color(0.1, 0.15, 0.2, 0.8))
+	if not full:
+		draw_colored_polygon(PackedVector2Array([at + Vector2(-6, 0), at + Vector2(6, 0), at + Vector2(6, 1), at + Vector2(0, 7), at + Vector2(-6, 1)]), Color("8fd3ff"))
+	shape.append(shape[0])
+	draw_polyline(shape, Color("0d2030"), 1.5)
 
 
 func _draw_effects() -> void:
@@ -676,26 +927,49 @@ func _draw_effects() -> void:
 		var t: float = fx["age"] / fx["life"]
 		match fx["kind"]:
 			"tracer":
-				draw_line(fx["from"], fx["to"], Color(1, 0.9, 0.5, 1.0 - t), 2.0)
+				draw_line(_proj.project(fx["from"], 0.6), _proj.project(fx["to"], 0.6), Color(1, 0.9, 0.5, 1.0 - t), 2.5)
 			"explosion":
-				draw_circle(fx["at"], fx["radius"] * (0.4 + 0.6 * t), Color(1, 0.55, 0.15, 0.6 * (1.0 - t)))
+				draw_colored_polygon(_ground_circle(fx["at"], fx["radius"] * (0.4 + 0.6 * t), false), Color(1, 0.55, 0.15, 0.6 * (1.0 - t)))
 	for f in _floaters:
 		var t: float = f["age"] / f["life"]
 		var color: Color = f["color"]
 		color.a = 1.0 - t * t
-		var at: Vector2 = f["at"] + Vector2(-80, -24 * t)
-		draw_string(_font, at + Vector2(1, 1), f["text"], HORIZONTAL_ALIGNMENT_CENTER, 160, 13, Color(0, 0, 0, color.a))
-		draw_string(_font, at, f["text"], HORIZONTAL_ALIGNMENT_CENTER, 160, 13, color)
+		var at: Vector2 = _proj.project(f["at"], 1.2) + Vector2(-90, -20 - 24 * t)
+		draw_string(_font, at + Vector2(1, 1), f["text"], HORIZONTAL_ALIGNMENT_CENTER, 180, 14, Color(0, 0, 0, color.a))
+		draw_string(_font, at, f["text"], HORIZONTAL_ALIGNMENT_CENTER, 180, 14, color)
 
 
 func _center(p: Vector2i) -> Vector2:
-	return ORIGIN + (Vector2(p) + Vector2(0.5, 0.5)) * TILE
+	return Vector2(p) + Vector2(0.5, 0.5)
 
 
-func _rect(p: Vector2i) -> Rect2:
-	return Rect2(ORIGIN + Vector2(p) * TILE, Vector2(TILE, TILE))
+func _tile_poly(p: Vector2i) -> PackedVector2Array:
+	var g := Vector2(p)
+	return PackedVector2Array([
+		_proj.project(g), _proj.project(g + Vector2(1, 0)),
+		_proj.project(g + Vector2(1, 1)), _proj.project(g + Vector2(0, 1)),
+	])
 
 
-func _tile_at(pixel: Vector2) -> Vector2i:
-	var local := (pixel - ORIGIN) / TILE
-	return Vector2i(floori(local.x), floori(local.y))
+func _tile_outline(p: Vector2i) -> PackedVector2Array:
+	var poly := _tile_poly(p)
+	poly.append(poly[0])
+	return poly
+
+
+func _diamond(g: Vector2, r: float) -> PackedVector2Array:
+	return PackedVector2Array([
+		_proj.project(g + Vector2(-r, 0)), _proj.project(g + Vector2(0, -r)),
+		_proj.project(g + Vector2(r, 0)), _proj.project(g + Vector2(0, r)),
+	])
+
+
+## A circle on the ground, radius in tiles. Closed for outlines; open (no repeated point) for filling.
+func _ground_circle(g: Vector2, radius: float, closed := true) -> PackedVector2Array:
+	var points := PackedVector2Array()
+	var segments := clampi(int(radius * 16), 16, 96)
+	for i in segments:
+		points.append(_proj.project(g + Vector2.from_angle(TAU * i / segments) * radius))
+	if closed:
+		points.append(points[0])
+	return points

@@ -1,13 +1,13 @@
 # Combat engine prototype
 
-Top-down, square-grid tactical combat inspired by UFO: Enemy Unknown and XCOM 2. Single height level, hotseat.
+Square-grid tactical combat inspired by UFO: Enemy Unknown and XCOM 2. Single height level, hotseat.
 
 ## Decisions
 
 | Topic | Decision |
 |---|---|
 | Grid | Square, 8-way movement, diagonals cost 1.5, no cutting corners past walls/objects |
-| View | Top-down, one level (height comes later) |
+| View | Isometric by default (V toggles top-down), rotate in quarter turns (Q/E), pan/zoom camera. Walls and objects in front of units or the cursor fade out. One level (height comes later) |
 | Actions | 2 per turn. Move (1) / dash (2). Shoot, overwatch, hunker and grenade end the turn. Reload and medkit cost 1 |
 | Movement | Mobility = path-cost budget per action. Rough ground and rubble cost 2, vaulting a low wall +1 |
 | Cover | Half (−20) or full (−40), directional. Comes from objects on neighbouring tiles or walls on tile edges |
@@ -28,6 +28,7 @@ Top-down, square-grid tactical combat inspired by UFO: Enemy Unknown and XCOM 2.
   - `TacticalMap` (terrain, objects, wall edges, cover), `LineOfSight`, `Pathfinder`, `CombatRules` (tunable numbers and hit formula), `Unit`, `Weapon`.
   - `SkirmishScenario`: the hand-made test map and rosters.
 - `scripts/view/battle_view.gd`: draws everything with `_draw()` and plays events back with animations. It never changes game state directly.
+- `scripts/view/view_projection.gd`: grid ↔ screen maths for iso/top-down and rotation. The view keeps positions in grid space and only projects at draw time.
 - `tests/run_tests.gd`: headless engine tests.
 
 ```
@@ -39,5 +40,5 @@ Godot --headless --path . -s tests/run_tests.gd
 - Height levels: tile elevation, aim bonus from high ground, ladders
 - Simple AI to replace hotseat
 - More abilities and items, ammo types, armor shred on weapons
-- Map loading from files or an editor, larger maps with camera pan and zoom
+- Map loading from files or an editor
 - Missed shots damaging cover

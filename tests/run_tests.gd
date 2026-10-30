@@ -246,3 +246,15 @@ func test_seeded_battles_are_deterministic() -> void:
 				battle.end_turn()
 		outcomes.append(results)
 	check_eq(outcomes[0], outcomes[1], "same seed, same results")
+
+
+func test_projection_round_trips() -> void:
+	var proj := ViewProjection.new(Vector2(24, 20))
+	for iso in [true, false]:
+		proj.isometric = iso
+		for rotation in 4:
+			proj.rotation = rotation
+			for g: Vector2 in [Vector2(0.5, 0.5), Vector2(3.25, 17.75), Vector2(23.5, 0.1)]:
+				var back := proj.unproject(proj.project(g))
+				check(back.distance_to(g) < 0.001, "round trip iso=%s rotation=%d %s -> %s" % [iso, rotation, g, back])
+			check_eq(proj.tile_at(proj.project(Vector2(7.5, 3.5))), Vector2i(7, 3), "tile picking iso=%s rotation=%d" % [iso, rotation])

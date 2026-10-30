@@ -1,8 +1,10 @@
 class_name TacticalMap
 extends RefCounted
-## Grid data for a battle: terrain, cover objects standing on tiles, and walls on the edges between tiles.
+## Grid data for a battle: terrain, cover objects standing on tiles, walls on the edges between tiles,
+## and smoke. Objects and edges also carry a kind ("tree", "hedge", ...) that changes how they look,
+## and for hedges, how they're crossed.
 
-enum Terrain { FLOOR, ROUGH, RUBBLE, INDOOR }
+enum Terrain { FLOOR, ROUGH, RUBBLE, INDOOR, ROAD, WHEAT, CRATER }
 
 ## North, east, south, west.
 const DIRS4 := [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
@@ -10,18 +12,27 @@ const DIRS8 := [
 	Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0),
 	Vector2i(1, -1), Vector2i(1, 1), Vector2i(-1, 1), Vector2i(-1, -1),
 ]
-const TERRAIN_NAMES := ["Grass", "Rough ground", "Rubble", "Indoor floor"]
-const TERRAIN_COST := [1.0, 2.0, 2.0, 1.0]
+const TERRAIN_NAMES := ["Grass", "Rough ground", "Rubble", "Indoor floor", "Road", "Wheat field", "Shell crater"]
+const TERRAIN_COST := [1.0, 2.0, 2.0, 1.0, 0.75, 1.5, 1.5]
 const DIAGONAL_FACTOR := 1.5
-## Extra cost for climbing over a half-height wall.
+## Extra cost for climbing over a half-height wall, and for pushing through a hedgerow.
 const VAULT_COST := 1.0
+const HEDGE_COST := 3.0
 
 var width: int
 var height: int
+## Bumped on every change, so caches (vision, drawing) know when to rebuild.
+var revision := 0
+## Bumped only when terrain, objects or walls change (not smoke).
+var layout_revision := 0
 var _terrain := PackedInt32Array()
 var _objects := PackedInt32Array()
-## Edge key (see _edge_key) -> cover level.
+var _object_kinds := {}
+## Edge key (see _edge_key) -> cover level, and -> kind.
 var _edges := {}
+var _edge_kinds := {}
+## Tile -> battle turn index at which the smoke there clears.
+var _smoke := {}
 
 
 func _init(p_width: int, p_height: int) -> void:
@@ -43,6 +54,8 @@ func get_terrain(p: Vector2i) -> int:
 
 func set_terrain(p: Vector2i, terrain: int) -> void:
 	_terrain[_index(p)] = terrain
+	revision += 1
+	layout_revision += 1
 
 
 ## Cover level of the object standing on a tile. Any object blocks movement.
@@ -50,8 +63,19 @@ func get_object(p: Vector2i) -> int:
 	return _objects[_index(p)] if in_bounds(p) else Cover.NONE
 
 
-func set_object(p: Vector2i, cover: int) -> void:
+## Kinds: full cover "rock", "tree"; half cover "crate", "sandbags", "hay", "pew".
+func get_object_kind(p: Vector2i) -> String:
+	return _object_kinds.get(p, "rock" if get_object(p) == Cover.FULL else "crate")
+
+
+func set_object(p: Vector2i, cover: int, kind := "") -> void:
 	_objects[_index(p)] = cover
+	if kind == "" or cover == Cover.NONE:
+		_object_kinds.erase(p)
+	else:
+		_object_kinds[p] = kind
+	revision += 1
+	layout_revision += 1
 
 
 ## Cover level of the wall between two orthogonally adjacent tiles.
@@ -59,11 +83,28 @@ func get_edge(a: Vector2i, b: Vector2i) -> int:
 	return _edges.get(_edge_key(a, b), Cover.NONE)
 
 
-func set_edge(a: Vector2i, b: Vector2i, cover: int) -> void:
+## Kinds: full cover "wall", "hedge"; half cover "window", "fence", "stone".
+func get_edge_kind(a: Vector2i, b: Vector2i) -> String:
+	return edge_kind(_edge_key(a, b))
+
+
+func edge_kind(key: Vector3i) -> String:
+	return _edge_kinds.get(key, "wall" if _edges.get(key, Cover.NONE) == Cover.FULL else "fence")
+
+
+func set_edge(a: Vector2i, b: Vector2i, cover: int, kind := "") -> void:
+	var key := _edge_key(a, b)
 	if cover == Cover.NONE:
-		_edges.erase(_edge_key(a, b))
+		_edges.erase(key)
+		_edge_kinds.erase(key)
 	else:
-		_edges[_edge_key(a, b)] = cover
+		_edges[key] = cover
+		if kind == "":
+			_edge_kinds.erase(key)
+		else:
+			_edge_kinds[key] = kind
+	revision += 1
+	layout_revision += 1
 
 
 func get_edges() -> Dictionary:
@@ -75,6 +116,31 @@ static func edge_tiles(key: Vector3i) -> Array[Vector2i]:
 	var a := Vector2i(key.x, key.y)
 	var result: Array[Vector2i] = [a, a + (Vector2i(1, 0) if key.z == 0 else Vector2i(0, 1))]
 	return result
+
+
+func has_smoke(p: Vector2i) -> bool:
+	return _smoke.has(p)
+
+
+func get_smoke() -> Dictionary:
+	return _smoke
+
+
+func add_smoke(p: Vector2i, until_turn: int) -> void:
+	_smoke[p] = maxi(until_turn, _smoke.get(p, 0))
+	revision += 1
+
+
+## Clears smoke that has run out by the given turn index; returns the cleared tiles.
+func clear_smoke(turn_index: int) -> Array[Vector2i]:
+	var cleared: Array[Vector2i] = []
+	for p: Vector2i in _smoke.keys():
+		if _smoke[p] <= turn_index:
+			_smoke.erase(p)
+			cleared.append(p)
+	if not cleared.is_empty():
+		revision += 1
+	return cleared
 
 
 func is_passable(p: Vector2i) -> bool:
@@ -98,15 +164,18 @@ func step_cost(a: Vector2i, b: Vector2i) -> float:
 		return cost * DIAGONAL_FACTOR
 	match get_edge(a, b):
 		Cover.FULL:
-			return INF
+			return cost + HEDGE_COST if get_edge_kind(a, b) == "hedge" else INF
 		Cover.HALF:
 			return cost + VAULT_COST
 	return cost
 
 
-## Cover a unit standing on p gets on the side facing direction dir.
+## Cover a unit standing on p gets on the side facing direction dir. A crater covers every side.
 func cover_toward(p: Vector2i, dir: Vector2i) -> int:
-	return maxi(get_edge(p, p + dir), get_object(p + dir))
+	var cover := maxi(get_edge(p, p + dir), get_object(p + dir))
+	if get_terrain(p) == Terrain.CRATER:
+		cover = maxi(cover, Cover.HALF)
+	return cover
 
 
 func has_cover(p: Vector2i) -> bool:
@@ -130,7 +199,7 @@ func cover_against(target: Vector2i, attacker_pos: Vector2i) -> int:
 
 
 func blocks_sight(p: Vector2i) -> bool:
-	return get_object(p) == Cover.FULL
+	return get_object(p) == Cover.FULL or _smoke.has(p)
 
 
 func edge_blocks_sight(a: Vector2i, b: Vector2i) -> bool:
@@ -148,7 +217,8 @@ func tiles_in_radius(center: Vector2i, radius: float) -> Array[Vector2i]:
 	return result
 
 
-## Destroys every object and wall inside the radius. Objects leave rubble. Returns how many were destroyed.
+## Destroys every object and wall inside the radius and blasts a crater at the centre.
+## Objects leave rubble. Returns how many pieces of cover were destroyed.
 func destroy_cover(center: Vector2i, radius: float) -> int:
 	var area := {}
 	var destroyed := 0
@@ -162,7 +232,12 @@ func destroy_cover(center: Vector2i, radius: float) -> int:
 		var pair := edge_tiles(key)
 		if area.has(pair[0]) or area.has(pair[1]):
 			_edges.erase(key)
+			_edge_kinds.erase(key)
 			destroyed += 1
+	if in_bounds(center) and get_terrain(center) != Terrain.INDOOR:
+		set_terrain(center, Terrain.CRATER)
+	revision += 1
+	layout_revision += 1
 	return destroyed
 
 

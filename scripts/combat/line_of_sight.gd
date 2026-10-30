@@ -1,6 +1,6 @@
 class_name LineOfSight
 extends RefCounted
-## Grid line of sight. Full cover blocks sight, half cover does not.
+## Grid line of sight. Full cover and smoke block sight, half cover does not.
 ## A unit next to full cover can step out to either side of it to look around the corner.
 
 
@@ -54,8 +54,12 @@ static func peek_positions(map: TacticalMap, p: Vector2i) -> Array[Vector2i]:
 
 
 ## Whether a unit on `from` can see `to`. Set target_peeks when `to` holds a unit that can lean out too.
+## Smoke blocks sight through it, and hides anyone standing in it from all but adjacent tiles.
 static func can_see(map: TacticalMap, from: Vector2i, to: Vector2i, sight_range: float, target_peeks := true) -> bool:
-	if Vector2(from).distance_to(Vector2(to)) > sight_range:
+	var distance := Vector2(from).distance_to(Vector2(to))
+	if distance > sight_range:
+		return false
+	if distance > 1.5 and (map.has_smoke(from) or map.has_smoke(to)):
 		return false
 	var targets: Array[Vector2i] = [to]
 	if target_peeks:

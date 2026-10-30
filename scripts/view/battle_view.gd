@@ -1,35 +1,52 @@
 extends Node2D
 ## View of a Battle: draws the battlefield (isometric or top-down), takes player input, runs AI turns
 ## and plays back engine events. All art is procedural (TerrainPainter, SoldierPainter).
-## The static ground is drawn on a child layer that only repaints when something changes;
-## everything else repaints every frame so soldiers can animate.
+##
+## The picture is a retained scene of canvas items so the big map stays fast:
+## terrain, shadows and fog are 8x8-tile chunks that repaint lazily when on screen; every prop is its own
+## item, recorded once and faded or darkened through its modulate; soldiers and smoke redraw every frame.
+## Props and soldiers are depth-sorted by z_index. The view itself draws markers and effects on top.
 
 const DrawLayer := preload("res://scripts/view/draw_layer.gd")
 
 const PANEL_WIDTH := 400.0
-const TEAM_COLORS := [Color("4aa3ff"), Color("ff6150")]
-const TEAM_NAMES := ["Blue", "Red"]
+## UI accent colours: Allied green and German field grey.
+const TEAM_COLORS := [Color("9cc45a"), Color("b8c0c8")]
+const NEUTRAL_COLOR := Color("e8e2cf")
 const MOVE_COLOR := Color("4aa3ff")
 const DASH_COLOR := Color("f5c542")
 const KEY_ACTIONS := {
-	KEY_1: "shoot", KEY_2: "overwatch", KEY_3: "hunker", KEY_4: "reload",
-	KEY_5: "grenade", KEY_6: "medkit", KEY_TAB: "next", KEY_ENTER: "end", KEY_KP_ENTER: "end",
+	KEY_1: "shoot", KEY_2: "overwatch", KEY_3: "hunker", KEY_4: "reload", KEY_5: "grenade",
+	KEY_6: "smoke", KEY_7: "set_up", KEY_8: "rally", KEY_9: "medkit", KEY_0: "mortar",
+	KEY_TAB: "next", KEY_ENTER: "end", KEY_KP_ENTER: "end",
 }
 const ACTION_BUTTONS := [
 	["shoot", "1 Shoot"], ["overwatch", "2 Overwatch"], ["hunker", "3 Hunker"], ["reload", "4 Reload"],
-	["grenade", "5 Grenade"], ["medkit", "6 Medkit"], ["next", "Tab Next unit"], ["end", "Enter End turn"],
+	["grenade", "5 Grenade"], ["smoke", "6 Smoke"], ["set_up", "7 Set up MG"], ["rally", "8 Rally"],
+	["medkit", "9 Medkit"], ["mortar", "0 Mortar"], ["next", "Tab Next unit"], ["end", "Enter End turn"],
 ]
-## [label, Blue is AI, Red is AI]
-const GAME_MODES := [["Play vs AI (you are Blue)", false, true], ["Hotseat: two players", false, false], ["Watch AI vs AI", true, true]]
+## [label, Allies are AI, Germany is AI]
+const GAME_MODES := [["Play vs AI (you are the Allies)", false, true], ["Hotseat: two players", false, false], ["Watch AI vs AI", true, true]]
 const SHOT_LABELS := {"miss": "MISS", "graze": "GRAZE", "hit": "HIT", "crit": "CRITICAL"}
+const ROLE_TAGS := {"Officer": "Lt", "Rifleman": "Rfl", "Medic": "Med", "SMG": "SMG", "MG": "MG", "Sniper": "Snp", "Mortar": "Mtr"}
 ## Playback speeds; 0 means instant.
 const SPEEDS := [1.0, 2.0, 4.0, 0.0]
 const SPEED_NAMES := ["1x", "2x", "4x", "Instant"]
-const ZOOM_MIN := 0.35
+const ZOOM_MIN := 0.3
 const ZOOM_MAX := 2.5
-const PAN_SPEED := 700.0
+const PAN_SPEED := 800.0
+const CHUNK := 8
+## Absolute z_index of each layer. Props and soldiers sit between OVERLAY_Z and TOP_Z by depth.
+const GROUND_Z := -4
+const SHADOW_Z := -3
+const FOG_Z := -2
+const OVERLAY_Z := -1
+const DEPTH_Z := 40.0
+const TOP_Z := 4000
+## Chunks repainted per frame, to spread the cost of a full repaint.
+const CHUNK_BUDGET := 3
 
-enum Mode { MOVE, SHOOT, GRENADE, MEDKIT }
+enum Mode { MOVE, SHOOT, GRENADE, SMOKE, MEDKIT, MORTAR }
 
 var battle: Battle
 ## Per team: null for a human player, otherwise the TacticalAI playing it.
@@ -41,9 +58,21 @@ var busy := false
 
 var _proj: ViewProjection
 var _camera: Camera2D
-var _ground: Node2D
+## Chunk -> [ground layer, shadow layer, fog layer], and the chunks waiting to be repainted.
+var _chunks := {}
+var _dirty_terrain := {}
+var _dirty_fog := {}
+var _overlay_layer: Node2D
+var _layout_revision := -1
+var _smoke_revision := -1
+var _prop_nodes: Array[Node2D] = []
+var _props_by_tile := {}
+var _faded := {}
+var _unit_nodes := {}
+var _smoke_nodes := {}
 var _dragging := false
 var _speed_index := 0
+var _mortar_kind := "he"
 var _time := 0.0
 var _turn_started := false
 var _reach := {}
@@ -55,6 +84,7 @@ var _flankers: Array[Unit] = []
 ## Presentation state that trails the engine while events play back. Positions are in grid space.
 var _display_pos := {}
 var _display_hp := {}
+var _display_suppression := {}
 var _facing := {}
 var _walking := {}
 var _hit_at := {}
@@ -69,6 +99,7 @@ var _overlay_state := ""
 var _font: Font
 var _panel: PanelContainer
 var _turn_label: Label
+var _score_label: RichTextLabel
 var _unit_info: RichTextLabel
 var _target_info: RichTextLabel
 var _log: RichTextLabel
@@ -81,22 +112,35 @@ var _banner: Label
 
 func _ready() -> void:
 	_font = ThemeDB.fallback_font
-	battle = SkirmishScenario.build()
+	battle = NormandyScenario.build()
 	_proj = ViewProjection.new(Vector2(battle.map.width, battle.map.height))
-	_ground = DrawLayer.new()
-	_ground.z_index = -1
-	_ground.painter = _paint_ground
-	add_child(_ground)
+	z_index = TOP_Z
+	for cy in ceili(battle.map.height / float(CHUNK)):
+		for cx in ceili(battle.map.width / float(CHUNK)):
+			var chunk := Vector2i(cx, cy)
+			_chunks[chunk] = [
+				_layer(GROUND_Z, _paint_ground_chunk.bind(chunk)),
+				_layer(SHADOW_Z, _paint_shadow_chunk.bind(chunk)),
+				_layer(FOG_Z, _paint_fog_chunk.bind(chunk)),
+			]
+	_overlay_layer = _layer(OVERLAY_Z, _paint_ground_overlays)
 	_camera = Camera2D.new()
+	_camera.zoom = Vector2(0.9, 0.9)
 	add_child(_camera)
 	for u in battle.units:
-		_display_pos[u.id] = _center(u.pos)
-		_display_hp[u.id] = u.hp
-		_facing[u.id] = Vector2(1, 0) if u.team == 0 else Vector2(-1, 0)
+		_add_display_state(u)
 	_build_ui()
 	_focus(Vector2(battle.map.width, battle.map.height) * 0.5, false)
 	_refresh()
 	_show_overlay("setup", "", Color.WHITE)
+
+
+func _add_display_state(u: Unit) -> void:
+	_display_pos[u.id] = _center(u.pos)
+	_display_hp[u.id] = u.hp
+	_display_suppression[u.id] = u.suppression
+	_facing[u.id] = Vector2(1, 0) if u.team == 0 else Vector2(-1, 0)
+	_unit_nodes[u.id] = _layer(0, _paint_unit.bind(u))
 
 
 func _start_game(mode_index: int) -> void:
@@ -107,12 +151,28 @@ func _start_game(mode_index: int) -> void:
 	_update_speed_button()
 	_overlay_state = ""
 	_overlay.hide()
+	if controllers[0] == null:
+		_focus(Vector2(8, 24), false)
 	_run(battle.start())
 
 
 func _process(delta: float) -> void:
 	_time += delta
 	_pan_with_keys(delta)
+	if battle.map.layout_revision != _layout_revision:
+		_layout_revision = battle.map.layout_revision
+		_rebuild_props()
+		_mark_chunks_dirty(true)
+	if battle.map.revision != _smoke_revision:
+		_smoke_revision = battle.map.revision
+		_sync_smoke()
+	_repaint_dirty_chunks()
+	_update_units()
+	_update_prop_fading()
+	for node: Node2D in _smoke_nodes.values():
+		node.queue_redraw()
+	if not battle.strikes.is_empty():
+		_overlay_layer.queue_redraw()
 	if not busy and _overlay_state == "":
 		_set_hover(_mouse_tile())
 	for item in _floaters + _effects:
@@ -207,6 +267,7 @@ func _on_click(tile: Vector2i) -> void:
 		return
 	var u := battle.unit_at(tile)
 	var own := u != null and u.team == battle.current_team
+	var err := ""
 	match mode:
 		Mode.MOVE:
 			if own:
@@ -219,17 +280,23 @@ func _on_click(tile: Vector2i) -> void:
 			elif own:
 				_select(u)
 		Mode.GRENADE:
-			var err := battle.can_throw_grenade(selected, tile)
+			err = battle.can_throw_grenade(selected, tile)
 			if err == "":
 				_run(battle.throw_grenade(selected, tile))
-			else:
-				_flash(err)
+		Mode.SMOKE:
+			err = battle.can_throw_smoke(selected, tile)
+			if err == "":
+				_run(battle.throw_smoke(selected, tile))
+		Mode.MORTAR:
+			err = battle.can_fire_mortar(selected, tile, _mortar_kind)
+			if err == "":
+				_run(battle.fire_mortar(selected, tile, _mortar_kind))
 		Mode.MEDKIT:
-			var err := battle.can_use_medkit(selected, u)
+			err = battle.can_use_medkit(selected, u)
 			if err == "":
 				_run(battle.use_medkit(selected, u))
-			else:
-				_flash(err)
+	if err != "":
+		_flash(err)
 
 
 func _on_action(action: String) -> void:
@@ -259,8 +326,7 @@ func _on_action(action: String) -> void:
 	var err := ""
 	match action:
 		"shoot":
-			# Same requirements as overwatch: able to act and has ammo.
-			err = battle.can_overwatch(selected)
+			err = battle.can_fire(selected)
 			if err == "" and battle.visible_enemies(selected).is_empty():
 				err = "No enemies in line of sight"
 			if err == "":
@@ -277,18 +343,43 @@ func _on_action(action: String) -> void:
 			err = battle.can_reload(selected)
 			if err == "":
 				_run(battle.reload(selected))
+		"set_up":
+			err = battle.can_set_up(selected)
+			if err == "":
+				_run(battle.set_up(selected))
+		"rally":
+			err = battle.can_rally(selected)
+			if err == "":
+				_run(battle.rally(selected))
 		"grenade":
 			err = battle.can_act(selected)
 			if err == "" and selected.grenades <= 0:
 				err = "No grenades left"
 			if err == "":
 				_set_mode(Mode.GRENADE)
+		"smoke":
+			err = battle.can_act(selected)
+			if err == "" and selected.smoke_grenades <= 0:
+				err = "No smoke grenades left"
+			if err == "":
+				_set_mode(Mode.SMOKE)
 		"medkit":
 			err = battle.can_act(selected)
 			if err == "" and selected.medkits <= 0:
 				err = "No medkits left"
 			if err == "":
 				_set_mode(Mode.MEDKIT)
+		"mortar":
+			err = battle.can_act(selected)
+			if err == "" and selected.role != "Mortar":
+				err = "Only the mortar team can fire the mortar"
+			if err == "":
+				# Pressing again switches between high explosive and smoke rounds.
+				if mode == Mode.MORTAR:
+					_mortar_kind = "smoke" if _mortar_kind == "he" else "he"
+				else:
+					_mortar_kind = "he" if selected.mortar_rounds > 0 else "smoke"
+				_set_mode(Mode.MORTAR)
 	if err != "":
 		_flash(err)
 
@@ -328,6 +419,7 @@ func _set_hover(tile: Vector2i) -> void:
 	hover = tile
 	_flankers = _compute_flankers()
 	_update_target_info()
+	_overlay_layer.queue_redraw()
 
 
 func _mouse_tile() -> Vector2i:
@@ -365,7 +457,7 @@ func _view_shift() -> Vector2:
 func _focus(grid: Vector2, animate := true) -> void:
 	var target := _proj.project(grid) + _view_shift()
 	if animate and SPEEDS[_speed_index] != 0.0:
-		create_tween().tween_property(_camera, "position", target, 0.25).set_trans(Tween.TRANS_SINE)
+		create_tween().tween_property(_camera, "position", target, 0.3).set_trans(Tween.TRANS_SINE)
 	else:
 		_camera.position = target
 
@@ -385,14 +477,14 @@ func _rotate_view(turns: int) -> void:
 	var focus := _focused_grid()
 	_proj.rotation = posmod(_proj.rotation + turns, 4)
 	_focus(focus, false)
-	_ground.queue_redraw()
+	_reproject()
 
 
 func _toggle_view() -> void:
 	var focus := _focused_grid()
 	_proj.isometric = not _proj.isometric
 	_focus(focus, false)
-	_ground.queue_redraw()
+	_reproject()
 
 
 func _change_speed(step: int, wrap := false) -> void:
@@ -404,12 +496,19 @@ func _update_speed_button() -> void:
 	_buttons["speed"].text = "Speed %s" % SPEED_NAMES[_speed_index]
 
 
+## The world-space rectangle currently on screen, for culling.
+func _view_rect() -> Rect2:
+	var size := get_viewport_rect().size / _camera.zoom
+	return Rect2(_camera.position - size * 0.5, size).grow(120.0)
+
+
 # --- Engine calls, AI turns and event playback ---
 
 func _run(events: Array) -> void:
 	busy = true
 	_reach = {}
 	_move_tiles = {}
+	_overlay_layer.queue_redraw()
 	for e: Dictionary in events:
 		await _play_event(e)
 	_revealed.clear()
@@ -454,14 +553,38 @@ func _play_event(e: Dictionary) -> void:
 			var u := battle.get_unit(e["unit"])
 			_died_at[u.id] = _time
 			_float(_display_pos[u.id], "KILLED", Color("ff3b3b"))
-			_log_line("[color=#ff6b6b]%s was killed.[/color]" % u.name)
+			_log_line("[color=#ff6b6b]%s (%s) was killed.[/color]" % [u.name, u.role])
 			await _wait(0.6)
-		"explosion":
+		"suppression":
 			var u := battle.get_unit(e["unit"])
+			_display_suppression[u.id] = e["value"]
+			var was_pinned: bool = e["previous"] >= Unit.PINNED_AT
+			var was_suppressed: bool = e["previous"] >= Unit.SUPPRESSED_AT
+			if e["state"] == "pinned" and not was_pinned:
+				_float(_display_pos[u.id], "PINNED DOWN", Color("ff5544"))
+				_log_line("%s is pinned down." % u.name)
+				await _wait(0.3)
+			elif e["state"] == "suppressed" and not was_suppressed:
+				_float(_display_pos[u.id], "Suppressed", Color("ffa040"))
+				await _wait(0.2)
+		"explosion":
 			_effects.append({"kind": "explosion", "at": _center(e["center"]), "radius": e["radius"] + 0.5, "age": 0.0, "life": 1.4})
-			_ground.queue_redraw()
-			_log_line("%s throws a grenade, destroying %d pieces of cover." % [u.name, e["destroyed"]])
+			_log_line("Explosion: %d pieces of cover destroyed." % e["destroyed"])
 			await _wait(0.6)
+		"smoke":
+			_effects.append({"kind": "puff_burst", "at": _center(e["center"]), "age": 0.0, "life": 0.8})
+			_log_line("%s lays smoke." % battle.get_unit(e["unit"]).name)
+			await _wait(0.4)
+		"smoke_clear":
+			_log_line("[color=#999]The smoke clears.[/color]")
+		"mortar_fire":
+			await _play_mortar_fire(e)
+		"strike":
+			var center := _center(e["center"])
+			_effects.append({"kind": "incoming", "at": center, "age": 0.0, "life": 0.35})
+			if _view_team() == -1 or _viewer_sees(e["center"]) or controllers[battle.current_team] == null:
+				_focus(center)
+			await _wait(0.35)
 		"status":
 			var u := battle.get_unit(e["unit"])
 			_float(_display_pos[u.id], e["text"], Color("ffd34d"))
@@ -473,18 +596,40 @@ func _play_event(e: Dictionary) -> void:
 			_float(_display_pos[u.id], "+%d HP" % e["amount"], Color("6bff8a"))
 			_log_line("%s is patched up (+%d HP)." % [u.name, e["amount"]])
 			await _wait(0.4)
+		"objective":
+			var objective: Dictionary = battle.objectives[e["index"]]
+			var owner: int = e["owner"]
+			_float(objective["center"], "%s take the %s" % [Battle.TEAM_NAMES[owner], objective["name"]], TEAM_COLORS[owner])
+			_log_line("[color=%s]%s take the %s.[/color]" % [TEAM_COLORS[owner].to_html(false), Battle.TEAM_NAMES[owner], objective["name"]])
+			await _wait(0.3)
+		"score":
+			var points: Array = e["points"]
+			_log_line("Score after the round: Allies %d, Germany %d." % [points[0], points[1]])
+		"reinforcements":
+			var team: int = e["team"]
+			for id: int in e["units"]:
+				_add_display_state(battle.get_unit(id))
+			_log_line("[color=%s]%s reinforcements arrive.[/color]" % [TEAM_COLORS[team].to_html(false), Battle.TEAM_NAMES[team]])
+			if _view_team() == -1 or _view_team() == team:
+				_show_banner("%s reinforcements!" % Battle.TEAM_NAMES[team], TEAM_COLORS[team])
 		"turn":
 			var team: int = e["team"]
-			var who := "%s team%s" % [TEAM_NAMES[team], " (AI)" if controllers[team] != null else ""]
+			var who := "%s%s" % [Battle.TEAM_NAMES[team], " (AI)" if controllers[team] != null else ""]
 			_log_line("[b][color=%s]Round %d: %s[/color][/b]" % [TEAM_COLORS[team].to_html(false), e["round"], who])
 			_turn_started = true
 			if controllers[0] == null and controllers[1] == null:
-				_show_overlay("handover", "%s team's turn\n\nClick or press any key" % TEAM_NAMES[team], TEAM_COLORS[team])
+				_show_overlay("handover", "%s's turn\n\nClick or press any key" % Battle.TEAM_NAMES[team], TEAM_COLORS[team])
 			else:
 				_show_banner("%s's turn" % who, TEAM_COLORS[team])
 		"game_over":
-			_log_line("[b]%s team wins![/b]" % TEAM_NAMES[e["winner"]])
-			_show_overlay("game_over", "%s team wins!\n\nClick or press any key for the menu" % TEAM_NAMES[e["winner"]], TEAM_COLORS[e["winner"]])
+			var winner: int = e["winner"]
+			var how := "by holding the objectives" if e.get("reason") == "points" else "by wiping out the enemy"
+			if winner == Battle.DRAW:
+				_log_line("[b]The battle ends in a draw.[/b]")
+				_show_overlay("game_over", "A draw: %d to %d\n\nClick or press any key for the menu" % battle.victory_points, NEUTRAL_COLOR)
+			else:
+				_log_line("[b]%s win %s![/b]" % [Battle.TEAM_NAMES[winner], how])
+				_show_overlay("game_over", "%s win %s!\n%d to %d\n\nClick or press any key for the menu" % [Battle.TEAM_NAMES[winner], how, battle.victory_points[0], battle.victory_points[1]], TEAM_COLORS[winner])
 
 
 func _play_move(e: Dictionary) -> void:
@@ -518,15 +663,30 @@ func _play_shot(e: Dictionary) -> void:
 	var hit: bool = e["result"] != "miss"
 	if not hit:
 		to = _proj.project(_display_pos[target.id] + Vector2.from_angle(randf() * TAU) * 0.7, 0.3)
-	_effects.append({"kind": "muzzle", "at": from, "age": 0.0, "life": 0.1})
-	_effects.append({"kind": "tracer", "from": from, "to": to, "age": 0.0, "life": 0.25})
-	await _wait(0.12)
+	var bursts := 3 if shooter.weapon.kind in ["mg", "smg"] else 1
+	for i in bursts:
+		_effects.append({"kind": "muzzle", "at": from, "age": 0.0, "life": 0.1})
+		_effects.append({"kind": "tracer", "from": from, "to": to + Vector2(randf_range(-4, 4), randf_range(-4, 4)) * i, "age": 0.0, "life": 0.25})
+		await _wait(0.07)
+	await _wait(0.05)
 	_effects.append({"kind": "sparks" if hit else "puff", "at": to, "age": 0.0, "life": 0.4})
 	await _wait(0.15)
 	var label: String = SHOT_LABELS[e["result"]]
 	_float(_display_pos[target.id], "%s (%d%%)" % [label, e["chance"]], Color.WHITE if e["result"] != "crit" else Color("ffb84d"))
 	_log_line("%s%s shoots at %s: %s (%d%%)" % ["Overwatch: " if e["reaction"] else "", shooter.name, target.name, label, e["chance"]])
 	await _wait(0.25)
+
+
+func _play_mortar_fire(e: Dictionary) -> void:
+	var u := battle.get_unit(e["unit"])
+	var target := _center(e["target"])
+	_facing[u.id] = (target - _display_pos[u.id]).normalized()
+	_revealed[u.id] = true
+	_effects.append({"kind": "muzzle", "at": _proj.project(_display_pos[u.id], 0.9), "age": 0.0, "life": 0.15})
+	_effects.append({"kind": "shell", "from": _display_pos[u.id], "to": target, "age": 0.0, "life": 0.8})
+	var round_name := "high explosive" if e["kind"] == "he" else "smoke"
+	_log_line("%s fires a %s round. It lands at the start of their next turn." % [u.name, round_name])
+	await _wait(0.8)
 
 
 func _viewer_sees(tile: Vector2i) -> bool:
@@ -562,7 +722,7 @@ func _wait(seconds: float) -> void:
 
 ## Rising text over a grid position.
 func _float(at: Vector2, text: String, color: Color) -> void:
-	_floaters.append({"text": text, "at": at, "color": color, "age": 0.0, "life": 1.2})
+	_floaters.append({"text": text, "at": at, "color": color, "age": 0.0, "life": 1.3})
 
 
 func _flash(message: String) -> void:
@@ -591,7 +751,7 @@ func _refresh() -> void:
 	_reach = battle.reachable(selected) if can_act and mode == Mode.MOVE else {}
 	_move_tiles.clear()
 	for p: Vector2i in _reach:
-		if _reach[p]["cost"] <= selected.mobility + 0.001:
+		if _reach[p]["cost"] <= selected.current_mobility() + 0.001:
 			_move_tiles[p] = true
 	_target_odds.clear()
 	if can_act and mode == Mode.SHOOT:
@@ -600,7 +760,9 @@ func _refresh() -> void:
 	_flankers = _compute_flankers()
 	_update_panel()
 	_update_target_info()
-	_ground.queue_redraw()
+	_mark_chunks_dirty(false)
+	_update_prop_darkness()
+	_overlay_layer.queue_redraw()
 
 
 ## Visible enemies that would have no cover between them and the hovered move destination.
@@ -617,41 +779,79 @@ func _compute_flankers() -> Array[Unit]:
 
 func _update_panel() -> void:
 	var team := battle.current_team
-	_turn_label.text = "Round %d: %s team%s" % [battle.round_number, TEAM_NAMES[team], " (AI)" if controllers[team] != null else ""]
+	_turn_label.text = "Round %d/%d: %s%s" % [battle.round_number, battle.max_rounds, Battle.TEAM_NAMES[team], " (AI)" if controllers[team] != null else ""]
 	_turn_label.add_theme_color_override("font_color", TEAM_COLORS[team])
+	var holders := PackedStringArray()
+	for objective in battle.objectives:
+		var owner: int = objective["owner"]
+		var color: Color = TEAM_COLORS[owner] if owner != -1 else NEUTRAL_COLOR
+		holders.append("[color=%s]%s[/color]" % [color.to_html(false), objective["name"]])
+	_score_label.text = "[color=%s]Allies %d[/color]  vs  [color=%s]Germany %d[/color]   (%d to win)\n%s" % [
+		TEAM_COLORS[0].to_html(false), battle.victory_points[0], TEAM_COLORS[1].to_html(false), battle.victory_points[1],
+		battle.vp_to_win, "   ".join(holders)]
 	if not _is_human_turn():
-		_unit_info.text = "[i]%s team is taking its turn...[/i]" % TEAM_NAMES[team]
+		_unit_info.text = "[i]%s are taking their turn...[/i]" % Battle.TEAM_NAMES[team]
 	elif selected != null:
 		_unit_info.text = _describe_unit(selected)
 	else:
-		_unit_info.text = "No unit selected.\nClick one of your soldiers."
+		_unit_info.text = "No soldier selected.\nClick one of your soldiers."
 	var s := selected if _is_human_turn() else null
-	_buttons["shoot"].disabled = s == null or battle.can_overwatch(s) != ""
+	var visible := {
+		"grenade": s != null and s.grenades > 0, "smoke": s != null and s.smoke_grenades > 0,
+		"set_up": s != null and s.weapon.needs_setup, "rally": s != null and s.role == "Officer",
+		"medkit": s != null and s.medkits > 0, "mortar": s != null and s.role == "Mortar",
+	}
+	for action: String in visible:
+		_buttons[action].visible = visible[action]
+	_buttons["shoot"].disabled = s == null or battle.can_fire(s) != ""
 	_buttons["overwatch"].disabled = s == null or battle.can_overwatch(s) != ""
 	_buttons["hunker"].disabled = s == null or battle.can_hunker(s) != ""
 	_buttons["reload"].disabled = s == null or battle.can_reload(s) != ""
-	_buttons["grenade"].disabled = s == null or battle.can_act(s) != "" or s.grenades <= 0
-	_buttons["medkit"].disabled = s == null or battle.can_act(s) != "" or s.medkits <= 0
+	_buttons["set_up"].disabled = s == null or battle.can_set_up(s) != ""
+	_buttons["rally"].disabled = s == null or battle.can_rally(s) != ""
+	for action in ["grenade", "smoke", "medkit", "mortar"]:
+		_buttons[action].disabled = s == null or battle.can_act(s) != ""
+	if s != null and s.role == "Mortar":
+		_buttons["mortar"].disabled = s.actions < Unit.ACTIONS_PER_TURN
+		_buttons["mortar"].text = "0 Mortar: %s" % ("smoke" if mode == Mode.MORTAR and _mortar_kind == "smoke" else "HE")
 	_buttons["next"].disabled = s == null or _next_ready_unit(s) == null
 	_buttons["end"].disabled = battle.winner != -1 or not _is_human_turn()
 
 
 func _describe_unit(u: Unit) -> String:
 	var lines := PackedStringArray()
-	lines.append("[b][color=%s]%s[/color][/b]  %s" % [TEAM_COLORS[u.team].to_html(false), u.name, u.role])
-	lines.append("HP %d/%d   Armor %d   Aim %d   Mobility %d" % [u.hp, u.max_hp, u.armor, u.aim, u.mobility])
-	lines.append("%s   Ammo %d/%d   Grenades %d   Medkits %d" % [u.weapon.name, u.ammo, u.weapon.clip_size, u.grenades, u.medkits])
-	var status := "Actions left: %d/%d" % [u.actions, Unit.ACTIONS_PER_TURN]
+	lines.append("[b][color=%s]%s[/color][/b]  %s, %s" % [TEAM_COLORS[u.team].to_html(false), u.name, u.role, u.weapon.name])
+	lines.append("HP %d/%d   Aim %d   Move %.0f%s   Ammo %d/%d" % [u.hp, u.max_hp, u.aim, u.current_mobility(),
+			"" if u.current_mobility() == u.mobility else " (of %.0f)" % u.mobility, u.ammo, u.weapon.clip_size])
+	var kit := PackedStringArray()
+	for item: Array in [[u.grenades, "grenades"], [u.smoke_grenades, "smoke"], [u.medkits, "medkits"], [u.mortar_rounds, "HE rounds"], [u.mortar_smoke, "smoke rounds"]]:
+		if item[0] > 0:
+			kit.append("%d %s" % [item[0], item[1]])
+	if not kit.is_empty():
+		lines.append(", ".join(kit))
+	var status := PackedStringArray(["Actions %d/%d" % [u.actions, Unit.ACTIONS_PER_TURN]])
+	if u.is_pinned():
+		status.append("[color=#ff5544]Pinned (%d)[/color]" % u.suppression)
+	elif u.suppression > 0:
+		status.append("[color=#ffa040]Suppression %d[/color]" % u.suppression)
+	if u.is_wounded():
+		status.append("[color=#ff8080]Wounded (%d turns)[/color]" % u.wounded_turns)
+	if u.deployed:
+		status.append("[color=#ffd34d]MG set up[/color]")
 	if u.overwatch:
-		status += "   [color=#ffd34d]On overwatch[/color]"
+		status.append("[color=#ffd34d]Overwatch[/color]")
 	if u.hunkered:
-		status += "   [color=#8fd3ff]Hunkered down[/color]"
-	lines.append(status)
+		status.append("[color=#8fd3ff]Hunkered[/color]")
+	lines.append("   ".join(status))
 	match mode:
 		Mode.SHOOT:
 			lines.append("[color=#ff9b8a]Shooting: click a target. Right click cancels.[/color]")
 		Mode.GRENADE:
 			lines.append("[color=#ffb84d]Grenade: click a tile in range. Right click cancels.[/color]")
+		Mode.SMOKE:
+			lines.append("[color=#c8d0d8]Smoke: click a tile in range. Right click cancels.[/color]")
+		Mode.MORTAR:
+			lines.append("[color=#ffb84d]Mortar (%s): click a spotted tile. Press 0 to switch rounds.[/color]" % ("smoke" if _mortar_kind == "smoke" else "high explosive"))
 		Mode.MEDKIT:
 			lines.append("[color=#6bff8a]Medkit: click yourself or an adjacent ally. Right click cancels.[/color]")
 	return "\n".join(lines)
@@ -667,22 +867,31 @@ func _update_target_info() -> void:
 				if target != null and target.team != selected.team and _seen_units.has(target.id) and battle.can_see(selected, target):
 					text = _describe_odds(selected, target)
 			Mode.GRENADE:
-				var err := battle.can_throw_grenade(selected, hover)
-				text = "[b]Frag grenade[/b]  range %d, radius %.1f\n%d-%d damage, ignores cover, shreds %d armor,\ndestroys cover. Hits friends too." % [
-					CombatRules.GRENADE_RANGE, CombatRules.GRENADE_RADIUS, CombatRules.GRENADE_DAMAGE_MIN,
-					CombatRules.GRENADE_DAMAGE_MAX, CombatRules.GRENADE_SHRED]
-				if err != "":
-					text += "\n[color=#ff6b6b]%s[/color]" % err
+				text = "[b]Frag grenade[/b]  range %d, radius %.1f\n%d-%d damage, ignores cover, destroys it.\nHits friends too." % [
+					CombatRules.GRENADE_RANGE, CombatRules.GRENADE_RADIUS, CombatRules.GRENADE_DAMAGE_MIN, CombatRules.GRENADE_DAMAGE_MAX]
+				text += _error_line(battle.can_throw_grenade(selected, hover))
+			Mode.SMOKE:
+				text = "[b]Smoke grenade[/b]  range %d, radius %.1f\nBlocks line of sight for two rounds. Takes one action." % [CombatRules.SMOKE_RANGE, CombatRules.SMOKE_RADIUS]
+				text += _error_line(battle.can_throw_smoke(selected, hover))
+			Mode.MORTAR:
+				text = "[b]Mortar, %s[/b]  range %d-%d\nLands at the start of your next turn, up to %.1f tiles off target.\nNeeds a soldier who can see the target." % [
+					"smoke" if _mortar_kind == "smoke" else "high explosive", CombatRules.MORTAR_MIN_RANGE, CombatRules.MORTAR_MAX_RANGE,
+					Battle.mortar_scatter(selected.pos, hover)]
+				text += _error_line(battle.can_fire_mortar(selected, hover, _mortar_kind))
 	if text == "" and map.in_bounds(hover):
 		text = _describe_tile(hover)
 	_target_info.text = text
 
 
+func _error_line(err: String) -> String:
+	return "" if err == "" else "\n[color=#ff6b6b]%s[/color]" % err
+
+
 func _describe_odds(shooter: Unit, target: Unit) -> String:
 	var odds := battle.shot_odds(shooter, target)
 	var lines := PackedStringArray()
-	lines.append("[b]Target: %s[/b] (%s)  HP %d/%d  Armor %d" % [target.name, target.role, target.hp, target.max_hp, target.armor])
-	lines.append("[color=#8fff9b]Hit %d%%[/color]   Graze %d%%   Crit %d%%" % [odds["hit"], odds["graze"], odds["crit"]])
+	lines.append("[b]Target: %s[/b] (%s)  HP %d/%d" % [target.name, target.role, target.hp, target.max_hp])
+	lines.append("[color=#8fff9b]Hit %d%%[/color]   Graze %d%%   Crit %d%%   Suppression +%d" % [odds["hit"], odds["graze"], odds["crit"], shooter.weapon.suppression])
 	for m: Array in odds["modifiers"]:
 		lines.append("    %s  %+d" % [m[0], m[1]])
 	if odds["flanked"]:
@@ -697,18 +906,24 @@ func _describe_tile(p: Vector2i) -> String:
 	var lines := PackedStringArray()
 	var object := map.get_object(p)
 	if object != Cover.NONE:
-		lines.append("[b]%s[/b]  (blocks movement%s)" % ["Low obstacle" if object == Cover.HALF else "High obstacle", ", blocks sight" if object == Cover.FULL else ""])
+		lines.append("[b]%s[/b]  (%s cover, blocks movement%s)" % [map.get_object_kind(p).capitalize(), "full" if object == Cover.FULL else "half", ", blocks sight" if object == Cover.FULL else ""])
 	else:
-		lines.append("[b]%s[/b]  move cost %.0f" % [TacticalMap.TERRAIN_NAMES[map.get_terrain(p)], TacticalMap.TERRAIN_COST[map.get_terrain(p)]])
+		lines.append("[b]%s[/b]  move cost %s" % [TacticalMap.TERRAIN_NAMES[map.get_terrain(p)], str(TacticalMap.TERRAIN_COST[map.get_terrain(p)])])
 		var covers := PackedStringArray()
 		for i in 4:
-			var c := map.cover_toward(p, TacticalMap.DIRS4[i])
+			var d: Vector2i = TacticalMap.DIRS4[i]
+			var c := map.cover_toward(p, d)
 			if c != Cover.NONE:
 				covers.append("%s %s" % [["N", "E", "S", "W"][i], Cover.NAMES[c].to_lower()])
 		lines.append("Cover: " + (", ".join(covers) if not covers.is_empty() else "none"))
+	if map.has_smoke(p):
+		lines.append("[color=#c8d0d8]Smoke: blocks sight[/color]")
+	for objective in battle.objectives:
+		if (Vector2(p) + Vector2(0.5, 0.5)).distance_to(objective["center"]) <= objective["radius"]:
+			lines.append("Objective: %s" % objective["name"])
 	if _reach.has(p) and selected != null:
 		var cost: float = _reach[p]["cost"]
-		lines.append("Path cost %.1f of %d: %s" % [cost, selected.mobility, "dash, uses both actions" if cost > selected.mobility + 0.001 else "one action"])
+		lines.append("Path cost %.1f: %s" % [cost, "dash, uses both actions" if not _move_tiles.has(p) else "one action"])
 	if not _flankers.is_empty():
 		lines.append("[color=#ff6b6b]Flanked here by %d enemy[/color]" % _flankers.size())
 	if not _visible_tiles.has(p):
@@ -748,7 +963,7 @@ func _build_ui() -> void:
 	_panel.offset_top = 12
 	_panel.offset_bottom = -12
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.1, 0.11, 0.13)
+	style.bg_color = Color(0.11, 0.11, 0.1)
 	style.set_corner_radius_all(6)
 	_panel.add_theme_stylebox_override("panel", style)
 	layer.add_child(_panel)
@@ -757,13 +972,16 @@ func _build_ui() -> void:
 		margin.add_theme_constant_override("margin_" + side, 10)
 	_panel.add_child(margin)
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 8)
+	box.add_theme_constant_override("separation", 6)
 	margin.add_child(box)
 
 	_turn_label = Label.new()
 	_turn_label.add_theme_font_size_override("font_size", 20)
 	box.add_child(_turn_label)
-	_unit_info = _rich_label(96)
+	_score_label = _rich_label(40)
+	box.add_child(_score_label)
+	box.add_child(HSeparator.new())
+	_unit_info = _rich_label(90)
 	box.add_child(_unit_info)
 
 	var actions := HFlowContainer.new()
@@ -772,7 +990,7 @@ func _build_ui() -> void:
 		_add_button(actions, spec[0], spec[1])
 
 	box.add_child(HSeparator.new())
-	_target_info = _rich_label(150)
+	_target_info = _rich_label(130)
 	box.add_child(_target_info)
 	box.add_child(HSeparator.new())
 	_log = _rich_label(0)
@@ -783,8 +1001,8 @@ func _build_ui() -> void:
 
 	var view_row := HFlowContainer.new()
 	box.add_child(view_row)
-	_add_button(view_row, "rotate_left", "Q Rotate left")
-	_add_button(view_row, "rotate_right", "E Rotate right")
+	_add_button(view_row, "rotate_left", "Q Rotate")
+	_add_button(view_row, "rotate_right", "E Rotate")
 	_add_button(view_row, "toggle_view", "V Iso / top")
 	_add_button(view_row, "speed", "Speed 1x")
 	var help := Label.new()
@@ -807,7 +1025,7 @@ func _build_ui() -> void:
 	layer.add_child(_banner)
 
 	_overlay = ColorRect.new()
-	_overlay.color = Color(0.05, 0.06, 0.08, 0.97)
+	_overlay.color = Color(0.06, 0.06, 0.05, 0.97)
 	_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_overlay.gui_input.connect(_on_overlay_input)
 	_overlay.hide()
@@ -828,19 +1046,19 @@ func _build_ui() -> void:
 	menu.add_theme_constant_override("separation", 14)
 	center.add_child(menu)
 	var title := Label.new()
-	title.text = "Tactical Skirmish"
+	title.text = "Normandy, June 1944"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 40)
 	menu.add_child(title)
 	var subtitle := Label.new()
-	subtitle.text = "Four soldiers a side. Use cover, flank, don't bunch up."
+	subtitle.text = "Allies vs Germany. Hold the church, the crossroads and the farm.\nFirst to %d points wins. Pin them with the MG, flank with the rifles." % battle.vp_to_win
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	subtitle.modulate = Color(1, 1, 1, 0.6)
+	subtitle.modulate = Color(1, 1, 1, 0.65)
 	menu.add_child(subtitle)
 	for i in GAME_MODES.size():
 		var button := Button.new()
 		button.text = GAME_MODES[i][0]
-		button.custom_minimum_size = Vector2(340, 48)
+		button.custom_minimum_size = Vector2(360, 48)
 		button.add_theme_font_size_override("font_size", 20)
 		button.pressed.connect(_start_game.bind(i))
 		menu.add_child(button)
@@ -864,116 +1082,218 @@ func _rich_label(min_height: float) -> RichTextLabel:
 	return label
 
 
-# --- Drawing ---
+# --- Scene layers ---
 
-## Ground, fog and cast shadows: the static layer under everything else.
-func _paint_ground(c: CanvasItem) -> void:
+func _layer(z: int, painter: Callable) -> Node2D:
+	var layer: Node2D = DrawLayer.new()
+	layer.z_as_relative = false
+	layer.z_index = z
+	layer.painter = painter
+	add_child(layer)
+	return layer
+
+
+## z_index that sorts something at grid point g by depth among props and soldiers.
+func _depth_z(g: Vector2, bias := 0.0) -> int:
+	return clampi(1 + int((_proj.depth(g) + bias) * DEPTH_Z), 1, TOP_Z - 10)
+
+
+## After a rotation or view toggle: everything must be re-recorded and re-sorted.
+func _reproject() -> void:
+	_mark_chunks_dirty(true)
+	for node in _prop_nodes:
+		node.z_index = _depth_z(node.get_meta("center"))
+		node.queue_redraw()
+	for p: Vector2i in _smoke_nodes:
+		_smoke_nodes[p].z_index = _depth_z(_center(p), 0.3)
+	_overlay_layer.queue_redraw()
+
+
+func _mark_chunks_dirty(terrain: bool) -> void:
+	for chunk: Vector2i in _chunks:
+		_dirty_fog[chunk] = true
+		if terrain:
+			_dirty_terrain[chunk] = true
+
+
+## Repaints dirty chunks that are on screen, a few terrain chunks per frame. Off-screen ones wait.
+func _repaint_dirty_chunks() -> void:
+	var view := _view_rect()
+	var budget := CHUNK_BUDGET
+	for chunk: Vector2i in _dirty_terrain.keys():
+		if budget > 0 and _chunk_rect(chunk).intersects(view):
+			_chunks[chunk][0].queue_redraw()
+			_chunks[chunk][1].queue_redraw()
+			_dirty_terrain.erase(chunk)
+			budget -= 1
+	for chunk: Vector2i in _dirty_fog.keys():
+		if _chunk_rect(chunk).intersects(view):
+			_chunks[chunk][2].queue_redraw()
+			_dirty_fog.erase(chunk)
+
+
+func _chunk_rect(chunk: Vector2i) -> Rect2:
+	var origin := Vector2(chunk * CHUNK)
+	var rect := Rect2(_proj.project(origin), Vector2.ZERO)
+	for corner in [Vector2(CHUNK, 0), Vector2(0, CHUNK), Vector2(CHUNK, CHUNK)]:
+		rect = rect.expand(_proj.project(origin + corner))
+	return rect.grow(80.0)
+
+
+func _chunk_tiles(chunk: Vector2i) -> Array[Vector2i]:
+	var tiles: Array[Vector2i] = []
+	for y in range(chunk.y * CHUNK, mini((chunk.y + 1) * CHUNK, battle.map.height)):
+		for x in range(chunk.x * CHUNK, mini((chunk.x + 1) * CHUNK, battle.map.width)):
+			tiles.append(Vector2i(x, y))
+	return tiles
+
+
+func _paint_ground_chunk(c: CanvasItem, chunk: Vector2i) -> void:
+	for p in _chunk_tiles(chunk):
+		TerrainPainter.draw_tile(c, _proj, battle.map, p)
+		c.draw_polyline(_tile_outline(p), Color(0, 0, 0, 0.08), 1.0)
+
+
+## Shadows sit on their own layer so they can fall across chunk borders onto ground drawn later.
+func _paint_shadow_chunk(c: CanvasItem, chunk: Vector2i) -> void:
 	var map := battle.map
-	for y in map.height:
-		for x in map.width:
-			TerrainPainter.draw_tile(c, _proj, map, Vector2i(x, y))
-	for y in map.height:
-		for x in map.width:
-			if map.get_object(Vector2i(x, y)) != Cover.NONE:
-				TerrainPainter.draw_object_shadow(c, _proj, map, Vector2i(x, y))
+	for p in _chunk_tiles(chunk):
+		if map.get_object(p) != Cover.NONE:
+			TerrainPainter.draw_object_shadow(c, _proj, map, p)
 	for key: Vector3i in map.get_edges():
-		TerrainPainter.draw_edge_shadow(c, _proj, map, key)
-	for y in map.height:
-		for x in map.width:
-			var p := Vector2i(x, y)
-			if not _visible_tiles.has(p):
-				c.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), Color(0.02, 0.03, 0.06, 0.5))
-			c.draw_polyline(_tile_outline(p), Color(0, 0, 0, 0.1), 1.0)
+		if Vector2i(key.x, key.y) / CHUNK == chunk:
+			TerrainPainter.draw_edge_shadow(c, _proj, map, key)
 
 
-func _draw() -> void:
-	_draw_ground_overlays()
-	_draw_world()
-	_draw_markers()
-	_draw_effects()
+func _paint_fog_chunk(c: CanvasItem, chunk: Vector2i) -> void:
+	for p in _chunk_tiles(chunk):
+		if not _visible_tiles.has(p):
+			c.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), Color(0.03, 0.03, 0.05, 0.5))
 
 
-func _draw_ground_overlays() -> void:
-	if busy or selected == null or not _is_human_turn():
-		return
-	if mode == Mode.MOVE and not _reach.is_empty():
-		for p: Vector2i in _reach:
-			if p != selected.pos:
-				draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), (MOVE_COLOR if _move_tiles.has(p) else DASH_COLOR) * Color(1, 1, 1, 0.1))
-		_draw_region_border(_reach, DASH_COLOR)
-		_draw_region_border(_move_tiles, MOVE_COLOR)
-	if not battle.map.in_bounds(hover):
-		return
-	draw_polyline(_tile_outline(hover), Color(1, 1, 1, 0.8), 2.0)
-	match mode:
-		Mode.MOVE:
-			if _reach.has(hover) and hover != selected.pos:
-				var color := MOVE_COLOR if _move_tiles.has(hover) else DASH_COLOR
-				var points := PackedVector2Array([_proj.project(_center(selected.pos))])
-				for p in Pathfinder.path_to(_reach, hover):
-					points.append(_proj.project(_center(p)))
-				draw_polyline(points, color, 3.0)
-				draw_polyline(_ground_circle(_center(hover), 0.3), color, 2.5)
-		Mode.GRENADE:
-			draw_polyline(_ground_circle(_center(selected.pos), CombatRules.GRENADE_RANGE), Color(1, 0.7, 0.3, 0.5), 1.5)
-			if battle.can_throw_grenade(selected, hover) == "":
-				for p in battle.map.tiles_in_radius(hover, CombatRules.GRENADE_RADIUS):
-					draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), Color(1, 0.55, 0.1, 0.4))
-		Mode.MEDKIT:
-			for u in battle.alive_units(selected.team):
-				if battle.can_use_medkit(selected, u) == "":
-					draw_polyline(_ground_circle(_display_pos[u.id], 0.45), Color("6bff8a"), 2.5)
-
-
-## Outlines the boundary of a set of tiles, like XCOM's move range border.
-func _draw_region_border(tiles: Dictionary, color: Color) -> void:
-	var corners := [Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)]
-	for p: Vector2i in tiles:
-		for i in 4:
-			if not tiles.has(p + TacticalMap.DIRS4[i]):
-				var a: Vector2 = Vector2(p) + corners[i]
-				var b: Vector2 = Vector2(p) + corners[(i + 1) % 4]
-				draw_line(_proj.project(a), _proj.project(b), color, 2.5)
-
-
-## Props, walls and soldiers, painted back to front.
-func _draw_world() -> void:
+## One canvas item per object and wall, recorded once. Rebuilt when the map layout changes.
+func _rebuild_props() -> void:
+	for node in _prop_nodes:
+		node.queue_free()
+	_prop_nodes.clear()
+	_props_by_tile.clear()
+	_faded.clear()
 	var map := battle.map
-	var items := []
 	for y in map.height:
 		for x in map.width:
 			var p := Vector2i(x, y)
 			if map.get_object(p) != Cover.NONE:
-				items.append([_proj.depth(_center(p)), "object", p])
+				var tiles: Array[Vector2i] = [p]
+				_add_prop(_paint_object.bind(p), _center(p), tiles)
 	for key: Vector3i in map.get_edges():
 		var pair := TacticalMap.edge_tiles(key)
-		items.append([_proj.depth((_center(pair[0]) + _center(pair[1])) * 0.5), "edge", key])
-	var focus: Array[Vector2] = []
-	if map.in_bounds(hover) and _is_human_turn():
-		focus.append(_center(hover))
-	for u in battle.units:
-		if _is_drawn(u):
-			items.append([_proj.depth(_display_pos[u.id]) + 0.01, "unit", u])
-			if _display_hp[u.id] > 0:
-				focus.append(_display_pos[u.id])
-	items.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+		_add_prop(_paint_edge.bind(key), (_center(pair[0]) + _center(pair[1])) * 0.5, pair)
+	_update_prop_darkness()
 
-	for item: Array in items:
-		match item[1]:
-			"object":
-				var p: Vector2i = item[2]
-				TerrainPainter.draw_object(self, _proj, map, p, 0.3 if _occludes(_center(p), focus) else 1.0, not _visible_tiles.has(p))
-			"edge":
-				var key: Vector3i = item[2]
-				var pair := TacticalMap.edge_tiles(key)
-				var mid := (_center(pair[0]) + _center(pair[1])) * 0.5
-				var dark := not _visible_tiles.has(pair[0]) and not _visible_tiles.has(pair[1])
-				TerrainPainter.draw_edge(self, _proj, map, key, 0.3 if _occludes(mid, focus) else 1.0, dark)
-			"unit":
-				_draw_unit(item[2])
+
+func _add_prop(painter: Callable, center: Vector2, tiles: Array[Vector2i]) -> void:
+	var node := _layer(_depth_z(center), painter)
+	node.set_meta("center", center)
+	node.set_meta("tiles", tiles)
+	node.set_meta("dark", false)
+	_prop_nodes.append(node)
+	for t in tiles:
+		if not _props_by_tile.has(t):
+			_props_by_tile[t] = []
+		_props_by_tile[t].append(node)
+
+
+func _paint_object(c: CanvasItem, p: Vector2i) -> void:
+	TerrainPainter.draw_object(c, _proj, battle.map, p, 1.0, false)
+
+
+func _paint_edge(c: CanvasItem, key: Vector3i) -> void:
+	TerrainPainter.draw_edge(c, _proj, battle.map, key, 1.0, false)
+
+
+## Props out of sight are darkened, like the fog under them.
+func _update_prop_darkness() -> void:
+	for node in _prop_nodes:
+		var dark := true
+		for t: Vector2i in node.get_meta("tiles"):
+			if _visible_tiles.has(t):
+				dark = false
+		if dark != node.get_meta("dark"):
+			node.set_meta("dark", dark)
+			_apply_prop_modulate(node)
+
+
+## Props standing in front of a soldier or the cursor turn see-through. Only nearby props are checked.
+func _update_prop_fading() -> void:
+	var wanted := {}
+	if _proj.isometric:
+		var focus: Array[Vector2] = []
+		if battle.map.in_bounds(hover) and _is_human_turn():
+			focus.append(_center(hover))
+		for u in battle.alive_units():
+			if _display_pos.has(u.id) and _is_drawn(u):
+				focus.append(_display_pos[u.id])
+		for f in focus:
+			var tile := Vector2i(f.floor())
+			for dy in range(-3, 4):
+				for dx in range(-3, 4):
+					for node: Node2D in _props_by_tile.get(tile + Vector2i(dx, dy), []):
+						if not wanted.has(node) and _occludes(node.get_meta("center"), f):
+							wanted[node] = true
+	var changed := []
+	for node: Node2D in _faded:
+		if not wanted.has(node):
+			changed.append(node)
+	for node: Node2D in wanted:
+		if not _faded.has(node):
+			changed.append(node)
+	_faded = wanted
+	for node: Node2D in changed:
+		if is_instance_valid(node):
+			_apply_prop_modulate(node)
+
+
+func _apply_prop_modulate(node: Node2D) -> void:
+	var shade := 0.55 if node.get_meta("dark") else 1.0
+	node.modulate = Color(shade, shade, shade, 0.3 if _faded.has(node) else 1.0)
+
+
+## Whether a tall thing at grid point g stands in front of focus point f, hiding it.
+func _occludes(g: Vector2, f: Vector2) -> bool:
+	var r := _proj.rotate_grid(g)
+	var rf := _proj.rotate_grid(f)
+	return r.x + r.y > rf.x + rf.y + 0.1 and r.x > rf.x - 0.7 and r.y > rf.y - 0.7 and r.distance_to(rf) < 2.6
+
+
+func _sync_smoke() -> void:
+	var smoke := battle.map.get_smoke()
+	for p: Vector2i in _smoke_nodes.keys():
+		if not smoke.has(p):
+			_smoke_nodes[p].queue_free()
+			_smoke_nodes.erase(p)
+	for p: Vector2i in smoke:
+		if not _smoke_nodes.has(p):
+			_smoke_nodes[p] = _layer(_depth_z(_center(p), 0.3), _paint_smoke.bind(p))
+
+
+func _paint_smoke(c: CanvasItem, p: Vector2i) -> void:
+	TerrainPainter.draw_smoke(c, _proj, p, _time)
+
+
+func _update_units() -> void:
+	for u in battle.units:
+		if not _unit_nodes.has(u.id):
+			continue
+		var node: Node2D = _unit_nodes[u.id]
+		node.visible = _is_drawn(u)
+		if node.visible:
+			node.z_index = _depth_z(_display_pos[u.id], 0.05)
+			node.queue_redraw()
 
 
 func _is_drawn(u: Unit) -> bool:
+	if not _display_pos.has(u.id):
+		return false
 	if _display_hp[u.id] <= 0:
 		return true
 	if _revealed.has(u.id):
@@ -983,67 +1303,176 @@ func _is_drawn(u: Unit) -> bool:
 	return _view_team() == -1 or u.team == _view_team() or _seen_units.has(u.id)
 
 
-## Whether a tall thing at grid point g stands in front of any focus point, hiding it.
-func _occludes(g: Vector2, focus: Array[Vector2]) -> bool:
-	if not _proj.isometric:
-		return false
-	var r := _proj.rotate_grid(g)
-	for f in focus:
-		var rf := _proj.rotate_grid(f)
-		if r.x + r.y > rf.x + rf.y + 0.1 and r.x > rf.x - 0.7 and r.y > rf.y - 0.7 and r.distance_to(rf) < 2.6:
-			return true
-	return false
+# --- Drawing ---
+
+func _draw() -> void:
+	_draw_markers()
+	_draw_effects()
+
+
+func _paint_ground_overlays(c: CanvasItem) -> void:
+	for objective in battle.objectives:
+		var owner: int = objective["owner"]
+		var color: Color = TEAM_COLORS[owner] if owner != -1 else NEUTRAL_COLOR
+		c.draw_polyline(TerrainPainter.ground_circle(_proj, objective["center"], objective["radius"]), Color(color, 0.7), 2.5)
+	for strike in battle.strikes:
+		var he: bool = strike["kind"] == "he"
+		var color := Color(1, 0.3, 0.2, 0.8) if he else Color(0.8, 0.85, 0.9, 0.8)
+		var center := _center(strike["target"])
+		var radius := (CombatRules.MORTAR_RADIUS if he else CombatRules.SMOKE_RADIUS) + float(strike["scatter"])
+		var pulse := 0.5 + 0.5 * sin(_time * 6.0)
+		c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, center, radius, false), Color(color, 0.08 + 0.08 * pulse))
+		c.draw_polyline(TerrainPainter.ground_circle(_proj, center, radius), color, 2.0)
+	if busy or selected == null or not _is_human_turn():
+		return
+	if mode == Mode.MOVE and not _reach.is_empty():
+		for p: Vector2i in _reach:
+			if p != selected.pos:
+				c.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), (MOVE_COLOR if _move_tiles.has(p) else DASH_COLOR) * Color(1, 1, 1, 0.1))
+		_draw_region_border(c, _reach, DASH_COLOR)
+		_draw_region_border(c, _move_tiles, MOVE_COLOR)
+	if mode == Mode.MORTAR:
+		var at := _center(selected.pos)
+		c.draw_polyline(TerrainPainter.ground_circle(_proj, at, CombatRules.MORTAR_MIN_RANGE), Color(1, 0.4, 0.3, 0.5), 1.5)
+		c.draw_polyline(TerrainPainter.ground_circle(_proj, at, CombatRules.MORTAR_MAX_RANGE), Color(1, 0.7, 0.3, 0.5), 1.5)
+	if not battle.map.in_bounds(hover):
+		return
+	c.draw_polyline(_tile_outline(hover), Color(1, 1, 1, 0.8), 2.0)
+	match mode:
+		Mode.MOVE:
+			if _reach.has(hover) and hover != selected.pos:
+				var color := MOVE_COLOR if _move_tiles.has(hover) else DASH_COLOR
+				var points := PackedVector2Array([_proj.project(_center(selected.pos))])
+				for p in Pathfinder.path_to(_reach, hover):
+					points.append(_proj.project(_center(p)))
+				c.draw_polyline(points, color, 3.0)
+				c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(hover), 0.3), color, 2.5)
+		Mode.GRENADE, Mode.SMOKE:
+			var grenade := mode == Mode.GRENADE
+			var throw_range := CombatRules.GRENADE_RANGE if grenade else CombatRules.SMOKE_RANGE
+			var radius := CombatRules.GRENADE_RADIUS if grenade else CombatRules.SMOKE_RADIUS
+			var color := Color(1, 0.55, 0.1, 0.4) if grenade else Color(0.8, 0.85, 0.9, 0.35)
+			c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(selected.pos), throw_range), Color(color, 0.6), 1.5)
+			var ok := battle.can_throw_grenade(selected, hover) == "" if grenade else battle.can_throw_smoke(selected, hover) == ""
+			if ok:
+				for p in battle.map.tiles_in_radius(hover, radius):
+					c.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), color)
+		Mode.MORTAR:
+			if battle.can_fire_mortar(selected, hover, _mortar_kind) == "":
+				var he := _mortar_kind == "he"
+				var radius := (CombatRules.MORTAR_RADIUS if he else CombatRules.SMOKE_RADIUS) + Battle.mortar_scatter(selected.pos, hover)
+				var color := Color(1, 0.45, 0.15, 0.3) if he else Color(0.8, 0.85, 0.9, 0.3)
+				c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, _center(hover), radius, false), color)
+				c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(hover), radius), Color(color, 0.9), 2.0)
+		Mode.MEDKIT:
+			for u in battle.alive_units(selected.team):
+				if battle.can_use_medkit(selected, u) == "":
+					c.draw_polyline(TerrainPainter.ground_circle(_proj, _display_pos[u.id], 0.45), Color("6bff8a"), 2.5)
+
+
+## Outlines the boundary of a set of tiles, like XCOM's move range border.
+func _draw_region_border(c: CanvasItem, tiles: Dictionary, color: Color) -> void:
+	var corners := [Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)]
+	for p: Vector2i in tiles:
+		for i in 4:
+			if not tiles.has(p + TacticalMap.DIRS4[i]):
+				var a: Vector2 = Vector2(p) + corners[i]
+				var b: Vector2 = Vector2(p) + corners[(i + 1) % 4]
+				c.draw_line(_proj.project(a), _proj.project(b), color, 2.5)
 
 
 func _pose(u: Unit) -> Dictionary:
 	var death := 0.0
 	if _display_hp[u.id] <= 0:
 		death = clampf((_time - _died_at.get(u.id, -10.0)) / 0.45, 0.0, 1.0)
+	var alive := death == 0.0
 	return {
 		"facing": _facing[u.id],
 		"walk": 1.0 if _walking.has(u.id) else 0.0,
 		"phase": _time * 14.0 + u.id,
-		"crouch": u.hunkered and death == 0.0,
+		"crouch": u.hunkered and alive,
+		"pinned": _display_suppression[u.id] >= Unit.PINNED_AT and alive,
+		"deployed": u.deployed and alive,
+		"wounded": u.is_wounded() and alive,
 		"death": death,
 		"flash": clampf(1.0 - (_time - _hit_at.get(u.id, -10.0)) / 0.3, 0.0, 1.0),
 		"breath": _time * 2.2 + u.id * 1.7,
 	}
 
 
-func _draw_unit(u: Unit) -> void:
+func _paint_unit(c: CanvasItem, u: Unit) -> void:
 	var g: Vector2 = _display_pos[u.id]
 	var pose := _pose(u)
 	if pose["death"] > 0.0:
 		var facing: Vector2 = pose["facing"]
-		draw_colored_polygon(_ground_circle(g - facing * 0.3, 0.05 + 0.25 * pose["death"], false), Color(0.35, 0.03, 0.03, 0.7))
+		c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, g - facing * 0.3, 0.05 + 0.25 * pose["death"], false), Color(0.33, 0.03, 0.03, 0.7))
 	else:
-		draw_colored_polygon(_ground_circle(g + TerrainPainter.LIGHT * 0.25, 0.26, false), Color(0, 0, 0, 0.3))
+		c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, g + TerrainPainter.LIGHT * 0.25, 0.26, false), Color(0, 0, 0, 0.3))
 		if u == selected:
-			draw_polyline(_ground_circle(g, 0.42), Color.WHITE, 2.5)
+			c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.42), Color.WHITE, 2.5)
 		if mode == Mode.SHOOT and _target_odds.has(u.id):
 			var hovered := battle.map.in_bounds(hover) and battle.unit_at(hover) == u
-			draw_polyline(_ground_circle(g, 0.45), Color("ff4040") if hovered else Color("ff8080"), 3.0 if hovered else 1.5)
-	SoldierPainter.draw(self, _proj, g, u, TEAM_COLORS[u.team], pose)
+			c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.45), Color("ff4040") if hovered else Color("ff8080"), 3.0 if hovered else 1.5)
+	SoldierPainter.draw(c, _proj, g, u, pose)
 
 
-## Unit HP, status and target labels, drawn above everything so walls never hide them.
+## Flags, unit tags, HP and suppression bars, drawn above everything so walls never hide them.
 func _draw_markers() -> void:
+	for objective in battle.objectives:
+		var owner: int = objective["owner"]
+		var color: Color = TEAM_COLORS[owner] if owner != -1 else NEUTRAL_COLOR
+		var base := _proj.project(objective["center"])
+		var top := _proj.project(objective["center"], 2.2)
+		draw_line(base, top, Color("3a3226"), 3.0)
+		var wave := sin(_time * 3.0) * 2.0
+		draw_colored_polygon(PackedVector2Array([top, top + Vector2(22, 3 + wave), top + Vector2(22, 15 + wave), top + Vector2(0, 14)]), color)
+		draw_string_outline(_font, top + Vector2(-60, -8), objective["name"], HORIZONTAL_ALIGNMENT_CENTER, 120, 13, 4, Color(0, 0, 0, 0.8))
+		draw_string(_font, top + Vector2(-60, -8), objective["name"], HORIZONTAL_ALIGNMENT_CENTER, 120, 13, color)
+	for strike in battle.strikes:
+		var at := _proj.project(_center(strike["target"]), 0.4)
+		var label := "INCOMING" if strike["kind"] == "he" else "SMOKE ROUND"
+		draw_string_outline(_font, at + Vector2(-60, 0), label, HORIZONTAL_ALIGNMENT_CENTER, 120, 12, 4, Color(0, 0, 0, 0.8))
+		draw_string(_font, at + Vector2(-60, 0), label, HORIZONTAL_ALIGNMENT_CENTER, 120, 12, Color("ff6a50") if strike["kind"] == "he" else Color("d8dee4"))
+
+	var view := _view_rect()
 	for u in battle.units:
-		if _display_hp[u.id] <= 0 or not _is_drawn(u):
+		if not _display_pos.has(u.id) or _display_hp[u.id] <= 0 or not _is_drawn(u):
 			continue
 		var top := _proj.project(_display_pos[u.id], 1.15) + Vector2(0, -14)
+		if not view.has_point(top):
+			continue
 		var pip_w := 26.0 / u.max_hp
-		draw_rect(Rect2(top + Vector2(-14, -1), Vector2(28, 5)), Color(0, 0, 0, 0.65))
+		draw_rect(Rect2(top + Vector2(-14, -1), Vector2(28, 9)), Color(0, 0, 0, 0.65))
 		for i in u.max_hp:
 			draw_rect(Rect2(top + Vector2(-13 + i * pip_w, 0), Vector2(pip_w - 1, 3)), Color("6bff8a") if i < _display_hp[u.id] else Color("3a3a3a"))
-		draw_rect(Rect2(top + Vector2(-14, 5), Vector2(28, 2)), TEAM_COLORS[u.team])
+		var suppression: int = _display_suppression[u.id]
+		if suppression > 0:
+			var bar_color := Color("ff5544") if suppression >= Unit.PINNED_AT else (Color("ffa040") if suppression >= Unit.SUPPRESSED_AT else Color("c8b060"))
+			draw_rect(Rect2(top + Vector2(-13, 4), Vector2(26.0 * suppression / 100.0, 2)), bar_color)
+		draw_rect(Rect2(top + Vector2(-14, 8), Vector2(28, 2)), TEAM_COLORS[u.team])
+		draw_string(_font, top + Vector2(-44, 7), ROLE_TAGS.get(u.role, ""), HORIZONTAL_ALIGNMENT_RIGHT, 28, 10, Color(TEAM_COLORS[u.team], 0.9))
 		if u.team == battle.current_team and _is_human_turn():
 			for i in u.actions:
-				draw_circle(top + Vector2(19 + i * 6, 2), 2.5, Color("f5c542"))
-		var status := "OVERWATCH" if u.overwatch else ("HUNKERED" if u.hunkered else "")
-		if status != "":
-			draw_string(_font, top + Vector2(-40, -5), status, HORIZONTAL_ALIGNMENT_CENTER, 80, 10, Color("ffd34d") if u.overwatch else Color("8fd3ff"))
+				draw_circle(top + Vector2(19 + i * 6, 3), 2.5, Color("f5c542"))
+		var tags := PackedStringArray()
+		if suppression >= Unit.PINNED_AT:
+			tags.append("PINNED")
+		elif suppression >= Unit.SUPPRESSED_AT:
+			tags.append("SUPPRESSED")
+		if u.is_wounded():
+			tags.append("WOUNDED")
+		if u.overwatch:
+			tags.append("OVERWATCH")
+		elif u.deployed:
+			tags.append("MG READY")
+		if u.hunkered:
+			tags.append("HUNKERED")
+		if not tags.is_empty():
+			var tag_color := Color("ff7060") if suppression >= Unit.SUPPRESSED_AT or u.is_wounded() else Color("ffd34d")
+			draw_string_outline(_font, top + Vector2(-60, -5), " ".join(tags), HORIZONTAL_ALIGNMENT_CENTER, 120, 10, 3, Color(0, 0, 0, 0.7))
+			draw_string(_font, top + Vector2(-60, -5), " ".join(tags), HORIZONTAL_ALIGNMENT_CENTER, 120, 10, tag_color)
 		if mode == Mode.SHOOT and _target_odds.has(u.id):
+			draw_string_outline(_font, top + Vector2(-30, -18), "%d%%" % _target_odds[u.id], HORIZONTAL_ALIGNMENT_CENTER, 60, 15, 4, Color(0, 0, 0, 0.8))
 			draw_string(_font, top + Vector2(-30, -18), "%d%%" % _target_odds[u.id], HORIZONTAL_ALIGNMENT_CENTER, 60, 15, Color.WHITE)
 	if busy or selected == null or not battle.map.in_bounds(hover) or mode != Mode.MOVE or not _reach.has(hover) or hover == selected.pos:
 		return
@@ -1091,22 +1520,36 @@ func _draw_effects() -> void:
 					draw_line(at + dir * 14.0 * t, at + dir * (4.0 + 14.0 * t), Color(1, 0.7, 0.3, 1.0 - t), 2.0)
 			"puff":
 				draw_circle(fx["at"] + Vector2(0, -8.0 * t), 4.0 + 8.0 * t, Color(0.7, 0.66, 0.58, 0.5 * (1.0 - t)))
+			"puff_burst":
+				for i in 6:
+					var at := _proj.project(fx["at"] + Vector2.from_angle(i * TAU / 6) * 1.2 * t, 0.3 + t * 0.4)
+					draw_circle(at, 8.0 + 14.0 * t, Color(0.85, 0.85, 0.83, 0.6 * (1.0 - t)))
+			"shell":
+				var from: Vector2 = fx["from"]
+				var to: Vector2 = fx["to"]
+				var at := _proj.project(from.lerp(to, t), 4.0 * t * (1.0 - t) * 6.0)
+				draw_circle(at, 3.5, Color("1d1d1b"))
+				draw_circle(at + Vector2(0, 3), 4.0 * (1.0 - t), Color(0.8, 0.8, 0.8, 0.3))
+			"incoming":
+				var at := _proj.project(fx["at"], 6.0 * (1.0 - t))
+				draw_line(at, at + Vector2(0, -26), Color(1, 1, 0.9, 0.5), 2.0)
+				draw_circle(at, 3.0, Color("1d1d1b"))
 			"explosion":
 				_draw_explosion(fx["at"], fx["radius"], t)
 	for f in _floaters:
 		var t: float = f["age"] / f["life"]
 		var color: Color = f["color"]
 		color.a = 1.0 - t * t
-		var at: Vector2 = _proj.project(f["at"], 1.4) + Vector2(-90, -20 - 24 * t)
-		draw_string_outline(_font, at, f["text"], HORIZONTAL_ALIGNMENT_CENTER, 180, 14, 4, Color(0, 0, 0, color.a))
-		draw_string(_font, at, f["text"], HORIZONTAL_ALIGNMENT_CENTER, 180, 14, color)
+		var at: Vector2 = _proj.project(f["at"], 1.5) + Vector2(-110, -22 - 24 * t)
+		draw_string_outline(_font, at, f["text"], HORIZONTAL_ALIGNMENT_CENTER, 220, 14, 4, Color(0, 0, 0, color.a))
+		draw_string(_font, at, f["text"], HORIZONTAL_ALIGNMENT_CENTER, 220, 14, color)
 
 
 ## Flash, fireball, then rising smoke and flying debris.
 func _draw_explosion(center: Vector2, radius: float, t: float) -> void:
 	if t < 0.35:
 		var k := t / 0.35
-		draw_colored_polygon(_ground_circle(center, radius * (0.5 + 0.5 * k), false), Color(1, 0.5, 0.1, 0.55 * (1.0 - k)))
+		draw_colored_polygon(TerrainPainter.ground_circle(_proj, center, radius * (0.5 + 0.5 * k), false), Color(1, 0.5, 0.1, 0.55 * (1.0 - k)))
 		draw_circle(_proj.project(center, 0.3), 30.0 * (0.4 + k), Color(1, 0.75 + 0.2 * (1.0 - k), 0.4, 0.9 * (1.0 - k)))
 	for i in 7:
 		var dir := Vector2.from_angle(i * TAU / 7 + 0.5)
@@ -1128,14 +1571,3 @@ func _tile_outline(p: Vector2i) -> PackedVector2Array:
 	var poly := TerrainPainter.tile_poly(_proj, p)
 	poly.append(poly[0])
 	return poly
-
-
-## A circle on the ground, radius in tiles. Closed for outlines; open (no repeated point) for filling.
-func _ground_circle(g: Vector2, radius: float, closed := true) -> PackedVector2Array:
-	var points := PackedVector2Array()
-	var segments := clampi(int(radius * 16), 16, 96)
-	for i in segments:
-		points.append(_proj.project(g + Vector2.from_angle(TAU * i / segments) * radius))
-	if closed:
-		points.append(points[0])
-	return points

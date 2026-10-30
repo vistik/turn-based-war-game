@@ -4,7 +4,7 @@ extends RefCounted
 ## Every call to act() scores all plans for all units, issues the best one as a single engine command
 ## (or ends the turn) and returns the resulting events.
 ##
-## Scores are in "expected damage x 10" units so offence, defence and positioning can be compared.
+## Scores are in "expected damage x 10" units so offence, defence, objectives and positioning can be compared.
 
 const KILL_BONUS := 40.0
 ## How much a point of expected incoming damage at a tile counts against standing there.
@@ -12,17 +12,29 @@ const DANGER_WEIGHT := 0.8
 ## Danger from enemies we only remember (not currently seen) counts this much.
 const REMEMBERED_THREAT := 0.5
 const COVER_WEIGHT := 4.0
-## Score lost per tile of distance from the objective when no enemy is in sight.
+## Score lost per tile of distance from the goal when no enemy is in sight.
 const APPROACH_WEIGHT := 3.0
-## Score lost per tile away from the weapon's preferred range to the nearest seen enemy.
+## Score lost per tile away from the role's preferred range to the nearest seen enemy.
 const RANGE_WEIGHT := 1.5
-const PREFERRED_RANGE := {"Rifle": 7.0, "Shotgun": 2.5}
-## Allies this close together risk sharing a grenade.
+const PREFERRED_RANGE := {"Officer": 5.0, "Rifleman": 7.0, "Medic": 6.0, "SMG": 3.0, "MG": 9.0, "Sniper": 12.0, "Mortar": 14.0}
+## Score per point of suppression a shot or blast adds to an enemy.
+const SUPPRESSION_VALUE := 0.15
+## Standing on an objective we don't hold / already hold, and the pull toward the nearest one we don't hold.
+const OBJECTIVE_TAKE := 14.0
+const OBJECTIVE_HOLD := 6.0
+const OBJECTIVE_PULL := 1.0
+## Allies this close together risk sharing a grenade or shell.
 const CROWDING_PENALTY := 4.0
+## Danger of standing where a mortar shell is about to land.
+const STRIKE_DANGER := 45.0
 const GRENADE_COST := 20.0
+const MORTAR_COST := 10.0
+## Enemies may move before a mortar shell lands, so only part of its value counts.
+const MORTAR_CERTAINTY := 0.5
 const OVERWATCH_VALUE := 10.0
 const RELOAD_EMPTY_VALUE := 30.0
 const MEDKIT_VALUE_PER_HP := 8.0
+const RALLY_VALUE := 0.4
 ## Rounds without seeing an enemy before the AI is fully impatient and pushes forward.
 const PATIENCE_ROUNDS := 3.0
 
@@ -94,22 +106,44 @@ func _best_plan(u: Unit, seen: Array[Unit]) -> Dictionary:
 	var stay := _position_score(u, here, seen)
 	var plans: Array[Dictionary] = []
 
-	if u.ammo > 0:
+	if battle.can_fire(u) == "":
 		for e in seen:
 			if battle.can_see(u, e):
 				plans.append(_plan(u, "shoot", stay + _shot_value(u, here, e), e))
-		plans.append(_plan(u, "overwatch", stay + _overwatch_value(u, here, seen)))
+		if not u.is_pinned():
+			plans.append(_plan(u, "overwatch", stay + _overwatch_value(u, here, seen)))
+	if battle.can_set_up(u) == "":
+		var ready_value := OVERWATCH_VALUE * 0.6
+		if u.actions >= 2:
+			for e in seen:
+				if battle.can_see(u, e):
+					ready_value = maxf(ready_value, _shot_value(u, here, e))
+		plans.append(_plan(u, "set_up", stay + ready_value))
 	if u.grenades > 0:
-		for tile in _grenade_tiles(seen):
+		for tile in _tiles_around(seen):
 			if battle.can_throw_grenade(u, tile) == "":
-				var value := _grenade_value(tile, seen)
+				var value := _blast_value(tile, CombatRules.GRENADE_RADIUS, CombatRules.GRENADE_DAMAGE_MIN, CombatRules.GRENADE_DAMAGE_MAX, CombatRules.GRENADE_SHRED, seen)
 				if value > 0.0:
 					plans.append(_plan(u, "grenade", stay + value - GRENADE_COST, null, tile))
+	if u.role == "Mortar" and u.mortar_rounds > 0 and u.actions >= Unit.ACTIONS_PER_TURN:
+		for tile in _tiles_around(seen):
+			if battle.can_fire_mortar(u, tile, "he") == "":
+				var value := _blast_value(tile, CombatRules.MORTAR_RADIUS + Battle.mortar_scatter(u.pos, tile) * 0.5,
+						CombatRules.MORTAR_DAMAGE_MIN, CombatRules.MORTAR_DAMAGE_MAX, 0, seen)
+				if value > 0.0:
+					plans.append(_plan(u, "mortar", stay + value * MORTAR_CERTAINTY - MORTAR_COST, null, tile))
 	if u.medkits > 0:
 		for ally in battle.alive_units(team):
 			var missing := ally.max_hp - ally.hp
-			if missing >= 2 and battle.can_use_medkit(u, ally) == "":
-				plans.append(_plan(u, "medkit", stay + mini(CombatRules.MEDKIT_HEAL, missing) * MEDKIT_VALUE_PER_HP, ally))
+			if (missing >= 2 or ally.is_wounded()) and battle.can_use_medkit(u, ally) == "":
+				var value := mini(CombatRules.MEDKIT_HEAL, missing) * MEDKIT_VALUE_PER_HP + (8.0 if ally.is_wounded() else 0.0)
+				plans.append(_plan(u, "medkit", stay + value, ally))
+	if battle.can_rally(u) == "":
+		var relief := 0.0
+		for ally in battle.alive_units(team):
+			if Vector2(ally.pos).distance_to(Vector2(u.pos)) <= CombatRules.OFFICER_RADIUS:
+				relief += mini(ally.suppression, CombatRules.RALLY_AMOUNT) * (2.0 if ally.is_pinned() else 1.0)
+		plans.append(_plan(u, "rally", stay + relief * RALLY_VALUE))
 	if u.ammo < u.weapon.clip_size:
 		var reload_value := RELOAD_EMPTY_VALUE if u.ammo == 0 else (4.0 if seen.is_empty() else 0.0)
 		plans.append(_plan(u, "reload", stay + reload_value))
@@ -118,7 +152,7 @@ func _best_plan(u: Unit, seen: Array[Unit]) -> Dictionary:
 
 	var reach := battle.reachable(u)
 	for tile: Vector2i in reach:
-		if tile == here or reach[tile]["cost"] > u.mobility + 0.001:
+		if tile == here or reach[tile]["cost"] > u.current_mobility() + 0.001:
 			continue
 		var value := _position_score(u, tile, seen)
 		if u.actions >= 2:
@@ -143,8 +177,14 @@ func _execute(plan: Dictionary) -> Array:
 			return battle.shoot(u, plan["target"])
 		"grenade":
 			return battle.throw_grenade(u, plan["tile"])
+		"mortar":
+			return battle.fire_mortar(u, plan["tile"], "he")
 		"medkit":
 			return battle.use_medkit(u, plan["target"])
+		"rally":
+			return battle.rally(u)
+		"set_up":
+			return battle.set_up(u)
 		"reload":
 			return battle.reload(u)
 		"overwatch":
@@ -156,7 +196,7 @@ func _execute(plan: Dictionary) -> Array:
 	return []
 
 
-## How good it is to stand on a tile at the end of an action: cover, danger, range and approach.
+## How good it is to stand on a tile at the end of an action: cover, danger, objectives, range and approach.
 func _position_score(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 	var map := battle.map
 	var best_cover := Cover.NONE
@@ -167,13 +207,24 @@ func _position_score(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 	var caution := 2.0 - float(u.hp) / u.max_hp
 	score -= _danger(u, tile, seen)[0] * DANGER_WEIGHT * caution
 
+	var point := Vector2(tile) + Vector2(0.5, 0.5)
+	var nearest_open := INF
+	for objective in battle.objectives:
+		var distance: float = point.distance_to(objective["center"])
+		if distance <= objective["radius"]:
+			score += OBJECTIVE_HOLD if objective["owner"] == team else OBJECTIVE_TAKE
+		if objective["owner"] != team:
+			nearest_open = minf(nearest_open, distance)
+
 	if seen.is_empty():
 		score -= Vector2(tile).distance_to(_goal(tile)) * APPROACH_WEIGHT * (1.0 + 2.0 * _aggression)
 	else:
 		var nearest := INF
 		for e in seen:
 			nearest = minf(nearest, Vector2(tile).distance_to(Vector2(e.pos)))
-		score -= absf(nearest - PREFERRED_RANGE.get(u.weapon.name, 6.0)) * RANGE_WEIGHT
+		score -= absf(nearest - PREFERRED_RANGE.get(u.role, 6.0)) * RANGE_WEIGHT
+		if nearest_open < INF and u.role != "Mortar" and u.role != "Sniper":
+			score -= nearest_open * OBJECTIVE_PULL
 
 	for ally in battle.alive_units(team):
 		if ally != u and Vector2(ally.pos).distance_to(Vector2(tile)) <= CombatRules.GRENADE_RADIUS:
@@ -196,6 +247,9 @@ func _danger(u: Unit, tile: Vector2i, seen: Array[Unit]) -> Array[float]:
 		var cover := battle.map.cover_against(tile, from)
 		if cover != Cover.NONE:
 			hunker_gain += CombatRules.COVER_DEFENSE[cover] / 100.0 * _average_damage(e) * 10.0 * weight
+	for strike in battle.strikes:
+		if strike["kind"] == "he" and Vector2(tile).distance_to(Vector2(strike["target"])) <= CombatRules.MORTAR_RADIUS + float(strike["scatter"]) + 0.5:
+			danger += STRIKE_DANGER
 	return [danger, hunker_gain]
 
 
@@ -203,6 +257,9 @@ func _danger(u: Unit, tile: Vector2i, seen: Array[Unit]) -> Array[float]:
 func _followup_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 	if u.ammo == 0:
 		return RELOAD_EMPTY_VALUE
+	if u.weapon.needs_setup:
+		# Moving packs the gun away: the second action can only set it up again.
+		return OVERWATCH_VALUE * 0.6
 	var best := _overwatch_value(u, tile, seen)
 	for e in seen:
 		if _can_see(tile, e.pos, u.sight):
@@ -212,7 +269,13 @@ func _followup_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 
 func _shot_value(u: Unit, from: Vector2i, target: Unit) -> float:
 	var outcome := _expected_damage(u, from, target, target.pos)
-	return outcome[0] * 10.0 + outcome[1] * KILL_BONUS + (5.0 if target.overwatch else 0.0)
+	var value := outcome[0] * 10.0 + outcome[1] * KILL_BONUS + (5.0 if target.overwatch else 0.0)
+	var suppression := mini(100 - target.suppression, u.weapon.suppression)
+	if u.weapon.needs_setup:
+		for ally in battle.alive_units(target.team):
+			if ally != target and Vector2(ally.pos).distance_to(Vector2(target.pos)) <= CombatRules.MG_AREA_RADIUS:
+				suppression += mini(100 - ally.suppression, int(u.weapon.suppression / 2.0))
+	return value + suppression * SUPPRESSION_VALUE
 
 
 func _overwatch_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
@@ -223,8 +286,8 @@ func _overwatch_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 	return value * (1.0 - _aggression)
 
 
-## Tiles worth considering for a grenade: on and around every enemy we can see.
-func _grenade_tiles(seen: Array[Unit]) -> Array[Vector2i]:
+## Tiles worth considering for grenades and shells: on and around every enemy we can see.
+func _tiles_around(seen: Array[Unit]) -> Array[Vector2i]:
 	var tiles: Array[Vector2i] = []
 	for e in seen:
 		for dy in range(-1, 2):
@@ -235,29 +298,30 @@ func _grenade_tiles(seen: Array[Unit]) -> Array[Vector2i]:
 	return tiles
 
 
-func _grenade_value(tile: Vector2i, seen: Array[Unit]) -> float:
+func _blast_value(tile: Vector2i, radius: float, damage_min: int, damage_max: int, shred: int, seen: Array[Unit]) -> float:
 	var value := 0.0
 	var hits := 0
-	var average := (CombatRules.GRENADE_DAMAGE_MIN + CombatRules.GRENADE_DAMAGE_MAX) / 2.0
+	var average := (damage_min + damage_max) / 2.0
 	for victim in battle.alive_units():
-		if Vector2(victim.pos).distance_to(Vector2(tile)) > CombatRules.GRENADE_RADIUS:
+		var distance := Vector2(victim.pos).distance_to(Vector2(tile))
+		if distance > radius + 1.0:
 			continue
 		if victim.team != team and not seen.has(victim):
 			continue
-		var armor := maxi(0, victim.armor - CombatRules.GRENADE_SHRED)
-		var kill := 0.0
-		if CombatRules.GRENADE_DAMAGE_MIN - armor >= victim.hp:
-			kill = 1.0
-		elif CombatRules.GRENADE_DAMAGE_MAX - armor >= victim.hp:
-			kill = 0.5
-		var victim_value := maxf(0.0, average - armor) * 10.0 + kill * KILL_BONUS
-		if victim.team == team:
-			value -= victim_value * 2.0
-		else:
-			value += victim_value
-			hits += 1
-			if battle.map.has_cover(victim.pos):
-				value += 6.0
+		var victim_value := mini(100 - victim.suppression, CombatRules.EXPLOSION_SUPPRESSION) * SUPPRESSION_VALUE
+		if distance <= radius:
+			var armor := maxi(0, victim.armor - shred)
+			var kill := 0.0
+			if damage_min - armor >= victim.hp:
+				kill = 1.0
+			elif damage_max - armor >= victim.hp:
+				kill = 0.5
+			victim_value += maxf(0.0, average - armor) * 10.0 + kill * KILL_BONUS
+			if victim.team != team:
+				hits += 1
+				if battle.map.has_cover(victim.pos):
+					value += 6.0
+		value += -victim_value * 2.0 if victim.team == team else victim_value
 	return value if hits > 0 else 0.0
 
 
@@ -297,9 +361,18 @@ func _threats(seen: Array[Unit]) -> Array:
 	return result
 
 
+## Where to head when no enemy is in sight: the nearest objective we don't hold,
+## else the nearest remembered enemy, else wherever we expect them to be.
 func _goal(from: Vector2i) -> Vector2:
 	var best := _search_goal if _searching else _objective
 	var best_distance := INF
+	for objective in battle.objectives:
+		var d := Vector2(from).distance_to(objective["center"])
+		if objective["owner"] != team and d < best_distance:
+			best_distance = d
+			best = objective["center"]
+	if best_distance < INF:
+		return best
 	for id: int in _last_seen:
 		var d := Vector2(from).distance_to(Vector2(_last_seen[id]))
 		if d < best_distance:
@@ -322,7 +395,7 @@ func _fog_center() -> Vector2:
 
 func _team_sees_tile(tile: Vector2i) -> bool:
 	for u in battle.alive_units(team):
-		if LineOfSight.can_see(battle.map, u.pos, tile, u.sight, false):
+		if battle.visible_from(u.pos, u.sight).has(tile):
 			return true
 	return false
 

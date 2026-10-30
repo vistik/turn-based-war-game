@@ -2,7 +2,7 @@ extends SceneTree
 ## Plays AI vs AI battles headlessly and prints the results.
 ## Run: Godot --headless --path . -s tests/simulate.gd -- [games] [first_seed]
 
-const MAX_ROUNDS := 40
+const MAX_ROUNDS := 20
 
 
 func _initialize() -> void:
@@ -16,31 +16,33 @@ func _initialize() -> void:
 	for seed in range(first_seed, first_seed + games):
 		var result := play(seed)
 		total_rounds += result["rounds"]
-		if result["winner"] == -1:
+		if result["winner"] == -1 or result["winner"] == Battle.DRAW:
 			draws += 1
 		else:
 			wins[result["winner"]] += 1
-		print("seed %3d: %-5s in %2d rounds, %d survivors, %d AI steps, %.1fs" % [
-			seed, ["Blue", "Red"][result["winner"]] if result["winner"] != -1 else "draw",
-			result["rounds"], result["survivors"], result["steps"], result["seconds"]])
-	print("Blue %d, Red %d, draws %d. Average %.1f rounds, %.1fs per game." % [
+		print("seed %3d: %-8s in %2d rounds, points %s, %2d survivors, %3d AI steps, %.1fs" % [
+			seed, ["Allies", "Germany", "draw"][result["winner"]] if result["winner"] != -1 else "unfinished",
+			result["rounds"], result["points"], result["survivors"], result["steps"], result["seconds"]])
+	print("Allies %d, Germany %d, draws %d. Average %.1f rounds, %.1fs per game." % [
 		wins[0], wins[1], draws, float(total_rounds) / games, (Time.get_ticks_msec() - started) / 1000.0 / games])
 	quit()
 
 
 static func play(seed: int, max_rounds := MAX_ROUNDS) -> Dictionary:
 	var started := Time.get_ticks_msec()
-	var battle := SkirmishScenario.build(seed)
+	var battle := NormandyScenario.build(seed)
+	battle.max_rounds = max_rounds
 	var ais := [TacticalAI.new(battle, 0), TacticalAI.new(battle, 1)]
 	battle.start()
 	var steps := 0
-	while battle.winner == -1 and battle.round_number <= max_rounds:
+	while battle.winner == -1:
 		ais[battle.current_team].act()
 		steps += 1
 	return {
 		"winner": battle.winner,
 		"rounds": battle.round_number,
 		"survivors": battle.alive_units().size(),
+		"points": battle.victory_points,
 		"steps": steps,
 		"seconds": (Time.get_ticks_msec() - started) / 1000.0,
 	}

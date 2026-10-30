@@ -12,11 +12,51 @@ const REACTION_AIM_FACTOR := 0.7
 const FLANK_CRIT_BONUS := 40
 ## Rolls just above the hit chance still graze for half damage.
 const GRAZE_BAND := 10
+## Targets in a wheat field further than this are partly hidden.
+const WHEAT_CONCEALMENT := 10
+const WHEAT_CONCEALMENT_RANGE := 4.0
+
+# --- Suppression and morale ---
+const SUPPRESSED_AIM_PENALTY := 15
+const PINNED_AIM_PENALTY := 30
+## Extra suppression when a shot actually hits.
+const HIT_SUPPRESSION_BONUS := 15
+## Machine gun fire also suppresses (at half strength) the target's allies this close to it.
+const MG_AREA_RADIUS := 1.5
+## Suppression from an explosion to everyone within its radius + 1.
+const EXPLOSION_SUPPRESSION := 50
+## Suppression lost at the start of each of the unit's turns, plus bonuses for cover and a nearby officer.
+const SUPPRESSION_RECOVERY := 35
+const COVER_RECOVERY_BONUS := 10
+const OFFICER_RECOVERY_BONUS := 25
+const OFFICER_RADIUS := 5.0
+## Rally removes this much suppression from the officer's allies in OFFICER_RADIUS.
+const RALLY_AMOUNT := 50
+## When a soldier dies, allies this close may panic (become pinned).
+const PANIC_RADIUS := 5.0
+const PANIC_CHANCE := 30
+const PANIC_WOUNDED_BONUS := 10
+const OFFICER_PANIC_REDUCTION := 20
+## Losing the officer shakes the whole squad.
+const OFFICER_DEATH_SUPPRESSION := 40
+
+# --- Grenades, smoke and mortars ---
 const GRENADE_RANGE := 10.0
 const GRENADE_RADIUS := 1.5
 const GRENADE_DAMAGE_MIN := 3
 const GRENADE_DAMAGE_MAX := 4
 const GRENADE_SHRED := 1
+const SMOKE_RANGE := 8.0
+const SMOKE_RADIUS := 1.5
+## Smoke lasts this many turns (both sides' turns count, so 4 = two rounds).
+const SMOKE_TURNS := 4
+const MORTAR_MIN_RANGE := 5.0
+const MORTAR_MAX_RANGE := 22.0
+const MORTAR_RADIUS := 1.5
+const MORTAR_DAMAGE_MIN := 3
+const MORTAR_DAMAGE_MAX := 5
+## Shells land up to this many tiles off target per tile of distance.
+const MORTAR_SCATTER := 0.08
 const MEDKIT_HEAL := 4
 
 
@@ -31,6 +71,13 @@ static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction :=
 		modifiers.append(["Range %.1f" % distance, range_mod])
 		hit += range_mod
 
+	if shooter.is_pinned():
+		modifiers.append(["Pinned down", -PINNED_AIM_PENALTY])
+		hit -= PINNED_AIM_PENALTY
+	elif shooter.is_suppressed():
+		modifiers.append(["Suppressed", -SUPPRESSED_AIM_PENALTY])
+		hit -= SUPPRESSED_AIM_PENALTY
+
 	var cover := Cover.NONE if reaction else map.cover_against(target.pos, shooter.pos)
 	if cover != Cover.NONE:
 		var defense: int = COVER_DEFENSE[cover]
@@ -40,6 +87,10 @@ static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction :=
 			var bonus := defense * (HUNKER_MULTIPLIER - 1)
 			modifiers.append(["Hunkered", -bonus])
 			hit -= bonus
+
+	if map.get_terrain(target.pos) == TacticalMap.Terrain.WHEAT and distance > WHEAT_CONCEALMENT_RANGE:
+		modifiers.append(["In the wheat", -WHEAT_CONCEALMENT])
+		hit -= WHEAT_CONCEALMENT
 
 	if target.defense != 0:
 		modifiers.append(["Defense", -target.defense])

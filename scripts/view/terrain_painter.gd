@@ -1,7 +1,6 @@
 class_name TerrainPainter
 extends RefCounted
-## Procedural art for the battlefield: ground tiles, cast shadows and props
-## (boulders, crates, sandbags, concrete walls, windows, fences) drawn as projected 3D shapes.
+## Procedural art for the battlefield: ground tiles, cast shadows, props and smoke, drawn as projected 3D shapes.
 ## Variation comes from a per-tile hash, so the map looks the same every time it is drawn.
 
 ## Shadow offset on the ground per tile of height, in grid space. The light comes from the north-west.
@@ -15,13 +14,26 @@ const RUBBLE := Color("5d564e")
 const STONE := Color("8d867c")
 const INDOOR := [Color("6e6153"), Color("75685a")]
 const PLANK_LINE := Color("54483b")
+const ROAD := [Color("7a6b50"), Color("837457")]
+const RUT := Color("5e523c")
+const WHEAT := [Color("a28c45"), Color("ad9850")]
+const WHEAT_STALKS := [Color("c9b060"), Color("d9c274"), Color("9c8640")]
+const CRATER_FLOOR := Color("3b342b")
+const CRATER_RIM := Color("6e604c")
 const ROCK := [Color("8a8984"), Color("7b7266")]
 const CRATE := Color("9c7442")
 const SANDBAG := Color("a99b6d")
-const CONCRETE := Color("c0c1bc")
+const HAY := Color("c7a95a")
 const WOOD := Color("7b5b37")
+const MASONRY := Color("c6bca7")
+const STONE_WALL := Color("9b9183")
+const HEDGE := [Color("34502a"), Color("426236"), Color("2c4322")]
+const TRUNK := Color("5a4330")
+const LEAVES := [Color("38562a"), Color("466a33"), Color("57793d")]
 const GLASS := Color(0.65, 0.82, 0.95, 0.28)
 const WALL_HEIGHT := 1.05
+const HEDGE_HEIGHT := 1.0
+const LOW_WALL_HEIGHT := 0.45
 const SILL_HEIGHT := 0.4
 const LINTEL_BASE := 0.84
 const WALL_HALF_THICKNESS := 0.07
@@ -53,6 +65,17 @@ static func blob_poly(center: Vector2, radius: float, p: Vector2i, jitter: float
 	for i in 8:
 		var angle := TAU * i / 8.0 + (noise(p, 40 + i) - 0.5) * jitter
 		points.append(center + Vector2.from_angle(angle) * radius * (1.0 + (noise(p, 50 + i) - 0.5) * jitter))
+	return points
+
+
+## A circle on the ground (radius in tiles). Closed for outlines; open (no repeated point) for filling.
+static func ground_circle(proj: ViewProjection, g: Vector2, radius: float, closed := true, height := 0.0) -> PackedVector2Array:
+	var points := PackedVector2Array()
+	var segments := clampi(int(radius * 16), 16, 96)
+	for i in segments:
+		points.append(proj.project(g + Vector2.from_angle(TAU * i / segments) * radius, height))
+	if closed:
+		points.append(points[0])
 	return points
 
 
@@ -93,6 +116,30 @@ static func draw_tile(c: CanvasItem, proj: ViewProjection, map: TacticalMap, p: 
 				c.draw_line(proj.project(g + Vector2(0, y)), proj.project(g + Vector2(1, y)), PLANK_LINE, 1.0)
 			var seam := 0.2 + n * 0.6
 			c.draw_line(proj.project(g + Vector2(seam, 0.25)), proj.project(g + Vector2(seam, 0.5)), PLANK_LINE, 1.0)
+		TacticalMap.Terrain.ROAD:
+			c.draw_colored_polygon(tile_poly(proj, p), ROAD[0].lerp(ROAD[1], n))
+			var along_x := map.get_terrain(p + Vector2i(1, 0)) == TacticalMap.Terrain.ROAD or map.get_terrain(p - Vector2i(1, 0)) == TacticalMap.Terrain.ROAD
+			for t in [0.3, 0.7]:
+				var a := g + (Vector2(0, t) if along_x else Vector2(t, 0))
+				var b := a + (Vector2(1, 0) if along_x else Vector2(0, 1))
+				c.draw_line(proj.project(a), proj.project(b), RUT, 2.0)
+			for i in 3:
+				var at := g + Vector2(noise(p, i + 3), noise(p, i + 9)) * 0.9 + Vector2(0.05, 0.05)
+				c.draw_circle(proj.project(at), 1.5, ROAD[0].darkened(0.25))
+		TacticalMap.Terrain.WHEAT:
+			c.draw_colored_polygon(tile_poly(proj, p), WHEAT[0].lerp(WHEAT[1], n))
+			for i in 12:
+				var at := g + Vector2(0.06, 0.06) + Vector2(noise(p, i * 2 + 1), noise(p, i * 2 + 2)) * 0.88
+				var top := proj.project(at + Vector2(0.02, -0.02), 0.35 + noise(p, i + 40) * 0.1)
+				var color: Color = WHEAT_STALKS[i % 3]
+				c.draw_line(proj.project(at), top, color.darkened(0.2), 1.2)
+				c.draw_circle(top, 1.6, color)
+		TacticalMap.Terrain.CRATER:
+			c.draw_colored_polygon(tile_poly(proj, p), DRY_GROUND[0].darkened(0.1))
+			var center := g + Vector2(0.5, 0.5)
+			c.draw_colored_polygon(ground_circle(proj, center, 0.44, false), CRATER_RIM)
+			c.draw_colored_polygon(ground_circle(proj, center, 0.34, false), CRATER_FLOOR)
+			c.draw_polyline(ground_circle(proj, center + Vector2(0.03, 0.03), 0.3), CRATER_FLOOR.darkened(0.3), 1.5)
 
 
 ## The shadow a prism of the given height casts on the ground.
@@ -109,14 +156,20 @@ static func draw_shadow(c: CanvasItem, proj: ViewProjection, footprint: PackedVe
 
 
 static func draw_object_shadow(c: CanvasItem, proj: ViewProjection, map: TacticalMap, p: Vector2i) -> void:
-	var full := map.get_object(p) == Cover.FULL
-	draw_shadow(c, proj, rect_poly(Rect2(Vector2(p), Vector2.ONE).grow(-0.12 if full else -0.2)), _rock_height(p) if full else 0.45)
+	var center := Vector2(p) + Vector2(0.5, 0.5)
+	match map.get_object_kind(p):
+		"tree":
+			c.draw_colored_polygon(ground_circle(proj, center + LIGHT * 1.2, 0.5, false), SHADOW)
+		"rock":
+			draw_shadow(c, proj, rect_poly(Rect2(Vector2(p), Vector2.ONE).grow(-0.12)), _rock_height(p))
+		_:
+			draw_shadow(c, proj, rect_poly(Rect2(Vector2(p), Vector2.ONE).grow(-0.2)), 0.45)
 
 
 static func draw_edge_shadow(c: CanvasItem, proj: ViewProjection, map: TacticalMap, key: Vector3i) -> void:
-	var low: bool = map.get_edges()[key] == Cover.HALF
-	var height := 0.25 if low and not _is_window(map, key) else WALL_HEIGHT
-	draw_shadow(c, proj, _edge_rect(key, 0.0, 1.0, WALL_HALF_THICKNESS), height)
+	var kind := map.edge_kind(key)
+	var height: float = {"wall": WALL_HEIGHT, "window": WALL_HEIGHT, "hedge": HEDGE_HEIGHT, "stone": LOW_WALL_HEIGHT}.get(kind, 0.25)
+	draw_shadow(c, proj, _edge_rect(key, 0.0, 1.0, 0.1 if kind == "hedge" else WALL_HALF_THICKNESS), height)
 
 
 # --- Props ---
@@ -157,33 +210,64 @@ static func prism(c: CanvasItem, proj: ViewProjection, footprint: PackedVector2A
 static func draw_object(c: CanvasItem, proj: ViewProjection, map: TacticalMap, p: Vector2i, alpha: float, dark: bool) -> void:
 	var center := Vector2(p) + Vector2(0.5, 0.5)
 	var tint := 0.45 if dark else 0.0
-	if map.get_object(p) == Cover.FULL:
-		# A boulder: a wide irregular base with a smaller, offset cap.
-		var color: Color = ROCK[0].lerp(ROCK[1], noise(p, 3)).darkened(tint)
-		var height := _rock_height(p)
-		var split := height * (0.5 + noise(p, 4) * 0.15)
-		var faces := prism(c, proj, blob_poly(center, 0.44, p, 0.7), 0.0, split, color, alpha)
-		var cap_center := center + Vector2(noise(p, 8) - 0.5, noise(p, 9) - 0.5) * 0.14
-		faces.append_array(prism(c, proj, blob_poly(cap_center, 0.29, p + Vector2i(7, 3), 0.7), split, height, color.lightened(0.06), alpha))
-		for i in faces.size():
-			var q: Array = faces[i]
-			if noise(p, 70 + i) < 0.5:
-				var t := 0.3 + noise(p, 60 + i) * 0.4
-				c.draw_line(q[0].lerp(q[3], t), q[1].lerp(q[2], t + 0.2), Color(color.darkened(0.4), alpha * 0.7), 1.0)
-	elif noise(p, 5) < 0.5:
-		_draw_crate(c, proj, Rect2(center - Vector2(0.31, 0.31), Vector2(0.62, 0.62)), 0.5, CRATE.darkened(tint), alpha)
-	else:
-		var color := SANDBAG.darkened(tint)
-		var faces := prism(c, proj, blob_poly(center, 0.4, p, 0.05), 0.0, 0.42, color, alpha)
-		var seam := Color(color.darkened(0.35), alpha)
-		for q: Array in faces:
-			for t in [0.36, 0.7]:
-				c.draw_line(q[0].lerp(q[3], t), q[1].lerp(q[2], t), seam, 1.0)
-			var bottom: Vector2 = q[0].lerp(q[1], 0.5)
-			var top: Vector2 = q[3].lerp(q[2], 0.5)
-			c.draw_line(bottom, bottom.lerp(top, 0.36), seam, 1.0)
-		for i in 3:
-			c.draw_circle(proj.project(center + Vector2.from_angle(TAU * i / 3.0 + 0.4) * 0.17, 0.43), 4.0, Color(color.lightened(0.18), alpha))
+	match map.get_object_kind(p):
+		"rock":
+			_draw_rock(c, proj, p, center, ROCK[0].lerp(ROCK[1], noise(p, 3)).darkened(tint), alpha)
+		"tree":
+			_draw_tree(c, proj, p, center, tint, alpha)
+		"sandbags":
+			_draw_sandbags(c, proj, p, center, SANDBAG.darkened(tint), alpha)
+		"hay":
+			var color := HAY.darkened(tint)
+			prism(c, proj, blob_poly(center, 0.34, p, 0.0), 0.0, 0.5, color, alpha)
+			for r in [0.24, 0.14]:
+				c.draw_polyline(ground_circle(proj, center, r, true, 0.5), Color(color.darkened(0.3), alpha), 1.0)
+		"pew":
+			var color := WOOD.darkened(tint)
+			prism(c, proj, rect_poly(Rect2(center - Vector2(0.42, 0.14), Vector2(0.84, 0.28))), 0.0, 0.32, color, alpha)
+			prism(c, proj, rect_poly(Rect2(center + Vector2(-0.42, 0.1), Vector2(0.84, 0.06))), 0.0, 0.62, color.darkened(0.1), alpha)
+		_:
+			_draw_crate(c, proj, Rect2(center - Vector2(0.31, 0.31), Vector2(0.62, 0.62)), 0.5, CRATE.darkened(tint), alpha)
+
+
+## A boulder: a wide irregular base with a smaller, offset cap.
+static func _draw_rock(c: CanvasItem, proj: ViewProjection, p: Vector2i, center: Vector2, color: Color, alpha: float) -> void:
+	var height := _rock_height(p)
+	var split := height * (0.5 + noise(p, 4) * 0.15)
+	var faces := prism(c, proj, blob_poly(center, 0.44, p, 0.7), 0.0, split, color, alpha)
+	var cap_center := center + Vector2(noise(p, 8) - 0.5, noise(p, 9) - 0.5) * 0.14
+	faces.append_array(prism(c, proj, blob_poly(cap_center, 0.29, p + Vector2i(7, 3), 0.7), split, height, color.lightened(0.06), alpha))
+	for i in faces.size():
+		var q: Array = faces[i]
+		if noise(p, 70 + i) < 0.5:
+			var t := 0.3 + noise(p, 60 + i) * 0.4
+			c.draw_line(q[0].lerp(q[3], t), q[1].lerp(q[2], t + 0.2), Color(color.darkened(0.4), alpha * 0.7), 1.0)
+
+
+static func _draw_tree(c: CanvasItem, proj: ViewProjection, p: Vector2i, center: Vector2, tint: float, alpha: float) -> void:
+	prism(c, proj, blob_poly(center, 0.08, p, 0.2), 0.0, 0.8, TRUNK.darkened(tint), alpha)
+	var puffs := []
+	for i in 8:
+		var offset := Vector2.from_angle(TAU * i / 8.0 + noise(p, i)) * 0.26 * noise(p, i + 20)
+		puffs.append([center + offset, 0.9 + noise(p, i + 30) * 0.55, 9.0 + noise(p, i + 40) * 6.0])
+	puffs.sort_custom(func(a: Array, b: Array) -> bool: return a[1] < b[1])
+	for i in puffs.size():
+		var puff: Array = puffs[i]
+		var color: Color = LEAVES[mini(2, int(i * 3.0 / puffs.size()))]
+		c.draw_circle(proj.project(puff[0], puff[1]), puff[2], Color(color.darkened(tint), alpha))
+
+
+static func _draw_sandbags(c: CanvasItem, proj: ViewProjection, p: Vector2i, center: Vector2, color: Color, alpha: float) -> void:
+	var faces := prism(c, proj, blob_poly(center, 0.4, p, 0.05), 0.0, 0.42, color, alpha)
+	var seam := Color(color.darkened(0.35), alpha)
+	for q: Array in faces:
+		for t in [0.36, 0.7]:
+			c.draw_line(q[0].lerp(q[3], t), q[1].lerp(q[2], t), seam, 1.0)
+		var bottom: Vector2 = q[0].lerp(q[1], 0.5)
+		var top: Vector2 = q[3].lerp(q[2], 0.5)
+		c.draw_line(bottom, bottom.lerp(top, 0.36), seam, 1.0)
+	for i in 3:
+		c.draw_circle(proj.project(center + Vector2.from_angle(TAU * i / 3.0 + 0.4) * 0.17, 0.43), 4.0, Color(color.lightened(0.18), alpha))
 
 
 static func _draw_crate(c: CanvasItem, proj: ViewProjection, rect: Rect2, height: float, color: Color, alpha: float) -> void:
@@ -200,40 +284,67 @@ static func _draw_crate(c: CanvasItem, proj: ViewProjection, rect: Rect2, height
 
 static func draw_edge(c: CanvasItem, proj: ViewProjection, map: TacticalMap, key: Vector3i, alpha: float, dark: bool) -> void:
 	var tint := 0.45 if dark else 0.0
-	if map.get_edges()[key] == Cover.FULL:
-		var color := CONCRETE.darkened(tint)
-		var faces := prism(c, proj, _edge_rect(key, 0.0, 1.0, WALL_HALF_THICKNESS), 0.0, WALL_HEIGHT, color, alpha)
-		for q: Array in faces:
-			c.draw_colored_polygon(PackedVector2Array([q[0], q[1], q[1].lerp(q[2], 0.08), q[0].lerp(q[3], 0.08)]), Color(color.darkened(0.45), alpha))
-			c.draw_line(q[0].lerp(q[3], 0.55), q[1].lerp(q[2], 0.55), Color(color.darkened(0.25), alpha), 1.0)
-	elif _is_window(map, key):
-		var color := CONCRETE.darkened(tint)
-		prism(c, proj, _edge_rect(key, 0.0, 1.0, WALL_HALF_THICKNESS), 0.0, SILL_HEIGHT, color, alpha)
-		var frame := _edge_frame(key)
-		var a: Vector2 = frame[0] + frame[1] * 0.1
-		var b: Vector2 = frame[0] + frame[1] * 0.9
-		c.draw_colored_polygon(PackedVector2Array([
-			proj.project(a, SILL_HEIGHT), proj.project(b, SILL_HEIGHT), proj.project(b, LINTEL_BASE), proj.project(a, LINTEL_BASE),
-		]), Color(GLASS, GLASS.a * alpha))
-		prism(c, proj, _edge_rect(key, 0.0, 0.1, WALL_HALF_THICKNESS), 0.0, WALL_HEIGHT, color, alpha)
-		prism(c, proj, _edge_rect(key, 0.9, 1.0, WALL_HALF_THICKNESS), 0.0, WALL_HEIGHT, color, alpha)
-		prism(c, proj, _edge_rect(key, 0.0, 1.0, WALL_HALF_THICKNESS), LINTEL_BASE, WALL_HEIGHT, color, alpha)
-	else:
-		var color := WOOD.darkened(tint)
-		for t in [0.0, 0.5, 1.0]:
-			prism(c, proj, _edge_rect(key, t - 0.04, t + 0.04, 0.045), 0.0, 0.55, color.darkened(0.1), alpha)
-		for rail: Array in [[0.14, 0.21], [0.34, 0.41]]:
-			prism(c, proj, _edge_rect(key, 0.0, 1.0, 0.025), rail[0], rail[1], color, alpha)
+	match map.edge_kind(key):
+		"wall":
+			var color := MASONRY.darkened(tint)
+			var faces := prism(c, proj, _edge_rect(key, 0.0, 1.0, WALL_HALF_THICKNESS), 0.0, WALL_HEIGHT, color, alpha)
+			for q: Array in faces:
+				c.draw_colored_polygon(PackedVector2Array([q[0], q[1], q[1].lerp(q[2], 0.08), q[0].lerp(q[3], 0.08)]), Color(color.darkened(0.45), alpha))
+				for t in [0.35, 0.7]:
+					c.draw_line(q[0].lerp(q[3], t), q[1].lerp(q[2], t), Color(color.darkened(0.18), alpha), 1.0)
+		"window":
+			var color := MASONRY.darkened(tint)
+			prism(c, proj, _edge_rect(key, 0.0, 1.0, WALL_HALF_THICKNESS), 0.0, SILL_HEIGHT, color, alpha)
+			var frame := _edge_frame(key)
+			var a: Vector2 = frame[0] + frame[1] * 0.1
+			var b: Vector2 = frame[0] + frame[1] * 0.9
+			c.draw_colored_polygon(PackedVector2Array([
+				proj.project(a, SILL_HEIGHT), proj.project(b, SILL_HEIGHT), proj.project(b, LINTEL_BASE), proj.project(a, LINTEL_BASE),
+			]), Color(GLASS, GLASS.a * alpha))
+			prism(c, proj, _edge_rect(key, 0.0, 0.1, WALL_HALF_THICKNESS), 0.0, WALL_HEIGHT, color, alpha)
+			prism(c, proj, _edge_rect(key, 0.9, 1.0, WALL_HALF_THICKNESS), 0.0, WALL_HEIGHT, color, alpha)
+			prism(c, proj, _edge_rect(key, 0.0, 1.0, WALL_HALF_THICKNESS), LINTEL_BASE, WALL_HEIGHT, color, alpha)
+		"hedge":
+			var p := Vector2i(key.x * 2 + key.z, key.y)
+			var color: Color = HEDGE[0].darkened(tint)
+			prism(c, proj, _edge_rect(key, 0.0, 1.0, 0.1), 0.0, HEDGE_HEIGHT * 0.85, color, alpha)
+			var frame := _edge_frame(key)
+			for i in 5:
+				var t := (i + 0.5) / 5.0
+				var at: Vector2 = frame[0] + frame[1] * t + frame[2] * (noise(p, i) - 0.5) * 0.15
+				var leaf: Color = HEDGE[(i + key.x + key.y) % 3]
+				c.draw_circle(proj.project(at, HEDGE_HEIGHT * (0.75 + noise(p, i + 10) * 0.2)), 8.0 + noise(p, i + 20) * 3.0, Color(leaf.darkened(tint), alpha))
+		"stone":
+			var color := STONE_WALL.darkened(tint)
+			var faces := prism(c, proj, _edge_rect(key, 0.0, 1.0, 0.09), 0.0, LOW_WALL_HEIGHT, color, alpha)
+			var line := Color(color.darkened(0.35), alpha)
+			for q: Array in faces:
+				c.draw_line(q[0].lerp(q[3], 0.5), q[1].lerp(q[2], 0.5), line, 1.0)
+				for t in [0.25, 0.6, 0.85]:
+					var bottom: Vector2 = q[0].lerp(q[1], t)
+					var top: Vector2 = q[3].lerp(q[2], t)
+					var shift := 0.5 if t > 0.5 else 0.0
+					c.draw_line(bottom.lerp(top, shift), bottom.lerp(top, shift + 0.5), line, 1.0)
+		_:
+			var color := WOOD.darkened(tint)
+			for t in [0.0, 0.5, 1.0]:
+				prism(c, proj, _edge_rect(key, t - 0.04, t + 0.04, 0.045), 0.0, 0.55, color.darkened(0.1), alpha)
+			for rail: Array in [[0.14, 0.21], [0.34, 0.41]]:
+				prism(c, proj, _edge_rect(key, 0.0, 1.0, 0.025), rail[0], rail[1], color, alpha)
+
+
+## A drifting cloud of smoke over a tile.
+static func draw_smoke(c: CanvasItem, proj: ViewProjection, p: Vector2i, time: float) -> void:
+	var center := Vector2(p) + Vector2(0.5, 0.5)
+	for i in 3:
+		var drift := Vector2(sin(time * 0.6 + i * 2.1 + p.x), cos(time * 0.5 + i * 1.7 + p.y)) * 0.12
+		var height := 0.3 + i * 0.35 + sin(time * 0.8 + i + p.y) * 0.05
+		var shade := 0.72 + noise(p, i) * 0.12
+		c.draw_circle(proj.project(center + drift, height), 20.0 - i * 3.0, Color(shade, shade, shade * 0.98, 0.55))
 
 
 static func _rock_height(p: Vector2i) -> float:
 	return 0.9 + noise(p, 7) * 0.3
-
-
-## A half-height wall next to an indoor tile is a window; out in the open it's a fence.
-static func _is_window(map: TacticalMap, key: Vector3i) -> bool:
-	var pair := TacticalMap.edge_tiles(key)
-	return map.get_terrain(pair[0]) == TacticalMap.Terrain.INDOOR or map.get_terrain(pair[1]) == TacticalMap.Terrain.INDOOR
 
 
 ## [start corner, direction along the edge, direction across it] in grid space.

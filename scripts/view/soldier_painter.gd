@@ -3,23 +3,29 @@ extends RefCounted
 ## Procedural soldiers: a small 3D model of capsules and balls in the unit's own frame
 ## (forward, right, up), projected with the view so soldiers turn and rotate with the camera.
 ##
-## Pose keys: facing (Vector2, grid), walk (0..1), phase (walk cycle, radians), crouch (bool),
-## death (0 standing .. 1 lying), flash (0..1 hit flash), breath (radians).
+## Pose keys: facing (Vector2, grid), walk (0..1), phase (walk cycle, radians), crouch (bool), pinned (bool),
+## deployed (bool), wounded (bool), death (0 standing .. 1 lying), flash (0..1 hit flash), breath (radians).
 
 const SKIN := Color("d3a37b")
 const GUN := Color("2a2d31")
+const STOCK := Color("6b4a2b")
 const BOOTS := Color("231f1b")
 const OUTLINE := Color(0.06, 0.06, 0.07)
-const MEDIC_WHITE := Color("e6e4dc")
-const MEDIC_RED := Color("d0322b")
+const WHITE := Color("e6e4dc")
+const RED_CROSS := Color("c8302a")
+## Allies (olive drab, M1 helmet) and Germany (field grey, Stahlhelm).
+const FACTIONS := [
+	{"uniform": Color("575d34"), "jacket": Color("6c7043"), "helmet": Color("4c5430"), "webbing": Color("8b7f57"), "stahlhelm": false},
+	{"uniform": Color("4c5456"), "jacket": Color("5e686a"), "helmet": Color("3a4042"), "webbing": Color("2f2b27"), "stahlhelm": true},
+]
 
 
-static func draw(c: CanvasItem, proj: ViewProjection, g: Vector2, unit: Unit, team_color: Color, pose: Dictionary) -> void:
+static func draw(c: CanvasItem, proj: ViewProjection, g: Vector2, unit: Unit, pose: Dictionary) -> void:
 	var facing: Vector2 = pose["facing"]
 	var death: float = pose["death"]
 	var flash: float = pose["flash"]
 	var drawn := []
-	for part: Array in _model(unit, team_color, pose):
+	for part: Array in _model(unit, pose):
 		var a := _fall(part[0], death)
 		var b := _fall(part[1], death)
 		drawn.append([_depth(proj, g, facing, (a + b) * 0.5), _to_screen(proj, g, facing, a), _to_screen(proj, g, facing, b), part[2], part[3]])
@@ -34,65 +40,91 @@ static func draw(c: CanvasItem, proj: ViewProjection, g: Vector2, unit: Unit, te
 
 ## Screen position of the weapon's muzzle, for flashes and tracers.
 static func muzzle(proj: ViewProjection, g: Vector2, unit: Unit, pose: Dictionary) -> Vector2:
-	var gun := _gun(unit)
-	var chest := 0.84 * (0.72 if pose["crouch"] else 1.0)
-	return _to_screen(proj, g, pose["facing"], Vector3(gun[0], 0.06, chest - 0.07))
+	var chest := 0.84 * _crouch(pose)
+	return _to_screen(proj, g, pose["facing"], Vector3(_gun_length(unit), 0.06, chest - 0.07))
+
+
+static func _crouch(pose: Dictionary) -> float:
+	if pose["pinned"]:
+		return 0.6
+	return 0.72 if pose["crouch"] or pose["deployed"] else 1.0
 
 
 ## Parts as [a, b, width px, color] in local space Vector3(forward, right, up), up in tiles of height.
-static func _model(unit: Unit, team_color: Color, pose: Dictionary) -> Array:
-	var k := 0.72 if pose["crouch"] else 1.0
+static func _model(unit: Unit, pose: Dictionary) -> Array:
+	var faction: Dictionary = FACTIONS[unit.team]
+	var k := _crouch(pose)
 	var walk: float = pose["walk"]
 	var phase: float = pose["phase"]
 	var s := sin(phase) * 0.11 * walk
 	var bob := absf(cos(phase)) * 0.02 * walk + sin(pose["breath"]) * 0.006
 	var hip := 0.5 * k + bob
 	var chest := 0.84 * k + bob
-	var head := 1.0 * k + bob
+	var head := 1.0 * k + bob - (0.04 if pose["pinned"] else 0.0)
 	var knee := 0.27 * k
-	var heavy := unit.role == "Heavy"
-	var uniform := team_color.darkened(0.55).lerp(Color("3d4235"), 0.45)
-	var vest := team_color.darkened(0.12)
-	var helmet := team_color.darkened(0.4)
-	var gun := _gun(unit)
-	var length: float = gun[0]
+	var uniform: Color = faction["uniform"]
+	var jacket: Color = faction["jacket"]
+	var helmet: Color = faction["helmet"]
+	var length := _gun_length(unit)
+	var width := 5.5 if unit.weapon.kind == "mg" else (4.5 if unit.weapon.kind == "smg" else 3.5)
+	var grip := Vector3(0.0, 0.06, chest - 0.1)
+	var muzzle := Vector3(length, 0.06, chest - 0.07)
 
 	var parts := [
+		# Legs and boots.
 		[Vector3(0, -0.06, hip), Vector3(0.04 + s * 0.5, -0.07, knee), 5.0, uniform],
 		[Vector3(0.04 + s * 0.5, -0.07, knee), Vector3(s, -0.07, 0.04), 4.5, uniform],
 		[Vector3(s + 0.03, -0.07, 0.03), Vector3(s + 0.03, -0.07, 0.03), 6.0, BOOTS],
 		[Vector3(0, 0.06, hip), Vector3(0.04 - s * 0.5, 0.07, knee), 5.0, uniform],
 		[Vector3(0.04 - s * 0.5, 0.07, knee), Vector3(-s, 0.07, 0.04), 4.5, uniform],
 		[Vector3(-s + 0.03, 0.07, 0.03), Vector3(-s + 0.03, 0.07, 0.03), 6.0, BOOTS],
-		[Vector3(0, 0, hip + 0.03), Vector3(0, 0, chest), 14.0 if heavy else 11.0, vest],
-		[Vector3(0, 0, hip + 0.02), Vector3(0, 0, hip + 0.02), 10.0, uniform.darkened(0.3)],
-		[Vector3(-0.01, 0, head + 0.03), Vector3(-0.01, 0, head + 0.03), 12.5, helmet],
+		# Body, belt and head.
+		[Vector3(0, 0, hip + 0.03), Vector3(0, 0, chest), 11.0, jacket],
+		[Vector3(0, 0, hip + 0.02), Vector3(0, 0, hip + 0.02), 10.0, faction["webbing"]],
 		[Vector3(0.06, 0, head - 0.01), Vector3(0.06, 0, head - 0.01), 6.0, SKIN],
-		[Vector3(0.0, 0.06, chest - 0.1), Vector3(length, 0.06, chest - 0.07), gun[1], GUN],
-		[Vector3(0, 0.11, chest - 0.02), Vector3(0.08, 0.07, chest - 0.11), 4.5, uniform],
-		[Vector3(0, -0.11, chest - 0.02), Vector3(length * 0.6, 0.05, chest - 0.08), 4.5, uniform],
+		# Weapon: wooden stock, metal barrel. Arms hold it at the grip and fore-end.
+		[grip, grip.lerp(muzzle, 0.4), width, STOCK if unit.weapon.kind != "smg" else GUN],
+		[grip.lerp(muzzle, 0.4), muzzle, width - 1.0, GUN],
+		[Vector3(0, 0.11, chest - 0.02), Vector3(0.08, 0.07, chest - 0.11), 4.5, jacket],
+		[Vector3(0, -0.11, chest - 0.02), grip.lerp(muzzle, 0.6) + Vector3(0, -0.01, 0), 4.5, jacket],
 	]
+	# Helmets: the American M1 has a round brim, the German Stahlhelm a flared skirt at the back.
+	if faction["stahlhelm"]:
+		parts.append([Vector3(-0.07, 0, head - 0.035), Vector3(0.0, 0, head - 0.005), 14.5, helmet.darkened(0.15)])
+	else:
+		parts.append([Vector3(-0.05, 0, head - 0.005), Vector3(0.05, 0, head - 0.005), 14.0, helmet.darkened(0.15)])
+	parts.append([Vector3(-0.01, 0, head + 0.03), Vector3(-0.01, 0, head + 0.03), 12.5, helmet])
+
+	match unit.weapon.kind:
+		"smg":
+			parts.append([grip.lerp(muzzle, 0.5), grip.lerp(muzzle, 0.5) + Vector3(0, 0, -0.12), 3.0, GUN])
+		"sniper":
+			parts.append([grip.lerp(muzzle, 0.35) + Vector3(0, 0, 0.05), grip.lerp(muzzle, 0.6) + Vector3(0, 0, 0.05), 3.5, GUN])
+		"mg":
+			parts.append([grip.lerp(muzzle, 0.45), grip.lerp(muzzle, 0.45) + Vector3(0, 0.04, -0.06), 4.0, GUN])
+			if pose["deployed"]:
+				for side in [-0.06, 0.06]:
+					parts.append([grip.lerp(muzzle, 0.85), Vector3(length * 0.95, 0.06 + side, 0.02), 2.0, GUN])
 	match unit.role:
-		"Heavy":
-			parts.append([Vector3(-0.1, 0, hip + 0.1), Vector3(-0.1, 0, chest - 0.04), 11.0, Color("3a3c38")])
-			for side in [-0.12, 0.12]:
-				parts.append([Vector3(0, side, chest), Vector3(0, side, chest), 8.0, vest.darkened(0.2)])
+		"Officer":
+			for side in [-0.025, 0.025]:
+				parts.append([Vector3(0.08, side, chest - 0.06), Vector3(0.08, side, chest - 0.06), 4.0, GUN])
 		"Medic":
-			parts.append([Vector3(-0.1, 0, hip + 0.12), Vector3(-0.1, 0, chest - 0.03), 9.0, MEDIC_WHITE])
-			parts.append([Vector3(-0.15, 0, chest - 0.1), Vector3(-0.15, 0, chest - 0.1), 4.5, MEDIC_RED])
-			parts.append([Vector3(0, -0.12, chest - 0.05), Vector3(0, -0.12, chest - 0.05), 5.0, MEDIC_WHITE])
-		"Rifleman":
-			parts.append([Vector3(-0.09, 0, hip + 0.12), Vector3(-0.09, 0, chest - 0.03), 9.0, Color("5b5a3c")])
+			parts.append([Vector3(-0.1, 0, hip + 0.12), Vector3(-0.1, 0, chest - 0.03), 9.0, WHITE])
+			parts.append([Vector3(-0.15, 0, chest - 0.1), Vector3(-0.15, 0, chest - 0.1), 4.5, RED_CROSS])
+			parts.append([Vector3(0.05, 0, head + 0.06), Vector3(0.05, 0, head + 0.06), 5.0, WHITE])
+			parts.append([Vector3(0.065, 0, head + 0.065), Vector3(0.065, 0, head + 0.065), 2.5, RED_CROSS])
+		"Mortar":
+			parts.append([Vector3(-0.12, 0.06, hip + 0.02), Vector3(-0.17, -0.06, chest + 0.28), 6.0, GUN.lightened(0.15)])
+		"Rifleman", "Sniper", "MG":
+			parts.append([Vector3(-0.09, 0, hip + 0.12), Vector3(-0.09, 0, chest - 0.03), 9.0, uniform.darkened(0.15)])
+	if pose["wounded"]:
+		parts.append([Vector3(0, -0.12, chest - 0.06), Vector3(0, -0.12, chest - 0.06), 5.0, WHITE])
 	return parts
 
 
-## [length in tiles, width px] of the unit's weapon.
-static func _gun(unit: Unit) -> Array:
-	if unit.weapon.name == "Shotgun":
-		return [0.34, 4.5]
-	if unit.role == "Heavy":
-		return [0.5, 6.0]
-	return [0.44, 3.5]
+static func _gun_length(unit: Unit) -> float:
+	return {"rifle": 0.46, "carbine": 0.38, "smg": 0.3, "mg": 0.52, "sniper": 0.5}.get(unit.weapon.kind, 0.44)
 
 
 ## Rotates a standing point toward lying on the back as death goes 0 -> 1.
@@ -100,8 +132,7 @@ static func _fall(v: Vector3, death: float) -> Vector3:
 	if death <= 0.0:
 		return v
 	var lying := Vector3(-v.z * 0.9 + v.x * 0.3, v.y, 0.03 + maxf(0.0, v.x) * 0.15)
-	var t := death * death
-	return v.lerp(lying, t)
+	return v.lerp(lying, death * death)
 
 
 static func _to_screen(proj: ViewProjection, g: Vector2, facing: Vector2, v: Vector3) -> Vector2:

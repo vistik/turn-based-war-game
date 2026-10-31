@@ -45,8 +45,10 @@ func _ready() -> void:
 	z_as_relative = false
 	z_index = view.TOP_Z + 1
 	tools = McpGameTools.new(view.battle, self)
+	view.events_played.connect(tools.note_events)
 	_build_ui()
-	if AdvisorSettings.mcp_enabled:
+	# A battle an agent plays always needs the link, whatever the setting says.
+	if AdvisorSettings.mcp_enabled or agent_plays():
 		_start_link()
 	_update_ui()
 
@@ -58,6 +60,8 @@ func _exit_tree() -> void:
 
 func _process(delta: float) -> void:
 	_time += delta
+	if _link_panel != null:
+		_link_panel.offset_top = view.top_bar_bottom() + 12
 	if server != null:
 		server.poll()
 	if not _suggestion.is_empty() and (_state_key() != _shown_at or view.busy or not _human_turn()):
@@ -80,13 +84,35 @@ func _unhandled_input(event: InputEvent) -> void:
 
 # --- Host interface for McpGameTools ---
 
-## The side the player plays: the only human, the human whose turn it is in hotseat, -1 if AI vs AI.
+## The side the agent link speaks for: the side an agent plays, else the only human, or the human whose
+## turn it is in hotseat, or -1 if AI vs AI.
 func player_team() -> int:
-	return view._view_team()
+	return GameSession.agent_team if agent_plays() else view._view_team()
+
+
+## True when an agent plays a whole side in this battle (the "Agent vs AI" and "Me vs agent" skirmishes).
+func agent_plays() -> bool:
+	return GameSession.agent_team != -1
 
 
 func is_online() -> bool:
 	return view._online
+
+
+## True while the screen is still playing out moves.
+func view_busy() -> bool:
+	return view.busy
+
+
+## Instant playback while the agent waits on moves (on), or back to the speed set for this turn (off).
+func set_fast_playback(on: bool) -> void:
+	var fastest: int = view.SPEEDS.size() - 1
+	if on:
+		if view._speed_index != fastest:
+			view._speed_index = fastest
+			view._update_speed_button()
+	else:
+		view._apply_turn_speed(view.battle.current_team)
 
 
 func is_busy() -> bool:
@@ -125,7 +151,7 @@ func show_proposal(suggestion: Dictionary) -> void:
 
 ## Carries out an agent's command (only when the player allowed it). Returns "" or why it didn't.
 func apply_command(command: Dictionary) -> String:
-	if is_online() or not AdvisorSettings.agent_may_act:
+	if is_online() or not (AdvisorSettings.agent_may_act or agent_plays()):
 		return "Not allowed"
 	if is_busy():
 		return "Wait: the last move is still playing out"
@@ -142,6 +168,8 @@ func _available() -> String:
 		return "Suggestions are off in online games"
 	if view.battle.winner != -1 or not _human_turn():
 		return "Not your turn"
+	if view._agent_turn():
+		return "The agent is playing this side"
 	if view.busy or view._overlay_state != "":
 		return "Wait for the move to finish"
 	return ""
@@ -229,8 +257,9 @@ func _on_request(method: String) -> void:
 
 
 ## The command to give Claude Code for this run of the game.
+## Removes any earlier "normandy" entry first (with an old token), since claude mcp add won't replace it.
 func setup_command() -> String:
-	return "claude mcp add --transport http normandy %s --header \"Authorization: Bearer %s\"" % [server.url() if server != null else "http://127.0.0.1:%d/mcp" % AdvisorSettings.mcp_port, AdvisorSettings.token()]
+	return "claude mcp remove normandy >/dev/null 2>&1; claude mcp add --transport http normandy %s --header \"Authorization: Bearer %s\"" % [server.url() if server != null else "http://127.0.0.1:%d/mcp" % AdvisorSettings.mcp_port, AdvisorSettings.token()]
 
 
 func _copy_setup() -> void:
@@ -290,8 +319,9 @@ func _build_ui() -> void:
 
 	_link_panel = _panel(layer, AGENT_COLOR)
 	_link_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	# Below the battle screen's top bar.
 	_link_panel.offset_left = 12
-	_link_panel.offset_top = 12
+	_link_panel.offset_top = view.TOP_BAR_HEIGHT + 12
 	_link_panel.offset_right = 12 + CARD_WIDTH
 	var link_box := VBoxContainer.new()
 	link_box.add_theme_constant_override("separation", 4)
@@ -312,6 +342,8 @@ func _build_ui() -> void:
 	_act_toggle.button_pressed = AdvisorSettings.agent_may_act
 	_act_toggle.toggled.connect(_on_act_toggled)
 	link_row.add_child(_act_toggle)
+	# The agent plays its side anyway in an agent battle; the switch is for helping a human player.
+	_act_toggle.visible = not agent_plays()
 	_link_panel.hide()
 
 

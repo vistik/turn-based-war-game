@@ -22,8 +22,9 @@ const DEPLOYMENTS := [
 	["Right flank, offensive", "right", "offensive"], ["Right flank, defensive", "right", "defensive"],
 	["Random", "random", "random"],
 ]
-## [label, Allies are AI, Germany is AI]
-const SKIRMISH_MODES := [["Play vs AI", false, true], ["Hotseat", false, false], ["Watch AI vs AI", true, true]]
+## [label, Allies are AI, Germany is AI, side an agent plays over the agent link (-1: none)]
+const SKIRMISH_MODES := [["Play vs AI", false, true, -1], ["Hotseat", false, false, -1], ["Watch AI vs AI", true, true, -1],
+		["Agent vs AI", false, true, 0], ["Me vs agent", false, false, 1]]
 
 var _page: Control
 var _map_choice: OptionButton
@@ -138,9 +139,13 @@ func _show_main() -> void:
 	var modes := HBoxContainer.new()
 	modes.add_theme_constant_override("separation", 8)
 	box.add_child(modes)
+	var agent_modes := HBoxContainer.new()
+	agent_modes.add_theme_constant_override("separation", 8)
 	for i in SKIRMISH_MODES.size():
-		var button := _button(modes, SKIRMISH_MODES[i][0], _start_skirmish.bind(i))
+		var button := _button(agent_modes if SKIRMISH_MODES[i][3] != -1 else modes, SKIRMISH_MODES[i][0], _start_skirmish.bind(i))
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_text(box, "An AI agent (such as Claude Code) plays a whole side through the agent link, on this computer only. The battle screen shows the address and token to connect it; see docs/MCP.md.", MUTED, 13, true)
+	box.add_child(agent_modes)
 	_button(box, "Map and scenario editor", func() -> void: get_tree().change_scene_to_file("res://scenes/editor.tscn"))
 
 	_section(box, "Online")
@@ -239,6 +244,7 @@ func _start_skirmish(mode: int) -> void:
 	GameSession.campaign = null
 	GameSession.war = null
 	GameSession.start_battle(built[0], [SKIRMISH_MODES[mode][1], SKIRMISH_MODES[mode][2]], built[1])
+	GameSession.agent_team = SKIRMISH_MODES[mode][3]
 	get_tree().change_scene_to_file(GameSession.BATTLE_SCENE)
 
 

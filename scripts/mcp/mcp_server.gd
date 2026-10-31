@@ -11,6 +11,9 @@ extends RefCounted
 ##
 ## Tools come from a provider object with tool_list() -> Array of {name, description, inputSchema},
 ## call_tool(name, arguments) -> {"result": Variant} or {"error": String}, and instructions() -> String.
+## A tool that has to wait for the game (a move playing out, the other side's turn) returns
+## {"wait": Callable} instead; the callable is asked every poll and returns null until it has the outcome.
+## The connection stays open meanwhile, so the agent simply gets a slower answer.
 
 const PROTOCOL_VERSIONS := ["2025-06-18", "2025-03-26", "2024-11-05"]
 const SERVER_NAME := "normandy-1944"
@@ -19,6 +22,8 @@ const ENDPOINT := "/mcp"
 ## Requests bigger than this, or slower than the timeout, are dropped.
 const MAX_REQUEST_BYTES := 1 << 20
 const TIMEOUT_MSEC := 10000
+## handle_http's status for a tool call that is still waiting; its second element is {"id", "wait"}.
+const PENDING := -1
 ## Requests answered per poll(), to keep the frame rate up when an agent sends a burst.
 const MAX_PER_POLL := 4
 
@@ -71,7 +76,9 @@ func poll() -> void:
 		var peer: StreamPeerTCP = client["peer"]
 		peer.poll()
 		var status := peer.get_status()
-		if status != StreamPeerTCP.STATUS_CONNECTED or Time.get_ticks_msec() - client["since"] > TIMEOUT_MSEC:
+		# A waiting tool keeps its connection; the tool itself gives up in time.
+		var timed_out: bool = Time.get_ticks_msec() - client["since"] > TIMEOUT_MSEC and not client.has("pending")
+		if status != StreamPeerTCP.STATUS_CONNECTED or timed_out:
 			peer.disconnect_from_host()
 			_clients.erase(client)
 			continue
@@ -81,6 +88,13 @@ func poll() -> void:
 		if client["done"]:
 			peer.disconnect_from_host()
 			_clients.erase(client)
+			continue
+		if client.has("pending"):
+			var pending: Dictionary = client["pending"]
+			var outcome: Variant = pending["wait"].call()
+			if outcome != null:
+				client.erase("pending")
+				_reply(client, 200, {"Content-Type": "application/json"}, JSON.stringify(_tool_reply(pending["id"], outcome)))
 			continue
 		var available := peer.get_available_bytes()
 		if available > 0:
@@ -97,6 +111,10 @@ func poll() -> void:
 			continue
 		answered += 1
 		var response := handle_http(request)
+		if response[0] == PENDING:
+			client["pending"] = response[1]
+			client["in"] = PackedByteArray()
+			continue
 		_reply(client, response[0], response[1], response[2])
 
 
@@ -167,11 +185,15 @@ func handle_http(request: Dictionary) -> Array:
 		var replies := []
 		for item: Variant in message:
 			var one: Variant = handle_rpc(item)
+			if one is Dictionary and one.has("wait"):
+				one = _tool_reply(one["id"], {"error": "Tools that wait can't be called in a batch"})
 			if one != null:
 				replies.append(one)
 		reply = replies if not replies.is_empty() else null
 	else:
 		reply = handle_rpc(message)
+		if reply is Dictionary and reply.has("wait"):
+			return [PENDING, reply, ""]
 	if reply == null:
 		return [202, {}, ""]
 	return [200, {"Content-Type": "application/json"}, JSON.stringify(reply)]
@@ -216,10 +238,16 @@ func handle_rpc(message: Variant) -> Variant:
 			if not known:
 				return _error(id, -32602, "Unknown tool: %s" % name)
 			var outcome: Dictionary = tools.call_tool(name, arguments)
-			if outcome.has("error"):
-				return _result(id, {"content": [{"type": "text", "text": str(outcome["error"])}], "isError": true})
-			return _result(id, {"content": [{"type": "text", "text": JSON.stringify(outcome["result"])}], "isError": false})
+			if outcome.has("wait"):
+				return {"id": id, "wait": outcome["wait"]}
+			return _tool_reply(id, outcome)
 	return _error(id, -32601, "Method not found: %s" % method)
+
+
+func _tool_reply(id: Variant, outcome: Dictionary) -> Dictionary:
+	if outcome.has("error"):
+		return _result(id, {"content": [{"type": "text", "text": str(outcome["error"])}], "isError": true})
+	return _result(id, {"content": [{"type": "text", "text": JSON.stringify(outcome["result"])}], "isError": false})
 
 
 func _authorized(request: Dictionary) -> bool:

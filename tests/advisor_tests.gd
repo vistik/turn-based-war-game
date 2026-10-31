@@ -194,6 +194,21 @@ func test_mcp_protocol() -> void:
 	check(not call["result"]["isError"], "get_state works")
 	check(JSON.parse_string(call["result"]["content"][0]["text"]) is Dictionary, "returns JSON text")
 	check_eq(server.handle_rpc({"jsonrpc": "2.0", "id": 4, "method": "nope"})["error"]["code"], -32601, "unknown method")
+	check(names.has("wait_for_turn"), "lists wait_for_turn")
+	# Waiting tools answer later: handle_http hands back a pending call, which answers at once here
+	# because it is already our turn.
+	var request := {"method": "POST", "path": "/mcp", "query": {}, "headers": {"authorization": "Bearer secret", "host": "127.0.0.1"},
+			"body": JSON.stringify({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "wait_for_turn", "arguments": {}}})}
+	var pending: Array = server.handle_http(request)
+	check_eq(pending[0], McpServer.PENDING, "wait_for_turn is answered later")
+	var waited: Dictionary = pending[1]["wait"].call()["result"]
+	check(waited["your_turn"], "and says it's our turn")
+	tools.note_events([{"type": "move", "unit": 0, "path": [Vector2i(2, 2), Vector2i(3, 2)]}, {"type": "move", "unit": 1, "path": [Vector2i(30, 30)]}])
+	check_eq(tools.take_seen().size(), 2, "reports our move and the enemy moving in sight")
+	check(tools.take_seen().is_empty(), "each report is given once")
+	var batch := {"method": "POST", "path": "/mcp", "query": {}, "headers": {"authorization": "Bearer secret", "host": "127.0.0.1"},
+			"body": JSON.stringify([{"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "wait_for_turn", "arguments": {}}}])}
+	check(server.handle_http(batch)[2].contains("can't be called in a batch"), "waiting tools refuse batches")
 
 
 func test_mcp_http_rules() -> void:
@@ -217,3 +232,153 @@ func test_mcp_http_rules() -> void:
 	var note := request.duplicate(true)
 	note["body"] = JSON.stringify({"jsonrpc": "2.0", "method": "notifications/initialized"})
 	check_eq(server.handle_http(note)[0], 202, "notifications accepted")
+
+
+# --- Faster agent turns ---
+
+## Stands in for the battle screen: carries out commands at once and tells the tools what happened.
+class FakeHost:
+	var battle: Battle
+	## Weak, so the host and the tools (which hold the host) don't keep each other alive.
+	var tools: WeakRef
+	var fast_calls: Array[bool] = []
+
+	func player_team() -> int:
+		return 0
+
+	func agent_plays() -> bool:
+		return true
+
+	func is_online() -> bool:
+		return false
+
+	func is_busy() -> bool:
+		return battle.current_team != 0
+
+	func view_busy() -> bool:
+		return false
+
+	func show_proposal(_suggestion: Dictionary) -> void:
+		pass
+
+	func apply_command(command: Dictionary) -> String:
+		var events := battle.execute(command)
+		if events.is_empty():
+			return "Nothing happened"
+		tools.get_ref().note_events(events)
+		return ""
+
+	func set_fast_playback(on: bool) -> void:
+		fast_calls.append(on)
+
+
+func make_hosted(specs: Array) -> Array:
+	var battle := make_battle(specs)
+	var host := FakeHost.new()
+	host.battle = battle
+	var tools := McpGameTools.new(battle, host)
+	host.tools = weakref(tools)
+	return [battle, tools, host]
+
+
+## Runs a waiting tool's answer to the end.
+func finish(outcome: Dictionary) -> Dictionary:
+	if not outcome.has("wait"):
+		return outcome
+	var answer: Variant = outcome["wait"].call()
+	var guard := 0
+	while answer == null and guard < 100:
+		answer = outcome["wait"].call()
+		guard += 1
+	return answer
+
+
+func test_state_has_no_map_unless_asked() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(2, 2)], ["Rifleman", 1, Vector2i(6, 2)]])
+	var tools := McpGameTools.new(battle)
+	tools.team = 0
+	var state := tools.get_state()
+	check(not state.has("map"), "no map by default")
+	check(tools.get_state({"map": true}).has("map"), "map when asked")
+	check(tools.get_state({"area": [0, 0, 5, 5]}).has("map"), "map for an area")
+	check_eq(state["threats"].size(), 1, "the enemy in the open threatens our rifleman")
+	check_eq(state["threats"][0]["seen_by"][0]["enemy"], 1, "names the enemy")
+	check(state["threats"][0]["seen_by"][0]["their_hit"] > 0, "with his odds")
+
+
+func test_unit_option_filters() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(2, 2)], ["Rifleman", 1, Vector2i(9, 2)]])
+	battle.map.set_edge(Vector2i(4, 4), Vector2i(5, 4), Cover.FULL, "hedge")
+	battle.objectives.append({"name": "Barn", "center": Vector2(4.5, 6.5), "radius": 1.5, "owner": -1})
+	var tools := McpGameTools.new(battle)
+	tools.team = 0
+	var options: Dictionary = tools.unit_options(0, true)["result"]
+	check_eq(options["moves"]["all_tiles"][0].size(), 4, "all_tiles carry the actions used")
+	check(options["moves"]["best_spots"].any(func(s: Dictionary) -> bool: return s.has("shots")), "spots list the shots from there")
+	var in_barn: Dictionary = tools.unit_options(0, false, {"objective": "barn"})["result"]["moves"]
+	check(not in_barn["matching_spots"].is_empty(), "finds tiles in the objective")
+	check(in_barn["matching_spots"].all(func(s: Dictionary) -> bool: return s["objective"] == "Barn"), "only tiles in the objective")
+	var covered: Array = tools.unit_options(0, false, {"covered_from": 1, "limit": 30})["result"]["moves"]["matching_spots"]
+	check(covered.any(func(s: Dictionary) -> bool: return s["tile"] == [4, 4]), "the hedge covers from the enemy")
+	check(covered.all(func(s: Dictionary) -> bool: return s["vs_enemies_in_sight"]["exposed"] == 0), "no exposed tiles")
+	var shooting: Array = tools.unit_options(0, false, {"shoot_target": 1})["result"]["moves"]["matching_spots"]
+	check(not shooting.is_empty(), "tiles to shoot from")
+	check(shooting.all(func(s: Dictionary) -> bool: return s["actions"] == 1 and s["shots"][0]["target"] == 1), "1-action moves with a shot at the target")
+	check(tools.unit_options(0, false, {"objective": "Nowhere"}).has("error"), "unknown objective")
+	check(tools.unit_options(0, false, {"shoot_target": 0}).has("error"), "the target must be an enemy")
+	check_eq(battle.get_unit(0).pos, Vector2i(2, 2), "the unit is put back")
+
+
+func test_execute_runs_a_list() -> void:
+	var hosted := make_hosted([["Rifleman", 0, Vector2i(2, 2)], ["Rifleman", 0, Vector2i(2, 5)], ["Rifleman", 1, Vector2i(14, 14)]])
+	var battle: Battle = hosted[0]
+	var tools: McpGameTools = hosted[1]
+	var host: FakeHost = hosted[2]
+	var answer: Dictionary = finish(tools.call_tool("execute_command", {"fast": true, "commands": [
+			{"cmd": "move", "unit": 0, "tile": [3, 2]}, {"cmd": "overwatch", "unit": 0}]}))["result"]
+	check_eq(answer["steps"].size(), 2, "both ran")
+	check(not answer.has("stopped"), "nothing stopped them")
+	check_eq(battle.get_unit(0).pos, Vector2i(3, 2), "first unit moved")
+	check(battle.get_unit(0).overwatch, "and is on overwatch")
+	check_eq(host.fast_calls.front(), true, "fast playback switched on")
+	check_eq(host.fast_calls.back(), false, "and off again")
+	# A command that isn't legal any more stops the list; the rest is reported, not run.
+	answer = finish(tools.call_tool("execute_command", {"commands": [
+			{"cmd": "move", "unit": 1, "tile": [3, 5]}, {"cmd": "shoot", "unit": 1, "target": 2}, {"cmd": "end_turn"}]}))["result"]
+	check_eq(answer["steps"].size(), 1, "stops at the illegal command")
+	check_eq(battle.get_unit(1).pos, Vector2i(3, 5), "after the legal move")
+	check(answer["stopped"].contains("not legal"), "says why: %s" % answer.get("stopped"))
+	check_eq(answer["not_done"].size(), 2, "lists what didn't run")
+	check_eq(battle.current_team, 0, "the turn wasn't ended")
+	check(tools.call_tool("execute_command", {"commands": [{"cmd": "fly", "unit": 0}]}).has("error"), "unknown commands are refused")
+	check(tools.call_tool("execute_command", {"commands": [{"unit": 0}]}).has("error"), "malformed commands are refused up front")
+
+
+func test_execute_stops_on_a_surprise() -> void:
+	var hosted := make_hosted([["Rifleman", 0, Vector2i(2, 2)], ["Rifleman", 0, Vector2i(2, 9)], ["Rifleman", 1, Vector2i(8, 2)]])
+	var battle: Battle = hosted[0]
+	var tools: McpGameTools = hosted[1]
+	battle.get_unit(2).overwatch = true
+	var answer: Dictionary = finish(tools.call_tool("execute_command", {"commands": [
+			{"cmd": "move", "unit": 0, "tile": [4, 2]}, {"cmd": "move", "unit": 1, "tile": [3, 9]}]}))["result"]
+	check_eq(answer["steps"].size(), 1, "stopped after the first move")
+	check(answer["steps"][0].has("surprises"), "the overwatch shot is a surprise")
+	check(answer["stopped"].begins_with("Stopped after a surprise"), "says so")
+	check_eq(battle.get_unit(1).pos, Vector2i(2, 9), "the second unit stayed put")
+
+
+func test_wait_for_turn_includes_state() -> void:
+	var hosted := make_hosted([["Rifleman", 0, Vector2i(2, 2)], ["Rifleman", 1, Vector2i(14, 14)]])
+	var tools: McpGameTools = hosted[1]
+	var answer: Dictionary = finish(tools.call_tool("wait_for_turn", {}))["result"]
+	check(answer["your_turn"], "our turn")
+	check(answer["state"]["your_units"].size() == 1 and not answer["state"].has("map"), "with the state, no map")
+	check(not finish(tools.call_tool("wait_for_turn", {"include_state": false}))["result"].has("state"), "unless asked not to")
+
+
+func test_instructions_explain_objectives() -> void:
+	var hosted := make_hosted([["Rifleman", 0, Vector2i(2, 2)], ["Rifleman", 1, Vector2i(14, 14)]])
+	var text: String = hosted[1].instructions()
+	check(text.contains("stays held after they leave"), "objectives stay held")
+	check(text.contains("NEXT turn"), "when mortar rounds land")
+	check(text.contains("commands list"), "mentions batching")

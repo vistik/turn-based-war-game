@@ -14,6 +14,8 @@ const BATTLE_SCENE := "res://scenes/battle.tscn"
 static var battle: Battle
 ## Per team: whether the AI plays it, and the AI's saved memory.
 static var ai_teams := [false, true]
+## The side an outside agent plays through the agent link (MCP), or -1. Set after start_battle().
+static var agent_team := -1
 static var ai_states := [{}, {}]
 static var battle_title := ""
 ## The running campaign, or null in skirmish.
@@ -37,6 +39,7 @@ static var save_dir := _save_dir_from_args()
 static func start_battle(p_battle: Battle, p_ai_teams: Array, title: String) -> void:
 	battle = p_battle
 	ai_teams = p_ai_teams.duplicate()
+	agent_team = -1
 	ai_states = [{}, {}]
 	battle_title = title
 	recording = null
@@ -116,7 +119,7 @@ static func save_game() -> void:
 		"campaign": campaign.to_dict() if campaign != null else {},
 		"war": war.to_dict() if war != null else {},
 		"battle": battle.to_dict() if running else {},
-		"ai_teams": ai_teams, "ai_states": ai_states, "title": battle_title,
+		"ai_teams": ai_teams, "agent_team": agent_team, "ai_states": ai_states, "title": battle_title,
 		"replay": recording.to_dict() if running and recording != null else {},
 	}
 	_write(slot, data)
@@ -140,6 +143,7 @@ static func load_game(slot: String) -> bool:
 	war = WarCampaign.from_dict(data["war"]) if not data.get("war", {}).is_empty() else null
 	battle = Battle.from_dict(data["battle"]) if not data["battle"].is_empty() else null
 	ai_teams = data["ai_teams"]
+	agent_team = data.get("agent_team", -1)
 	ai_states = data["ai_states"]
 	battle_title = data["title"]
 	recording = Replay.from_dict(data["replay"]) if battle != null and not data.get("replay", {}).is_empty() else null

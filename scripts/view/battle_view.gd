@@ -7,6 +7,9 @@ extends Node2D
 ## item, recorded once and faded or darkened through its modulate; soldiers and smoke redraw every frame.
 ## Props and soldiers are depth-sorted by z_index. The view itself draws markers and effects on top.
 
+## Every list of events as the screen starts playing it (orders from either side, and the battle's start).
+signal events_played(events: Array)
+
 const DrawLayer := preload("res://scripts/view/draw_layer.gd")
 
 ## The side panel's width (including its gap to the screen edge) and the height of the top bar.
@@ -141,6 +144,7 @@ var _log_toggle: Button
 ## The newest log line, shown in the log's header while the log is folded away.
 var _log_last: RichTextLabel
 var _help: PanelContainer
+var _top_bar: PanelContainer
 ## While watching a replay: its controls, which also choose the fog shown (see scripts/view/replay_controls.gd).
 var replay: ReplayControls
 
@@ -198,11 +202,16 @@ func _ready() -> void:
 	_refresh()
 	if not battle.started:
 		_run(battle.start())
-	elif controllers[0] == null and controllers[1] == null:
+	elif controllers[0] == null and controllers[1] == null and GameSession.agent_team == -1:
 		_show_overlay("handover", "%s's turn\n\nClick or press any key" % Battle.TEAM_NAMES[battle.current_team], TEAM_COLORS[battle.current_team])
 	else:
 		_turn_started = true
 		_run([])
+
+
+## Where the top bar ends on screen; it grows past TOP_BAR_HEIGHT when its text needs two lines.
+func top_bar_bottom() -> float:
+	return _top_bar.get_rect().end.y if _top_bar != null else TOP_BAR_HEIGHT
 
 
 func _focus_on_team(team: int) -> void:
@@ -357,6 +366,9 @@ func _pan_with_keys(delta: float) -> void:
 func _on_click(tile: Vector2i) -> void:
 	if not battle.map.in_bounds(tile):
 		return
+	if _agent_turn():
+		_flash("The agent is playing this side")
+		return
 	var u := battle.unit_at(tile)
 	var own := u != null and u.team == battle.current_team
 	var err := ""
@@ -426,6 +438,9 @@ func _on_action(action: String) -> void:
 			_show_settings()
 			return
 	if busy or _overlay_state != "" or battle.winner != -1 or not _is_human_turn():
+		return
+	if _agent_turn():
+		_flash("The agent is playing this side")
 		return
 	if action == "end":
 		if GameSettings.confirm_end_turn and _next_ready_unit(null) != null:
@@ -627,9 +642,16 @@ func _command(command: Dictionary) -> void:
 	_run(events)
 
 
+## True while an agent plays this turn over the agent link: the screen only watches.
+func _agent_turn() -> bool:
+	return replay == null and GameSession.agent_team == battle.current_team
+
+
 func _controller_name(team: int) -> String:
 	if replay != null:
 		return " (%s)" % replay.side_name(team)
+	if team == GameSession.agent_team:
+		return " (agent)"
 	if controllers[team] is RemotePlayer:
 		return " (opponent)"
 	return " (AI)" if controllers[team] != null else ""
@@ -654,10 +676,13 @@ func _on_turn_agreed(turn_index: int, checksum: String) -> void:
 func _view_team() -> int:
 	if replay != null:
 		return replay.view_team
-	var humans := [0, 1].filter(func(t: int) -> bool: return controllers[t] == null)
+	var humans := [0, 1].filter(func(t: int) -> bool: return controllers[t] == null and t != GameSession.agent_team)
 	if humans.size() == 2:
 		return battle.current_team
-	return humans[0] if humans.size() == 1 else -1
+	if humans.size() == 1:
+		return humans[0]
+	# Watching an agent play the AI: see what the agent sees.
+	return GameSession.agent_team
 
 
 # --- Camera ---
@@ -712,7 +737,7 @@ func _update_speed_button() -> void:
 
 ## Switches to the playback speed set for this team's turns: your own, or the AI's or online opponent's.
 func _apply_turn_speed(team: int) -> void:
-	_speed_index = GameSettings.speed_for(controllers[team] == null)
+	_speed_index = GameSettings.speed_for(controllers[team] == null and team != GameSession.agent_team)
 	_update_speed_button()
 
 
@@ -754,6 +779,7 @@ func _view_rect() -> Rect2:
 # --- Engine calls, AI turns and event playback ---
 
 func _run(events: Array) -> void:
+	events_played.emit(events)
 	busy = true
 	_reach = {}
 	_move_tiles = {}
@@ -934,7 +960,7 @@ func _play_event(e: Dictionary) -> void:
 			_log_line("[b][color=%s]Round %d: %s[/color][/b]" % [TEAM_COLORS[team].to_html(false), e["round"], who])
 			_turn_started = true
 			_apply_turn_speed(team)
-			if controllers[0] == null and controllers[1] == null:
+			if controllers[0] == null and controllers[1] == null and GameSession.agent_team == -1:
 				_show_overlay("handover", "%s's turn\n\nClick or press any key" % Battle.TEAM_NAMES[team], TEAM_COLORS[team])
 			else:
 				_show_banner("Turn: %s" % who, TEAM_COLORS[team])
@@ -1583,6 +1609,7 @@ func _build_ui() -> void:
 	bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	bar.offset_bottom = TOP_BAR_HEIGHT
 	layer.add_child(bar)
+	_top_bar = bar
 	var bar_row := HBoxContainer.new()
 	bar_row.add_theme_constant_override("separation", 12)
 	bar.add_child(bar_row)

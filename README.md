@@ -53,7 +53,10 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
     for the sniper, and so on);
   - a ring underneath in the side's colour shows which side it's on;
   - each role carries its own gear: officer's cap or striped helmet, MG ammo belt, sniper's helmet scrim,
-    mortar baseplate, rocket bag.
+    mortar baseplate, rocket bag;
+  - the sides wear their own uniforms: Americans in khaki field jackets, canvas leggings and the round M1
+    helmet, Germans in field grey with jackboots and the flared Stahlhelm. Soldiers bend at the knee to crouch
+    and hold their rifles at the ready.
 
 **Ways to play**
 - **Campaign**: five missions with one persistent squad. Soldiers gain XP and rank, get wounded and die for
@@ -67,7 +70,8 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
     forward) or defensive (further back, behind sandbags, crouched).
   - Win a map to take its points; a draw splits them. Most points wins.
 - **Skirmish** on the hand-made Normandy village, a random map (standard 44x44, large 64x64, huge 84x84 with
-  bigger forces), or your own scenarios. Play vs AI, hotseat, or watch AI vs AI. On the village and random
+  bigger forces), or your own scenarios. Play vs AI, hotseat, watch AI vs AI, or let an AI agent play a side
+  (Agent vs AI, Me vs agent). On the village and random
   maps each side picks a deployment, as in the two-player campaign: the usual spawns, balanced or massed on
   the left or right flank, offensive (further forward) or defensive (further back, behind sandbags,
   crouched), or random. Online, the host picks both.
@@ -90,6 +94,10 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 - **Suggest a move** (H): the same AI advises you, showing the move and why, and you make it yourself.
 - **Agent link**: an opt-in MCP server on your own computer lets an agent like Claude read your side's view,
   suggest moves on screen and, only if you allow it, make them. Never in online games.
+- **Agent plays**: in the "Agent vs AI" and "Me vs agent" skirmishes an agent plays a whole side through the
+  link by itself: it waits for its turn, makes its moves and hears what happened, until the battle ends. It can
+  give several orders in one call (stopping early if it's surprised), find tiles in an objective, in cover or with
+  a shot, and skip the playback animation.
 
 **Other**
 - **Saves**: a campaign slot and a skirmish slot with autosave, "Save & quit", and exact replay (dice and AI
@@ -157,6 +165,8 @@ UDP port 24944 on the host's router, or both use a VPN such as Tailscale.
 Godot --headless --path . -s tests/run_tests.gd         # engine, AI, saves, replays, scenarios, settings
 Godot --headless --path . -s tests/advisor_tests.gd     # move suggestions and the MCP tools
 Godot --headless --path . -s tests/terrain_tests.gd     # fuel drums, oil tanks, fire, mines, wheat and wire
+Godot --headless --path . -s tests/agent_play.gd        # an agent plays a whole battle over the agent link (HTTP)
+Godot --path . -s tools/soldier_preview.gd -- out.png 3 detail   # soldier art sheet (needs a window; add "german", "lying")
 GODOT=Godot sh tests/net_resume.sh 26000 44             # two copies online: save, quit, resume, desync checks
 GODOT=Godot sh tests/net_auth.sh 26100                  # passwords, wrong passwords, joining from a punched port
 

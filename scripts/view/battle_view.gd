@@ -28,12 +28,14 @@ const KEY_ACTIONS := {
 	KEY_C: "crouch", KEY_Z: "prone", KEY_X: "aimed", KEY_B: "suppress", KEY_G: "clear_mine",
 	KEY_TAB: "next", KEY_ENTER: "end", KEY_KP_ENTER: "end",
 }
+## The action bar, in order: [action, key, name]. Each gets an icon (ActionIcons) of the same name.
 const ACTION_BUTTONS := [
-	["shoot", "1 Shoot"], ["overwatch", "2 Overwatch"], ["hunker", "3 Hunker"], ["reload", "4 Reload"],
-	["grenade", "5 Grenade"], ["smoke", "6 Smoke"], ["set_up", "7 Set up MG"], ["rally", "8 Rally"],
-	["medkit", "9 Medkit"], ["mortar", "0 Mortar"], ["pivot", "T Turn tank"],
-	["crouch", "C Crouch"], ["prone", "Z Prone"], ["aimed", "X Aimed shot"], ["suppress", "B Suppress"], ["clear_mine", "G Clear mine"],
-	["next", "Tab Next"], ["end", "Enter End turn"],
+	["shoot", "1", "Shoot"], ["aimed", "X", "Aimed shot: both actions, +15 aim"], ["suppress", "B", "Suppressive fire"],
+	["overwatch", "2", "Overwatch"], ["hunker", "3", "Hunker down"], ["reload", "4", "Reload"],
+	["grenade", "5", "Grenade"], ["smoke", "6", "Smoke grenade"], ["set_up", "7", "Set up the MG"], ["rally", "8", "Rally"],
+	["medkit", "9", "Medkit"], ["mortar", "0", "Mortar"], ["pivot", "T", "Turn the tank"],
+	["crouch", "C", "Crouch"], ["prone", "Z", "Go prone"], ["clear_mine", "G", "Clear a mine"],
+	["next", "Tab", "Next soldier"], ["end", "Enter", "End turn"],
 ]
 const SHOT_LABELS := {"miss": "MISS", "graze": "GRAZE", "hit": "HIT", "crit": "CRITICAL", "suppressing": "SUPPRESSING FIRE"}
 const STANCE_COLOR := "8fd3ff"
@@ -145,6 +147,8 @@ var _log_toggle: Button
 var _log_last: RichTextLabel
 var _help: PanelContainer
 var _top_bar: PanelContainer
+var _action_bar: PanelContainer
+var _action_caption: Label
 ## While watching a replay: its controls, which also choose the fog shown (see scripts/view/replay_controls.gd).
 var replay: ReplayControls
 
@@ -1361,15 +1365,26 @@ func _update_panel() -> void:
 		_buttons[action].disabled = s == null or battle.can_act(s) != ""
 	if s != null and s.role == "Mortar":
 		_buttons["mortar"].disabled = s.actions < Unit.ACTIONS_PER_TURN
-		_buttons["mortar"].text = "0 Mortar: %s" % ("smoke" if mode == Mode.MORTAR and _mortar_kind == "smoke" else "HE")
+		var smoke_round := mode == Mode.MORTAR and _mortar_kind == "smoke"
+		_buttons["mortar"].set_look("mortar", "Mortar: %s (press again to switch)" % ("smoke" if smoke_round else "high explosive"), "SMK" if smoke_round else "HE")
 	for action in ["crouch", "prone"]:
 		_buttons[action].disabled = s == null or s.vehicle or battle.can_change_stance(s, _stance_for(action)) != ""
-	_buttons["crouch"].text = "C Stand up" if s != null and s.stance == Unit.Stance.CROUCH else "C Crouch"
-	_buttons["prone"].text = "Z Stand up" if s != null and s.stance == Unit.Stance.PRONE else "Z Prone"
+	var crouched := s != null and s.stance == Unit.Stance.CROUCH
+	var prone := s != null and s.stance == Unit.Stance.PRONE
+	_buttons["crouch"].set_look("stand" if crouched else "crouch", "Stand up" if crouched else "Crouch: harder to hit, moves slower")
+	_buttons["prone"].set_look("stand" if prone else "prone", "Stand up" if prone else "Go prone: very hard to hit at range, crawls")
+	_buttons["grenade"].set_look("grenade", "Grenade", str(s.grenades) if s != null else "")
+	_buttons["smoke"].set_look("smoke", "Smoke grenade", str(s.smoke_grenades) if s != null else "")
+	_buttons["medkit"].set_look("medkit", "Medkit", str(s.medkits) if s != null else "")
+	_buttons["reload"].set_look("reload", "Reload", "%d/%d" % [s.ammo, s.weapon.clip_size] if s != null else "")
+	for button: Node in _action_bar.find_children("*", "ActionButton", true, false):
+		button.queue_redraw()
 	_buttons["aimed"].disabled = s == null or battle.can_fire(s) != "" or s.actions < Unit.ACTIONS_PER_TURN
 	_buttons["suppress"].disabled = s == null or battle.can_fire(s) != "" or s.ammo < CombatRules.SUPPRESSIVE_FIRE_AMMO
 	_buttons["next"].disabled = s == null or _next_ready_unit(s) == null
 	_buttons["end"].disabled = battle.winner != -1 or not _is_human_turn()
+	# Only there while someone at this screen can give orders.
+	_action_bar.visible = replay == null and battle.winner == -1 and _is_human_turn() and not _agent_turn()
 
 
 func _describe_unit(u: Unit) -> String:
@@ -1663,21 +1678,7 @@ func _build_ui() -> void:
 	_panel.add_child(box)
 	_unit_info = _rich_label(58)
 	box.add_child(_unit_info)
-	var actions := GridContainer.new()
-	actions.columns = 2
-	actions.add_theme_constant_override("h_separation", 4)
-	actions.add_theme_constant_override("v_separation", 4)
-	box.add_child(actions)
-	var turn_row := HBoxContainer.new()
-	turn_row.add_theme_constant_override("separation", 4)
-	box.add_child(turn_row)
-	for spec: Array in ACTION_BUTTONS:
-		_add_button(turn_row if spec[0] in ["next", "end"] else actions, spec[0], spec[1])
-	for button: Button in actions.get_children() + turn_row.get_children():
-		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.clip_text = true
-	_buttons["end"].theme_type_variation = "PrimaryButton"
-	_buttons["end"].add_theme_font_size_override("font_size", 15)
+	_build_action_bar(layer)
 
 	box.add_child(HSeparator.new())
 	_target_info = _rich_label(36)
@@ -1757,6 +1758,47 @@ func _build_ui() -> void:
 	_overlay.add_child(_overlay_label)
 
 
+## The action bar in the bottom right: a caption naming the hovered action, the soldier's actions as icons,
+## and next soldier / end turn (the advisor adds its Suggest button there too).
+func _build_action_bar(layer: CanvasLayer) -> void:
+	var bar := PanelContainer.new()
+	bar.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	bar.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	bar.offset_right = -8
+	bar.offset_bottom = -8
+	layer.add_child(bar)
+	_action_bar = bar
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 4)
+	bar.add_child(column)
+	_action_caption = Label.new()
+	_action_caption.theme_type_variation = "HelpLabel"
+	_action_caption.add_theme_font_size_override("font_size", 13)
+	_action_caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	column.add_child(_action_caption)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	row.alignment = BoxContainer.ALIGNMENT_END
+	column.add_child(row)
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 4)
+	row.add_child(actions)
+	row.add_child(VSeparator.new())
+	var turn := HBoxContainer.new()
+	turn.add_theme_constant_override("separation", 4)
+	row.add_child(turn)
+	for spec: Array in ACTION_BUTTONS:
+		var button := ActionButton.new(spec[0], spec[1], spec[2])
+		button.pressed.connect(_on_action.bind(spec[0]))
+		button.mouse_entered.connect(func() -> void: _action_caption.text = button.describe())
+		button.mouse_exited.connect(func() -> void: _action_caption.text = "")
+		(turn if spec[0] in ["next", "end"] else actions).add_child(button)
+		_buttons[spec[0]] = button
+	_buttons["end"].theme_type_variation = "PrimaryButton"
+	_buttons["end"].primary = true
+
+
 ## Folds the log away (the panel then only takes the height it needs) or opens it down to the bottom of the screen.
 func _set_log_open(open: bool) -> void:
 	_log_toggle.set_pressed_no_signal(open)
@@ -1770,7 +1812,8 @@ func _set_log_open(open: bool) -> void:
 	_panel.offset_left = -PANEL_WIDTH
 	_panel.offset_right = -8
 	_panel.offset_top = TOP_BAR_HEIGHT + 8
-	_panel.offset_bottom = -8 if open else TOP_BAR_HEIGHT + 8
+	# An open log stops short of the action bar.
+	_panel.offset_bottom = -16 - _action_bar.size.y if open else TOP_BAR_HEIGHT + 8
 	_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	_panel.grow_vertical = Control.GROW_DIRECTION_END
 

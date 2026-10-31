@@ -117,6 +117,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 | Left click | Select a soldier, move, pick a target |
 | Right click / Esc | Cancel |
 | 1 – 0 | Shoot, overwatch, hunker, reload, grenade, smoke, set up MG, rally, medkit, mortar |
+| Action bar | Bottom right: every action the soldier has as an icon with its key in the corner and what's left (grenades, smoke, medkits, ammo); hover for its name |
 | T | Turn a tank on the spot |
 | C / Z | Crouch / go prone (press again to stand up) |
 | X / B | Aimed shot / suppressive fire |

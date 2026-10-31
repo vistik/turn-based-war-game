@@ -277,8 +277,10 @@ func _on_act_toggled(on: bool) -> void:
 func _build_ui() -> void:
 	# A button among the battle panel's actions, and the link switch beside Save & quit.
 	var actions: Control = view._buttons["next"].get_parent()
-	_suggest_button = _button(actions, "H Suggest", _on_suggest.bind(false))
-	_suggest_button.tooltip_text = "The AI's best move for your side (Shift+H: for the selected soldier). You still make the move."
+	_suggest_button = ActionButton.new("suggest", "H", "Suggest a move (Shift+H: this soldier); you still make it")
+	_suggest_button.pressed.connect(_on_suggest.bind(false))
+	actions.add_child(_suggest_button)
+	actions.move_child(_suggest_button, 0)
 	var view_row: Control = view._buttons["quit"].get_parent()
 	_link_button = _button(view_row, "Agent link", _toggle_link)
 	_link_button.tooltip_text = "Let an AI agent (Claude Code, Claude Desktop...) see your side of the battle and suggest moves, over MCP on this computer only."

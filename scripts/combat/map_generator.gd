@@ -142,6 +142,28 @@ static func _generate(seed: int, size: Vector2i) -> Dictionary:
 		var p := _open_tile(b, rng, reserved, mid)
 		b.object(p, Cover.HALF, "sandbags" if rng.randf() < 0.5 else "crate")
 
+	# Hazards: fuel drums and (on bigger maps) an oil tank that explode, a hidden minefield or two,
+	# and barbed wire across the open ground.
+	for i in maxi(1, int(rng.randi_range(1, 3) * area_scale)):
+		b.object(_open_tile(b, rng, reserved, mid), Cover.HALF, "fuel")
+	if w >= 56:
+		b.object(_open_tile(b, rng, reserved, mid), Cover.FULL, "oil_tank")
+	for i in 1 + int(w >= 56):
+		var at := _open_tile(b, rng, reserved, mid)
+		for j in rng.randi_range(3, 5):
+			var p := at + Vector2i(rng.randi_range(-1, 1), rng.randi_range(-1, 1))
+			if p.x >= 5 and p.x < mid - 2 and b.map.is_passable(p) and b.map.get_terrain(p) != TacticalMap.Terrain.ROAD:
+				b.mine(p)
+	for i in 1 + int(w >= 56):
+		var at := _open_tile(b, rng, reserved, mid)
+		var along := Vector2i(0, 1) if rng.randf() < 0.5 else Vector2i(1, 0)
+		for j in rng.randi_range(3, 5):
+			var p := at + along * j
+			if p.x >= 5 and p.x < mid - 2 and p.y > 0 and p.y < h - 1 and not reserved.has(p) and b.map.is_passable(p) \
+					and b.map.get_terrain(p) != TacticalMap.Terrain.ROAD:
+				b.terrain(Rect2i(p, Vector2i.ONE), TacticalMap.Terrain.WIRE)
+				reserved[p] = true
+
 	var spawns: Array[Vector2i] = []
 	var center := road + 1
 	for offset in [0, -2, 2, -4, 4, -6, 6, -1, 1, -3, 3, 5]:

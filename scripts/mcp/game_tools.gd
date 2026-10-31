@@ -14,10 +14,11 @@ extends RefCounted
 
 const MAP_MARGIN := 6
 const COVER_SPOTS := 8
-const TERRAIN_GLYPHS := [".", ",", ";", "_", "=", "\"", "o"]
+const TERRAIN_GLYPHS := [".", ",", ";", "_", "=", "\"", "o", "~", "x"]
 const LEGEND := {
-	"tiles": ". grass  , rough ground  ; rubble  _ indoor floor  = road  \" wheat (hides you beyond 4 tiles)  o shell crater (half cover all round)",
-	"objects": "T tree (full cover)  # rock or other full cover  W burning wreck (full cover)  + crate/sandbags/hay (half cover). Objects block movement",
+	"tiles": ". grass  , rough ground  ; rubble  _ indoor floor  = road  \" wheat (hides you beyond 4 tiles; trampled when walked through)  ~ trampled wheat  x barbed wire (slow on foot)  o shell crater (half cover all round)",
+	"objects": "T tree (full cover)  # rock or other full cover  W burning wreck (full cover)  + crate/sandbags/hay (half cover)  F fuel drums (half cover, explode)  O oil tank (full cover, big explosion). Objects block movement. Shoot drums/tanks with shoot_object",
+	"hazards": "^ fire (impassable, burns whoever stands in it)  M a mine your side has spotted (clear it with clear_mine from next to it). Unspotted mines are hidden",
 	"units": "A-Z your units, a-z enemies in sight (see the unit lists for which is which), ? where an enemy was last seen",
 	"smoke": "* smoke (blocks sight)",
 	"edges": "Each tile is two characters: the tile, then its east edge. Between tile rows, a line shows each tile's south edge. | or - wall/hedge (full cover, blocks sight), ! or : fence/low wall/window (half cover)",
@@ -26,6 +27,7 @@ const COMMAND_HELP := "Commands: {\"cmd\": \"move\", \"unit\": id, \"tile\": [x,
 		+ "{\"cmd\": \"overwatch\"|\"hunker\"|\"reload\"|\"set_up\"|\"rally\", \"unit\": id} | {\"cmd\": \"grenade\"|\"smoke\", \"unit\": id, \"tile\": [x, y]} | " \
 		+ "{\"cmd\": \"mortar\", \"unit\": id, \"tile\": [x, y], \"kind\": \"he\"|\"smoke\"} | {\"cmd\": \"medkit\", \"unit\": id, \"target\": ally id} | " \
 		+ "{\"cmd\": \"aimed_shot\"|\"suppress\", \"unit\": id, \"target\": enemy id} | {\"cmd\": \"stance\", \"unit\": id, \"stance\": 0 stand, 1 crouch, 2 prone} | " \
+		+ "{\"cmd\": \"shoot_object\"|\"clear_mine\", \"unit\": id, \"tile\": [x, y]} | " \
 		+ "{\"cmd\": \"pivot\", \"unit\": tank id, \"tile\": heading such as [1, 0] or [1, -1]} | {\"cmd\": \"end_turn\"}"
 
 var battle: Battle
@@ -66,7 +68,7 @@ func tool_list() -> Array:
 	var command_arg := {
 		"type": "object", "description": COMMAND_HELP,
 		"properties": {
-			"cmd": {"type": "string", "enum": ["move", "shoot", "aimed_shot", "suppress", "stance", "overwatch", "hunker", "reload", "set_up", "rally", "grenade", "smoke", "mortar", "medkit", "pivot", "end_turn"]},
+			"cmd": {"type": "string", "enum": ["move", "shoot", "aimed_shot", "suppress", "stance", "shoot_object", "clear_mine", "overwatch", "hunker", "reload", "set_up", "rally", "grenade", "smoke", "mortar", "medkit", "pivot", "end_turn"]},
 			"unit": {"type": "integer"}, "target": {"type": "integer"}, "tile": tile_arg, "kind": {"type": "string", "enum": ["he", "smoke"]},
 			"stance": {"type": "integer", "enum": [0, 1, 2], "description": "0 stand, 1 crouch, 2 prone"},
 		},
@@ -267,6 +269,12 @@ func _glyph(p: Vector2i, glyphs: Dictionary, last_seen: Dictionary) -> String:
 	if last_seen.has(p):
 		return "?"
 	var object := map.get_object(p)
+	if map.has_fire(p):
+		return "^"
+	if map.has_mine(p) and battle.mines_known_to(player_team()).has(p):
+		return "M"
+	if map.is_explosive(p):
+		return "O" if map.get_object_kind(p) == "oil_tank" else "F"
 	if object == Cover.FULL:
 		var kind := map.get_object_kind(p)
 		return "T" if kind == "tree" else ("W" if kind == "wreck" else "#")
@@ -529,7 +537,7 @@ func validate(command: Dictionary) -> String:
 		return "No such unit on your side"
 	var tile: Vector2i = command.get("tile", Vector2i(-1, -1))
 	var target := battle.get_unit(command.get("target", -1))
-	if cmd in ["move", "grenade", "smoke", "mortar"] and not command.has("tile"):
+	if cmd in ["move", "grenade", "smoke", "mortar", "shoot_object", "clear_mine"] and not command.has("tile"):
 		return "%s needs a tile" % cmd
 	match cmd:
 		"move":
@@ -562,6 +570,10 @@ func validate(command: Dictionary) -> String:
 			return battle.can_use_medkit(u, target)
 		"pivot":
 			return battle.can_pivot(u, tile) if command.has("tile") else "pivot needs a heading, e.g. [1, 0]"
+		"shoot_object":
+			return battle.can_shoot_object(u, tile)
+		"clear_mine":
+			return battle.can_clear_mine(u, tile)
 	return "Unknown command: %s" % cmd
 
 

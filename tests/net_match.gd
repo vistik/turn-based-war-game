@@ -10,6 +10,9 @@ extends SceneTree
 ##   resume          instead of a new game, the host offers its saved online game and the joiner adopts it.
 ##   --save-dir=DIR  where this copy keeps its saves (read by GameSession), so two copies don't share one.
 ##                   Without it the saves go to a throwaway folder, never the player's own.
+##   --password=P    the game's password (default: none; both sides must use the same one).
+##   refused         the joiner expects to be turned away, and prints why ("REFUSED: ...").
+##   --local-port=N  the joiner sends from port N, and the host lets 127.0.0.1:N in (hole punching).
 
 var _done := false
 
@@ -28,6 +31,14 @@ func _run() -> void:
 	if GameSession.save_dir == "user://":
 		GameSession.save_dir = OS.get_temp_dir().path_join("normandy-net-match-%d" % OS.get_process_id())
 	var net: Node = root.get_node("Net")
+	var local_port := 0
+	for arg: String in OS.get_cmdline_user_args():
+		if arg.begins_with("--password="):
+			net.password = arg.trim_prefix("--password=")
+		elif arg.begins_with("--local-port="):
+			local_port = arg.trim_prefix("--local-port=").to_int()
+	if args.has("refused"):
+		net.connection_failed.connect(func() -> void: _finish("REFUSED: " + net.last_error))
 	net.desynced.connect(func(reason: String) -> void: _finish("DESYNC DETECTED: " + reason))
 	net.disconnected.connect(func() -> void: _finish("DISCONNECTED"))
 	net.turn_agreed.connect(func(turn_index: int, checksum: String) -> void: GameSession.on_turn_agreed(turn_index, checksum, net.local_team))
@@ -38,12 +49,14 @@ func _run() -> void:
 		var setup := {}
 		if hosting:
 			net.host(port)
+			if local_port != 0:
+				net.let_in("127.0.0.1:%d" % local_port)
 			await net.peer_joined
 			var size := int(args[2]) if args.size() > 2 and args[2].is_valid_int() else 0
 			setup = {"map": "village" if size == 0 else "random", "size": size, "seed": 4711, "game_id": GameSession.new_game_id()}
 			net.send_setup(setup)
 		else:
-			net.join("127.0.0.1", port)
+			net.join("127.0.0.1", port, local_port)
 			setup = await net.setup_received
 		var built := GameSession.build_skirmish(setup)
 		GameSession.start_online(built[0], built[1], net.local_team, setup["game_id"], "test", hosting)

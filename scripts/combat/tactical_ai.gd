@@ -45,6 +45,10 @@ const MORTAR_COST := 10.0
 ## Enemies may move before a mortar shell lands, so only part of its value counts.
 const MORTAR_CERTAINTY := 0.5
 const OVERWATCH_VALUE := 10.0
+## Score lost for a round spent on fuel drums or an oil tank instead of a soldier.
+const OBJECT_SHOT_COST := 6.0
+## Standing next to something that can blow up, while enemies are about.
+const EXPLOSIVE_NEARBY_PENALTY := 8.0
 const RELOAD_EMPTY_VALUE := 30.0
 const MEDKIT_VALUE_PER_HP := 8.0
 const RALLY_VALUE := 0.4
@@ -163,6 +167,14 @@ func _best_plan(u: Unit, seen: Array[Unit]) -> Dictionary:
 					plans.append(_plan(u, "aimed_shot", stay + _shot_value(u, here, e, true), e))
 				if battle.can_suppress(u, e) == "":
 					plans.append(_plan(u, "suppress", stay + _suppress_value(u, e, seen), e))
+		for tile in _explosives_near(seen):
+			if battle.can_shoot_object(u, tile) == "":
+				var kind := battle.map.get_object_kind(tile)
+				var spec: Dictionary = CombatRules.EXPLOSIVES[kind]
+				var chance := CombatRules.object_odds(u, here, tile, kind) / 100.0
+				var value := _blast_value(tile, spec["radius"], spec["damage_min"], spec["damage_max"], 0, seen)
+				if value > 0.0:
+					plans.append(_plan(u, "shoot_object", stay + value * chance - OBJECT_SHOT_COST, null, tile))
 		if not u.is_pinned():
 			plans.append(_plan(u, "overwatch", stay + _overwatch_value(u, here, seen)))
 	if battle.can_set_up(u) == "":
@@ -294,7 +306,7 @@ func _command(plan: Dictionary) -> Dictionary:
 	var command := {"cmd": plan["kind"], "unit": plan["unit"].id}
 	if plan["target"] != null:
 		command["target"] = plan["target"].id
-	if plan["kind"] in ["move", "pivot", "grenade", "mortar"]:
+	if plan["kind"] in ["move", "pivot", "grenade", "mortar", "shoot_object"]:
 		command["tile"] = plan["tile"]
 	if plan["kind"] == "stance":
 		command["stance"] = plan["stance"]
@@ -352,7 +364,25 @@ func _position_score(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 	for ally in battle.alive_units(team):
 		if ally != u and Vector2(ally.pos).distance_to(Vector2(tile)) <= CombatRules.GRENADE_RADIUS:
 			score -= CROWDING_PENALTY
+	if not seen.is_empty():
+		for d: Vector2i in TacticalMap.DIRS8:
+			if battle.map.is_explosive(tile + d):
+				score -= EXPLOSIVE_NEARBY_PENALTY
+				break
 	return score
+
+
+## Fuel drums and oil tanks close enough to an enemy we can see for their blast to reach him.
+func _explosives_near(seen: Array[Unit]) -> Array[Vector2i]:
+	var result: Array[Vector2i] = []
+	for e in seen:
+		for y in range(e.pos.y - 3, e.pos.y + 4):
+			for x in range(e.pos.x - 3, e.pos.x + 4):
+				var p := Vector2i(x, y)
+				if battle.map.is_explosive(p) and not result.has(p) \
+						and Vector2(p).distance_to(Vector2(e.pos)) <= CombatRules.EXPLOSIVES[battle.map.get_object_kind(p)]["radius"]:
+					result.append(p)
+	return result
 
 
 ## [expected incoming damage x 10, how much of it hunkering down would prevent] for standing on a tile.
@@ -391,6 +421,12 @@ func _followup_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 	for e in seen:
 		if _can_see(tile, e.pos, u.sight):
 			best = maxf(best, _shot_value(u, tile, e))
+	for p in _explosives_near(seen):
+		if _can_see(tile, p, u.sight):
+			var kind := battle.map.get_object_kind(p)
+			var spec: Dictionary = CombatRules.EXPLOSIVES[kind]
+			var value := _blast_value(p, spec["radius"], spec["damage_min"], spec["damage_max"], 0, seen)
+			best = maxf(best, value * CombatRules.object_odds(u, tile, p, kind) / 100.0 - OBJECT_SHOT_COST)
 	return best
 
 
@@ -524,6 +560,15 @@ func _blast_value(tile: Vector2i, radius: float, damage_min: int, damage_max: in
 				if battle.map.has_cover(victim.pos):
 					value += 6.0
 		value += -victim_value * 2.0 if victim.team == team else victim_value
+	# Fuel drums and oil tanks in the blast go up too (counted one level deep).
+	if require_hit:
+		for p in battle.map.tiles_in_radius(tile, radius):
+			if battle.map.is_explosive(p) and p != tile:
+				var spec: Dictionary = CombatRules.EXPLOSIVES[battle.map.get_object_kind(p)]
+				var chain := _blast_value(p, spec["radius"], spec["damage_min"], spec["damage_max"], 0, seen, false)
+				value += chain
+				if chain > 0.0:
+					hits += 1
 	return value if hits > 0 or not require_hit else 0.0
 
 

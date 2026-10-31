@@ -26,7 +26,8 @@ const NEUTRAL := Color("e8e2cf")
 const MUTED := Color(1, 1, 1, 0.6)
 const BAD := Color("ff7a6a")
 const GOOD := Color("8fe08a")
-const OBJECT_KINDS := ["tree", "rock", "sandbags", "crate", "hay", "pew"]
+## "mine" isn't an object: it buries a mine (hidden from both sides in play) instead.
+const OBJECT_KINDS := ["tree", "rock", "sandbags", "crate", "hay", "pew", "fuel", "oil_tank", "mine"]
 const EDGE_KINDS := ["hedge", "wall", "window", "stone", "fence"]
 const BRUSHES := [1, 2, 3, 5, 9]
 const NEW_SIZES := [24, 32, 44, 48, 64, 84]
@@ -292,6 +293,9 @@ func _paint_overlay(c: CanvasItem) -> void:
 	var h := _s.map.height
 	var border := PackedVector2Array([_proj.project(Vector2(0, 0)), _proj.project(Vector2(w, 0)), _proj.project(Vector2(w, h)), _proj.project(Vector2(0, h)), _proj.project(Vector2(0, 0))])
 	c.draw_polyline(border, Color(1, 1, 1, 0.5), 2.0)
+	# The editor shows every mine; in play each side only sees the ones it has spotted.
+	for p: Vector2i in _s.map.get_mines():
+		TerrainPainter.draw_mine(c, _proj, p)
 	if _s.mirrored:
 		for y in h:
 			if y % 2 == 0:
@@ -573,6 +577,9 @@ func _apply_stroke() -> void:
 			for q in _with_mirror(_hover):
 				if removing:
 					_s.map.set_object(q, Cover.NONE)
+					_s.map.set_mine(q, false)
+				elif _object_kind == "mine":
+					_s.map.set_mine(q, _s.map.is_passable(q))
 				elif _unit_index_at(q) == -1:
 					_s.map.set_object(q, Scenario.OBJECT_COVER[_object_kind], _object_kind)
 				_touch(q)
@@ -598,6 +605,7 @@ func _apply_stroke() -> void:
 
 func _erase(p: Vector2i) -> void:
 	_s.map.set_object(p, Cover.NONE)
+	_s.map.set_mine(p, false)
 	for dir: Vector2i in TacticalMap.DIRS4:
 		if _s.map.in_bounds(p + dir):
 			_s.map.set_edge(p, p + dir, Cover.NONE)
@@ -960,7 +968,7 @@ func _show_tool_options() -> void:
 			_choice(_options, "Ground", Array(TacticalMap.TERRAIN_NAMES), _terrain, func(i: int) -> void: _terrain = i)
 			_brush_choice()
 		Tool.OBJECT:
-			_choice(_options, "Object", OBJECT_KINDS.map(func(k: String) -> String: return "%s (%s cover)" % [k, "full" if Scenario.OBJECT_COVER[k] == Cover.FULL else "half"]),
+			_choice(_options, "Object", OBJECT_KINDS.map(func(k: String) -> String: return "mine (buried, hidden)" if k == "mine" else "%s (%s cover)" % [k, "full" if Scenario.OBJECT_COVER[k] == Cover.FULL else "half"]),
 					OBJECT_KINDS.find(_object_kind), func(i: int) -> void: _object_kind = OBJECT_KINDS[i])
 		Tool.EDGE:
 			_choice(_options, "Wall", EDGE_KINDS.map(func(k: String) -> String: return "%s (%s cover)" % [k, "full" if Scenario.EDGE_COVER[k] == Cover.FULL else "half"]),
@@ -1188,6 +1196,7 @@ func _play(ai_teams: Array) -> void:
 	_stop_sim()
 	var battle := _s.build_battle(randi() % 1000000000 + 1)
 	GameSession.campaign = null
+	GameSession.war = null
 	GameSession.start_battle(battle, ai_teams, _s.title)
 	get_tree().change_scene_to_file(GameSession.BATTLE_SCENE)
 

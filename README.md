@@ -30,15 +30,45 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 - Aimed shots and suppressive fire. Grenades scatter, and missed rockets, tank shells and MG bursts can hit
   someone else, friends included. The odds panel tells you who is at risk.
 - Objectives (church, crossroads, farm) score victory points every round. Reinforcement waves arrive mid-battle.
+- Terrain hazards:
+  - **Fuel drums and oil tanks:** they explode when shot, caught in a blast or run over by a tank, set off
+    others nearby, and leave the ground burning. Nobody can enter fire, and anyone in it is burnt at the
+    start of their turn.
+  - **Mines:** hidden. Soldiers may spot them as they walk past (tank crews never do), clear spotted ones
+    from next to them, and blasts set them off.
+  - **Wheat:** trampled flat when soldiers walk through it (crawling leaves it standing), so it stops hiding
+    anyone.
+  - **Barbed wire:** slow going on foot; tanks and explosions flatten it.
+- Units are easy to tell apart:
+  - a badge over each one shows its role as an icon (star for the officer, red cross for the medic, crosshair
+    for the sniper, and so on);
+  - a ring underneath in the side's colour shows which side it's on;
+  - each role carries its own gear: officer's cap or striped helmet, MG ammo belt, sniper's helmet scrim,
+    mortar baseplate, rocket bag.
 
 **Ways to play**
 - **Campaign**: five missions with one persistent squad. Soldiers gain XP and rank, get wounded and die for
   good. Supplies buy replacements.
+- **Two-player campaign** (hotseat, or against the AI):
+  - 3 to 5 maps, each worth a different number of points (1–5), and one pool of 100 supply per side for the
+    whole campaign.
+  - Before every map both sides secretly commit 12–45 supply and buy units with it (rifleman 3 up to tank 15).
+    Committed supply is gone; the rest carries over to later maps.
+  - Each side also picks a deployment: balanced, left or right flank, and offensive (deployed further
+    forward) or defensive (further back, behind sandbags, crouched).
+  - Win a map to take its points; a draw splits them. Most points wins.
 - **Skirmish** on the hand-made Normandy village, a random map (standard 44x44, large 64x64, huge 84x84 with
   bigger forces), or your own scenarios. Play vs AI, hotseat, or watch AI vs AI.
-- **Online**: two computers connect directly, no server needed. After every order both games check they hold
-  the identical battle. Online games save at each agreed turn and can be continued later with the same
-  opponent.
+- **Online**: two computers connect directly, at home or over the internet, no server needed.
+  - Every game has a password. The joiner proves it knows the password before the host lets it in (the
+    password itself never travels); wrong guesses are turned away, and a run of them locks the game for a
+    minute.
+  - Over the internet the host's game asks the router to open the port (UPnP) and shows its internet
+    address. If the router won't, the joiner's game shows *its* internet address, and the host pastes it into
+    "Let them in" to punch through the NAT. Finding the address asks a public STUN server (Google or
+    Cloudflare) what address it sees.
+  - After every order both games check they hold the identical battle. Online games save at each agreed turn
+    and can be continued later with the same opponent.
 - **Map and scenario editor**: paint terrain, cover and walls, place units, objectives and reinforcement
   spawns, mirror one half onto the other, and save scenarios as JSON. Play or test them with the AI straight away.
 
@@ -65,6 +95,8 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 | T | Turn a tank on the spot |
 | C / Z | Crouch / go prone (press again to stand up) |
 | X / B | Aimed shot / suppressive fire |
+| G | Clear a spotted mine next to the soldier |
+| 1 on drums / an oil tank | In shoot mode, click fuel drums or an oil tank to blow them up |
 | H / Shift+H | Suggest a move / suggest for the selected soldier |
 | Tab / Enter | Next soldier / end turn |
 | WASD, arrows, middle drag | Pan |
@@ -92,15 +124,19 @@ codesign --force --deep -s - "build/Normandy 1944.app"
 ```
 
 Run the export command once first so the export templates for 4.7 are installed. To try online play on one
-computer, open the app twice (`open -n "build/Normandy 1944.app"`), host in one and join `127.0.0.1` in the
-other. Over the internet the host forwards UDP port 24944, or both players use a VPN such as Tailscale.
+computer, open the app twice (`open -n "build/Normandy 1944.app"`), type the same password in both, host in
+one and join `127.0.0.1` in the other. Over the internet, join the address the host's waiting page shows. If
+neither the router nor "Let them in" gets you connected (some mobile and office networks block it), forward
+UDP port 24944 on the host's router, or both use a VPN such as Tailscale.
 
 ## Testing and balancing
 
 ```sh
 Godot --headless --path . -s tests/run_tests.gd         # engine, AI, saves, scenarios, settings
 Godot --headless --path . -s tests/advisor_tests.gd     # move suggestions and the MCP tools
+Godot --headless --path . -s tests/terrain_tests.gd     # fuel drums, oil tanks, fire, mines, wheat and wire
 GODOT=Godot sh tests/net_resume.sh 26000 44             # two copies online: save, quit, resume, desync checks
+GODOT=Godot sh tests/net_auth.sh 26100                  # passwords, wrong passwords, joining from a punched port
 
 # AI vs AI balance: win rates with confidence intervals, endings, kills per role, objective control
 Godot --headless --path . -s tools/balance.gd -- --scenario res://scenarios/village.json --games 50 --seed 1

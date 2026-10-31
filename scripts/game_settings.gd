@@ -104,7 +104,8 @@ static func save_settings(path := PATH) -> void:
 static func apply_window() -> void:
 	if DisplayServer.get_name() == "headless":
 		return
-	var want := DisplayServer.WINDOW_MODE_FULLSCREEN if fullscreen else DisplayServer.WINDOW_MODE_WINDOWED
+	# Leaving fullscreen goes back to a maximized window, the size the game starts at.
+	var want := DisplayServer.WINDOW_MODE_FULLSCREEN if fullscreen else DisplayServer.WINDOW_MODE_MAXIMIZED
 	var current := DisplayServer.window_get_mode()
 	var is_full := current == DisplayServer.WINDOW_MODE_FULLSCREEN or current == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN
 	if is_full != fullscreen:

@@ -31,6 +31,13 @@ const HEDGE := [Color("34502a"), Color("426236"), Color("2c4322")]
 const TRUNK := Color("5a4330")
 const LEAVES := [Color("38562a"), Color("466a33"), Color("57793d")]
 const GLASS := Color(0.65, 0.82, 0.95, 0.28)
+const FUEL_DRUM := [Color("7a2e22"), Color("4f5a2f"), Color("6d3a24")]
+const OIL_TANK := Color("8c8f8a")
+const WIRE := Color("4a4640")
+const WIRE_POST := Color("5a4632")
+const FLAME := [Color(1.0, 0.82, 0.3), Color(1.0, 0.5, 0.12), Color(0.85, 0.22, 0.08)]
+const MINE := Color("3d3a33")
+const MINE_SIGN := Color("e7d9a8")
 const WALL_HEIGHT := 1.05
 const HEDGE_HEIGHT := 1.0
 const LOW_WALL_HEIGHT := 0.45
@@ -140,6 +147,25 @@ static func draw_tile(c: CanvasItem, proj: ViewProjection, map: TacticalMap, p: 
 			c.draw_colored_polygon(ground_circle(proj, center, 0.44, false), CRATER_RIM)
 			c.draw_colored_polygon(ground_circle(proj, center, 0.34, false), CRATER_FLOOR)
 			c.draw_polyline(ground_circle(proj, center + Vector2(0.03, 0.03), 0.3), CRATER_FLOOR.darkened(0.3), 1.5)
+		TacticalMap.Terrain.TRAMPLED:
+			# Flattened stalks lying every which way on churned soil.
+			c.draw_colored_polygon(tile_poly(proj, p), WHEAT[0].darkened(0.18).lerp(DRY_GROUND[1], 0.3 + n * 0.2))
+			for i in 10:
+				var at := g + Vector2(0.08, 0.08) + Vector2(noise(p, i * 2 + 1), noise(p, i * 2 + 2)) * 0.84
+				var lie := Vector2.from_angle(noise(p, i + 50) * TAU) * 0.16
+				c.draw_line(proj.project(at), proj.project(at + lie, 0.02), WHEAT_STALKS[i % 3].darkened(0.15), 1.4)
+		TacticalMap.Terrain.WIRE:
+			# Grass with posts and coils of barbed wire.
+			c.draw_colored_polygon(tile_poly(proj, p), GRASS[0].lerp(GRASS[1], n).darkened(0.1))
+			var posts := [g + Vector2(0.15, 0.2 + n * 0.2), g + Vector2(0.85, 0.6 + n * 0.2)]
+			for post: Vector2 in posts:
+				c.draw_line(proj.project(post), proj.project(post, 0.45), WIRE_POST, 2.5)
+			for k in 3:
+				var h := 0.12 + k * 0.13
+				c.draw_line(proj.project(posts[0], h), proj.project(posts[1], h + 0.03), WIRE, 1.0)
+			for i in 6:
+				var at: Vector2 = posts[0].lerp(posts[1], (i + 0.5) / 6.0)
+				c.draw_arc(proj.project(at, 0.22), 6.0, 0.0, TAU, 8, WIRE.lightened(0.15), 1.0)
 
 
 ## The shadow a prism of the given height casts on the ground.
@@ -162,6 +188,8 @@ static func draw_object_shadow(c: CanvasItem, proj: ViewProjection, map: Tactica
 			c.draw_colored_polygon(ground_circle(proj, center + LIGHT * 1.2, 0.5, false), SHADOW)
 		"rock":
 			draw_shadow(c, proj, rect_poly(Rect2(Vector2(p), Vector2.ONE).grow(-0.12)), _rock_height(p))
+		"oil_tank":
+			draw_shadow(c, proj, rect_poly(Rect2(Vector2(p), Vector2.ONE).grow(-0.08)), 1.3)
 		_:
 			draw_shadow(c, proj, rect_poly(Rect2(Vector2(p), Vector2.ONE).grow(-0.2)), 0.45)
 
@@ -224,6 +252,27 @@ static func draw_object(c: CanvasItem, proj: ViewProjection, map: TacticalMap, p
 			prism(c, proj, blob_poly(center, 0.34, p, 0.0), 0.0, 0.5, color, alpha)
 			for r in [0.24, 0.14]:
 				c.draw_polyline(ground_circle(proj, center, r, true, 0.5), Color(color.darkened(0.3), alpha), 1.0)
+		"fuel":
+			# A cluster of fuel drums with bands round them.
+			for i in 3:
+				var at := center + Vector2.from_angle(TAU * i / 3.0 + 0.6) * 0.17
+				var color: Color = FUEL_DRUM[i].darkened(tint)
+				var faces := prism(c, proj, blob_poly(at, 0.13, p, 0.0), 0.0, 0.45, color, alpha)
+				for q: Array in faces:
+					for t in [0.3, 0.7]:
+						c.draw_line(q[0].lerp(q[3], t), q[1].lerp(q[2], t), Color(color.darkened(0.4), alpha), 1.0)
+				c.draw_circle(proj.project(at + Vector2(0.04, -0.03), 0.45), 2.0, Color(color.darkened(0.5), alpha))
+		"oil_tank":
+			# A storage tank: banded steel cylinder with a domed roof and a ladder.
+			var color := OIL_TANK.darkened(tint)
+			var faces := prism(c, proj, blob_poly(center, 0.44, p, 0.0), 0.0, 1.25, color, alpha)
+			for q: Array in faces:
+				for t in [0.25, 0.5, 0.75]:
+					c.draw_line(q[0].lerp(q[3], t), q[1].lerp(q[2], t), Color(color.darkened(0.3), alpha), 1.0)
+			prism(c, proj, blob_poly(center, 0.3, p, 0.0), 1.25, 1.38, color.lightened(0.08), alpha)
+			var ladder := center + Vector2(0.3, 0.32)
+			c.draw_line(proj.project(ladder), proj.project(ladder, 1.25), Color(color.darkened(0.55), alpha), 1.5)
+			c.draw_polyline(ground_circle(proj, center, 0.2, true, 1.385), Color(0.6, 0.1, 0.08, alpha), 2.0)
 		"pew":
 			var color := WOOD.darkened(tint)
 			prism(c, proj, rect_poly(Rect2(center - Vector2(0.42, 0.14), Vector2(0.84, 0.28))), 0.0, 0.32, color, alpha)
@@ -343,6 +392,36 @@ static func draw_smoke(c: CanvasItem, proj: ViewProjection, p: Vector2i, time: f
 		var height := 0.3 + i * 0.35 + sin(time * 0.8 + i + p.y) * 0.05
 		var shade := 0.72 + noise(p, i) * 0.12
 		c.draw_circle(proj.project(center + drift, height), 20.0 - i * 3.0, Color(shade, shade, shade * 0.98, 0.55))
+
+
+## Flames licking up from a burning tile, with embers.
+static func draw_fire(c: CanvasItem, proj: ViewProjection, p: Vector2i, time: float) -> void:
+	var center := Vector2(p) + Vector2(0.5, 0.5)
+	c.draw_colored_polygon(ground_circle(proj, center, 0.42, false), Color(0.12, 0.06, 0.03, 0.55))
+	for i in 5:
+		var at := center + Vector2(noise(p, i * 3 + 1) - 0.5, noise(p, i * 3 + 2) - 0.5) * 0.6
+		var flicker := 0.5 + 0.5 * sin(time * (8.0 + i) + i * 1.9 + p.x)
+		var height := 0.25 + flicker * 0.3
+		var color: Color = FLAME[(i + int(time * 6.0)) % 3]
+		var base := proj.project(at)
+		var tip := proj.project(at + Vector2(0.02, -0.02) * flicker, height)
+		var side := Vector2(4.0 + flicker * 2.0, 0)
+		c.draw_colored_polygon(PackedVector2Array([base - side, tip, base + side]), Color(color, 0.85))
+	for i in 2:
+		var t := fmod(time * 0.6 + noise(p, i + 9), 1.0)
+		c.draw_circle(proj.project(center + Vector2(0.1 * i, 0.0), 0.5 + t * 0.9), 2.0 + t * 6.0, Color(0.15, 0.13, 0.12, 0.45 * (1.0 - t)))
+
+
+## A spotted mine: the buried disc and a little warning sign.
+static func draw_mine(c: CanvasItem, proj: ViewProjection, p: Vector2i) -> void:
+	var center := Vector2(p) + Vector2(0.5, 0.5)
+	c.draw_colored_polygon(ground_circle(proj, center, 0.18, false), MINE)
+	c.draw_polyline(ground_circle(proj, center, 0.18), MINE.lightened(0.3), 1.0)
+	var post := center + Vector2(-0.28, -0.28)
+	c.draw_line(proj.project(post), proj.project(post, 0.4), WIRE_POST, 2.0)
+	var top := proj.project(post, 0.4)
+	c.draw_colored_polygon(PackedVector2Array([top + Vector2(-7, -9), top + Vector2(7, -9), top + Vector2(0, 2)]), MINE_SIGN)
+	c.draw_line(top + Vector2(0, -7), top + Vector2(0, -3), Color(0.6, 0.1, 0.08), 1.5)
 
 
 static func _rock_height(p: Vector2i) -> float:

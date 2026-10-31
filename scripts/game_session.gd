@@ -4,7 +4,7 @@ extends RefCounted
 ## There are two save slots: the campaign (with any battle in progress) and a skirmish battle, plus a third
 ## for the online game in progress, saved at every turn change both players agreed on.
 
-const SLOTS := {"campaign": "user://campaign.sav", "skirmish": "user://skirmish.sav", "online": "user://online.sav"}
+const SLOTS := {"campaign": "user://campaign.sav", "skirmish": "user://skirmish.sav", "online": "user://online.sav", "war": "user://war.sav"}
 const SAVE_VERSION := 1
 const MENU_SCENE := "res://scenes/main_menu.tscn"
 const BATTLE_SCENE := "res://scenes/battle.tscn"
@@ -17,6 +17,8 @@ static var ai_states := [{}, {}]
 static var battle_title := ""
 ## The running campaign, or null in skirmish.
 static var campaign: Campaign
+## The running two-player campaign (supply and maps), or null.
+static var war: WarCampaign
 ## Ask the main menu to open the campaign screen.
 static var show_campaign := false
 ## The online game being played: {"game_id", "title", "opponent", "hosted"}, or {} when offline.
@@ -69,6 +71,8 @@ static func build_skirmish(setup: Dictionary) -> Array:
 
 
 static func current_slot() -> String:
+	if war != null:
+		return "war"
 	return "campaign" if campaign != null else "skirmish"
 
 
@@ -98,6 +102,7 @@ static func save_game() -> void:
 	var data := {
 		"version": SAVE_VERSION,
 		"campaign": campaign.to_dict() if campaign != null else {},
+		"war": war.to_dict() if war != null else {},
 		"battle": battle.to_dict() if running else {},
 		"ai_teams": ai_teams, "ai_states": ai_states, "title": battle_title,
 	}
@@ -119,6 +124,7 @@ static func load_game(slot: String) -> bool:
 	if data.is_empty():
 		return false
 	campaign = Campaign.from_dict(data["campaign"]) if not data["campaign"].is_empty() else null
+	war = WarCampaign.from_dict(data["war"]) if not data.get("war", {}).is_empty() else null
 	battle = Battle.from_dict(data["battle"]) if not data["battle"].is_empty() else null
 	ai_teams = data["ai_teams"]
 	ai_states = data["ai_states"]

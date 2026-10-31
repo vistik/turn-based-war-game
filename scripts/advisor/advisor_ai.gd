@@ -90,6 +90,9 @@ func _headline(u: Unit, plan: Dictionary, seen: Array[Unit]) -> String:
 			return "%s: mortar strike at (%d, %d)" % [u.name, plan["tile"].x, plan["tile"].y]
 		"pivot":
 			return "%s: turn to face %s" % [u.name, _compass(plan["tile"])]
+		"shoot_object":
+			var what := "oil tank" if battle.map.get_object_kind(plan["tile"]) == "oil_tank" else "fuel drums"
+			return "%s: blow up the %s at (%d, %d)" % [u.name, what, plan["tile"].x, plan["tile"].y]
 		"set_up":
 			return "%s: set up the machine gun" % u.name
 	return "%s: %s" % [u.name, plan["kind"].capitalize().to_lower()]
@@ -146,6 +149,14 @@ func _reasons(u: Unit, plan: Dictionary, seen: Array[Unit]) -> Array[String]:
 			reasons.append("steadies %d suppressed soldier%s" % [count, "" if count == 1 else "s"])
 		"medkit":
 			reasons.append("HP %d/%d%s" % [target.hp, target.max_hp, ", treats the wound" if target.is_wounded() else ""])
+		"shoot_object":
+			var kind := battle.map.get_object_kind(plan["tile"])
+			reasons.append("%d%% to hit" % CombatRules.object_odds(u, u.pos, plan["tile"], kind))
+			var caught := 0
+			for e in seen:
+				if Vector2(e.pos).distance_to(Vector2(plan["tile"])) <= CombatRules.EXPLOSIVES[kind]["radius"]:
+					caught += 1
+			reasons.append("the blast catches %s" % _enemies(caught))
 		"grenade", "mortar":
 			var names := PackedStringArray()
 			var radius := CombatRules.GRENADE_RADIUS if plan["kind"] == "grenade" else CombatRules.MORTAR_RADIUS

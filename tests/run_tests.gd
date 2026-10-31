@@ -1289,3 +1289,109 @@ func test_ai_uses_stances() -> void:
 	battle.units[0].stance = Unit.Stance.PRONE
 	command = TacticalAI.new(battle, 0).decide()
 	check(command["cmd"] == "stance" and command["stance"] == Unit.Stance.STAND, "with nobody in sight, it gets up to move on (%s)" % command)
+
+
+# --- Two-player campaign ---
+
+func test_war_campaign_maps_and_spend_limits() -> void:
+	var war := WarCampaign.create(5, 321)
+	check_eq(war.maps.size(), 5, "five maps")
+	var values := {}
+	for m in war.maps:
+		values[m["points"]] = true
+	check_eq(values.size(), 5, "every map is worth a different number of points")
+	check_eq(war.spend_limits(0), [WarCampaign.MIN_SPEND, WarCampaign.MAX_SPEND] as Array[int], "first map: min and max")
+	check(war.check_orders(0, {"roster": ["Rifleman"], "flank": "left", "posture": "offensive"}) != "", "too little supply")
+	check(war.check_orders(0, {"roster": ["Tank", "Tank", "Tank", "Rifleman"], "flank": "left", "posture": "offensive"}) != "", "too much supply")
+	check(war.check_orders(0, {"roster": ["Rifleman", "Rifleman", "Rifleman", "Rifleman"], "flank": "up", "posture": "offensive"}) != "", "unknown flank")
+	check_eq(war.check_orders(0, {"roster": ["Rifleman", "Rifleman", "Rifleman", "Rifleman"], "flank": "right", "posture": "defensive"}), "", "4 riflemen is 12 supply")
+	# Late in the campaign the maximum keeps enough back for the maps still to come.
+	war.current = 3
+	war.supply[0] = 40
+	check_eq(war.spend_limits(0), [WarCampaign.MIN_SPEND, 40 - WarCampaign.MIN_SPEND] as Array[int], "leaves the minimum for the last map")
+	war.current = 4
+	war.supply[0] = 9
+	check_eq(war.spend_limits(0), [9, 9] as Array[int], "the last map can only use what is left")
+
+
+func test_war_campaign_ai_orders_are_valid() -> void:
+	for seed in [1, 2, 3, 4, 5, 6]:
+		var war := WarCampaign.create(3 + seed % 3, seed, [true, true])
+		while not war.is_over():
+			for side in 2:
+				if war.has_orders(side):
+					continue
+				var orders := war.ai_orders(side)
+				check_eq(war.set_orders(side, orders), "", "AI orders accepted (seed %d, map %d)" % [seed, war.current])
+			if not war.ready_to_fight():
+				break
+			# Pretend the Allies won, to move on and spend supply.
+			var fake := Battle.new(TacticalMap.new(4, 4), [] as Array[Unit])
+			fake.winner = 0
+			war.complete_map(fake)
+		check(war.supply[0] >= 0 and war.supply[1] >= 0, "never overspent")
+
+
+func test_war_campaign_deployment_and_scoring() -> void:
+	var war := WarCampaign.create(3, 77)
+	war.set_orders(0, {"roster": ["Officer", "Rifleman", "Rifleman", "MG", "AT"], "flank": "left", "posture": "defensive"})
+	war.set_orders(1, {"roster": ["Tank", "Rifleman", "SMG"], "flank": "balanced", "posture": "offensive"})
+	check(war.ready_to_fight(), "both sides have orders")
+	var battle := war.build_battle()
+	var size: int = war.current_map()["size"]
+	check_eq(battle.alive_units(0).size(), 5, "the Allies field what they bought")
+	check_eq(battle.alive_units(1).size(), 3, "and Germany")
+	var north := 0
+	var sandbags := 0
+	for u in battle.alive_units(0):
+		north += int(u.pos.y < size / 2)
+		check(u.pos.x < size / 2, "Allies deploy on their own half")
+		check_eq(u.stance, Unit.Stance.CROUCH, "a defensive deployment starts crouched")
+		sandbags += int(battle.map.get_object_kind(u.pos + Vector2i(1, 0)) == "sandbags")
+	check_eq(north, 5, "left flank for the Allies is north")
+	check(sandbags >= 3, "defensive soldiers start behind sandbags (%d)" % sandbags)
+	for u in battle.alive_units(1):
+		check(u.pos.x >= size / 2, "Germany deploys on its own half")
+		check(u.pos.x >= size - 12, "offensive, but still near its edge")
+	battle.winner = 1
+	battle.victory_points = [3, 9]
+	var points: int = war.current_map()["points"]
+	var result := war.complete_map(battle)
+	check_eq(war.scores, [0, points], "the winner takes the map's points")
+	check_eq(result["spent"], [WarCampaign.cost_of(["Officer", "Rifleman", "Rifleman", "MG", "AT"]), WarCampaign.cost_of(["Tank", "Rifleman", "SMG"])], "supply spent recorded")
+	check_eq(war.supply[0], WarCampaign.SUPPLY - result["spent"][0], "spent supply is gone")
+	var copy := WarCampaign.from_dict(war.to_dict())
+	check_eq(copy.to_dict(), war.to_dict(), "save and load round trip")
+	check_eq(copy.current, 1, "on to the next map")
+
+
+func test_nat_helpers() -> void:
+	var transaction := PackedByteArray([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+	var request := Nat.stun_request(transaction)
+	check_eq(request.size(), 20, "STUN request is a bare 20-byte header")
+	check_eq(request.slice(8), transaction, "STUN request carries the transaction id")
+	# A Binding Success answer with XOR-MAPPED-ADDRESS for 203.0.113.7:41234.
+	var answer := PackedByteArray([0x01, 0x01, 0x00, 0x0C, 0x21, 0x12, 0xA4, 0x42])
+	answer.append_array(transaction)
+	var port := 41234 ^ 0x2112
+	answer.append_array([0x00, 0x20, 0x00, 0x08, 0x00, 0x01, port >> 8, port & 0xFF,
+			203 ^ 0x21, 0 ^ 0x12, 113 ^ 0xA4, 7 ^ 0x42])
+	check_eq(Nat.stun_address(answer, transaction), "203.0.113.7:41234", "STUN answer decodes the XOR-mapped address")
+	var other := transaction.duplicate()
+	other[0] = 99
+	check_eq(Nat.stun_address(answer, other), "", "STUN answer to another request is ignored")
+	check_eq(Nat.stun_address(PackedByteArray([1, 2, 3]), transaction), "", "garbage isn't a STUN answer")
+	check_eq(Nat.split_address(" 203.0.113.7:41234 ", 24944), ["203.0.113.7", 41234], "address with port")
+	check_eq(Nat.split_address("example.org", 24944), ["example.org", 24944], "address without port")
+	for local: String in ["127.0.0.1", "192.168.1.20", "10.0.0.5", "172.20.1.1", "100.101.1.2", "localhost"]:
+		check(Nat.is_local(local), "%s is on the local network" % local)
+	for remote: String in ["203.0.113.7", "172.32.0.1", "8.8.8.8", "example.org"]:
+		check(not Nat.is_local(remote), "%s is over the internet" % remote)
+
+
+func test_online_password_key() -> void:
+	var net_script: GDScript = load("res://scripts/net/net_session.gd")
+	var key: PackedByteArray = net_script.password_key("fox-hole")
+	check_eq(key.size(), 32, "password key is a SHA-256")
+	check_eq(key, net_script.password_key("fox-hole"), "the same password gives the same key")
+	check(key != net_script.password_key("foxhole"), "a different password gives a different key")

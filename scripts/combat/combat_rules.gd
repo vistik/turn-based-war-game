@@ -58,6 +58,25 @@ const MORTAR_DAMAGE_MAX := 5
 ## Shells land up to this many tiles off target per tile of distance.
 const MORTAR_SCATTER := 0.08
 const MEDKIT_HEAL := 4
+
+# --- Terrain hazards ---
+## Fuel drums and oil tanks: the blast when they go up, and how far around it the fire spreads.
+const EXPLOSIVES := {
+	"fuel": {"radius": 1.5, "damage_min": 3, "damage_max": 5, "fire": 1.0},
+	"oil_tank": {"radius": 2.5, "damage_min": 4, "damage_max": 6, "fire": 2.0},
+}
+## Aim bonus for shooting at an explosive object: it doesn't duck, and an oil tank is hard to miss.
+const OBJECT_SHOT_BONUS := {"fuel": 10, "oil_tank": 30}
+## Fires burn for this many turns (both sides' turns count), and burn anyone still in them at the start of their turn.
+const FIRE_TURNS := 4
+const FIRE_DAMAGE := 2
+const FIRE_SUPPRESSION := 20
+## A mine hits whoever steps on it and the tiles beside it. Explosions still lose EXPLOSION_VS_ARMOR against tanks.
+const MINE_RADIUS := 1.0
+const MINE_DAMAGE_MIN := 4
+const MINE_DAMAGE_MAX := 6
+## Chance (%) a soldier spots each hidden mine next to him as he moves. Tank crews never do.
+const MINE_SPOT_CHANCE := 50
 ## Thrown grenades (frag and smoke) land up to this many tiles off target per tile thrown, plus more for
 ## throwers with aim below THROW_STEADY_AIM and for throwers under fire. They bounce back off walls.
 const THROW_SCATTER := 0.12
@@ -147,6 +166,16 @@ static func misses_stray(weapon: Weapon) -> bool:
 
 ## Hit, graze and crit chances (0-100) plus the itemised modifiers behind the hit chance.
 ## `aimed`: an aimed shot (both actions) for extra aim.
+## Chance (0-100) to hit an explosive object of `kind` on `tile` from `from`.
+static func object_odds(shooter: Unit, from: Vector2i, tile: Vector2i, kind: String) -> int:
+	var hit: int = shooter.aim + shooter.weapon.range_modifier(Vector2(from).distance_to(Vector2(tile))) + OBJECT_SHOT_BONUS.get(kind, 0)
+	if shooter.is_pinned():
+		hit -= PINNED_AIM_PENALTY
+	elif shooter.is_suppressed():
+		hit -= SUPPRESSED_AIM_PENALTY
+	return clampi(hit, 0, 100)
+
+
 static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction := false, aimed := false) -> Dictionary:
 	var distance := Vector2(shooter.pos).distance_to(Vector2(target.pos))
 	var modifiers := [["Aim", shooter.aim]]

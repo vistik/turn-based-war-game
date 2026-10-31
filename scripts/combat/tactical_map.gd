@@ -1,10 +1,11 @@
 class_name TacticalMap
 extends RefCounted
 ## Grid data for a battle: terrain, cover objects standing on tiles, walls on the edges between tiles,
-## and smoke. Objects and edges also carry a kind ("tree", "hedge", ...) that changes how they look,
-## and for hedges, how they're crossed.
+## smoke, fires and buried mines. Objects and edges also carry a kind ("tree", "hedge", ...) that changes
+## how they look, and for hedges, how they're crossed. Fuel drums and oil tanks are objects that explode.
 
-enum Terrain { FLOOR, ROUGH, RUBBLE, INDOOR, ROAD, WHEAT, CRATER }
+## TRAMPLED is wheat flattened by soldiers or tanks moving through it; WIRE is a barbed-wire entanglement.
+enum Terrain { FLOOR, ROUGH, RUBBLE, INDOOR, ROAD, WHEAT, CRATER, TRAMPLED, WIRE }
 
 ## North, east, south, west.
 const DIRS4 := [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
@@ -12,8 +13,10 @@ const DIRS8 := [
 	Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0),
 	Vector2i(1, -1), Vector2i(1, 1), Vector2i(-1, 1), Vector2i(-1, -1),
 ]
-const TERRAIN_NAMES := ["Grass", "Rough ground", "Rubble", "Indoor floor", "Road", "Wheat field", "Shell crater"]
-const TERRAIN_COST := [1.0, 2.0, 2.0, 1.0, 0.75, 1.5, 1.5]
+const TERRAIN_NAMES := ["Grass", "Rough ground", "Rubble", "Indoor floor", "Road", "Wheat field", "Shell crater", "Trampled wheat", "Barbed wire"]
+const TERRAIN_COST := [1.0, 2.0, 2.0, 1.0, 0.75, 1.5, 1.5, 1.0, 4.0]
+## Objects that blow up when shot, caught in a blast or run over: fuel drums (half cover) and oil tanks (full).
+const EXPLOSIVE_KINDS := ["fuel", "oil_tank"]
 const DIAGONAL_FACTOR := 1.5
 ## Extra cost for climbing over a half-height wall, and for pushing through a hedgerow.
 const VAULT_COST := 1.0
@@ -21,6 +24,8 @@ const HEDGE_COST := 3.0
 ## Extra cost for a tank flattening a crate, sandbags, a fence or a low wall, and for knocking down a tree.
 const CRUSH_COST := 1.0
 const TREE_COST := 2.0
+## What driving over fuel drums costs a tank on its path, so it only does it when there's no other way.
+const FUEL_CRUSH_COST := 6.0
 ## Low obstacles and hedges a tank can drive through (and destroys on the way).
 const CRUSHABLE_EDGES := ["fence", "stone", "hedge"]
 
@@ -40,6 +45,10 @@ var _edge_kinds := {}
 var _smoke := {}
 ## Tiles with a tank on them: they give half cover to soldiers beside them.
 var _vehicles := {}
+## Tile -> battle turn index at which the fire there burns out. Nobody can enter a burning tile.
+var _fires := {}
+## Tiles with a mine buried in them. Which side knows about which mine is kept by the Battle.
+var _mines := {}
 
 
 func _init(p_width: int, p_height: int) -> void:
@@ -70,7 +79,7 @@ func get_object(p: Vector2i) -> int:
 	return _objects[_index(p)] if in_bounds(p) else Cover.NONE
 
 
-## Kinds: full cover "rock", "tree"; half cover "crate", "sandbags", "hay", "pew".
+## Kinds: full cover "rock", "tree", "oil_tank"; half cover "crate", "sandbags", "hay", "pew", "fuel".
 func get_object_kind(p: Vector2i) -> String:
 	return _object_kinds.get(p, "rock" if get_object(p) == Cover.FULL else "crate")
 
@@ -150,6 +159,51 @@ func clear_smoke(turn_index: int) -> Array[Vector2i]:
 	return cleared
 
 
+func is_explosive(p: Vector2i) -> bool:
+	return get_object(p) != Cover.NONE and EXPLOSIVE_KINDS.has(get_object_kind(p))
+
+
+func has_fire(p: Vector2i) -> bool:
+	return _fires.has(p)
+
+
+func get_fires() -> Dictionary:
+	return _fires
+
+
+func add_fire(p: Vector2i, until_turn: int) -> void:
+	_fires[p] = maxi(until_turn, _fires.get(p, 0))
+	revision += 1
+
+
+## Puts out fires that have burnt out by the given turn index; returns their tiles.
+func clear_fires(turn_index: int) -> Array[Vector2i]:
+	var cleared: Array[Vector2i] = []
+	for p: Vector2i in _fires.keys():
+		if _fires[p] <= turn_index:
+			_fires.erase(p)
+			cleared.append(p)
+	if not cleared.is_empty():
+		revision += 1
+	return cleared
+
+
+func has_mine(p: Vector2i) -> bool:
+	return _mines.has(p)
+
+
+func get_mines() -> Dictionary:
+	return _mines
+
+
+func set_mine(p: Vector2i, present: bool) -> void:
+	if present:
+		_mines[p] = true
+	else:
+		_mines.erase(p)
+	revision += 1
+
+
 func set_vehicle(p: Vector2i, present: bool) -> void:
 	if present:
 		_vehicles[p] = true
@@ -168,7 +222,7 @@ func is_passable(p: Vector2i) -> bool:
 
 ## Path cost of stepping from a to the neighbouring tile b, or INF if the step is impossible.
 func step_cost(a: Vector2i, b: Vector2i) -> float:
-	if not is_passable(b):
+	if not is_passable(b) or _fires.has(b):
 		return INF
 	var cost: float = TERRAIN_COST[get_terrain(b)]
 	if a.x != b.x and a.y != b.y:
@@ -192,10 +246,14 @@ func step_cost(a: Vector2i, b: Vector2i) -> float:
 ## Path cost of a tank driving from a to b. Tanks crush low obstacles, fences and walls, knock down trees
 ## and push through hedges, all of which they destroy, but can't pass rocks, wrecks or buildings.
 func vehicle_step_cost(a: Vector2i, b: Vector2i) -> float:
-	if not in_bounds(b) or not _tank_can_enter(b):
+	if not in_bounds(b) or not _tank_can_enter(b) or _fires.has(b):
 		return INF
-	var cost: float = TERRAIN_COST[get_terrain(b)]
-	if get_object(b) == Cover.HALF:
+	# Tanks roll straight over barbed wire.
+	var cost: float = CRUSH_COST if get_terrain(b) == Terrain.WIRE else TERRAIN_COST[get_terrain(b)]
+	if get_object_kind(b) == "fuel" and get_object(b) != Cover.NONE:
+		# Possible, but the drums go up under the tank.
+		cost += FUEL_CRUSH_COST
+	elif get_object(b) == Cover.HALF:
 		cost += CRUSH_COST
 	elif get_object(b) == Cover.FULL:
 		cost += TREE_COST
@@ -277,6 +335,11 @@ func destroy_cover(center: Vector2i, radius: float) -> int:
 	var destroyed := 0
 	for p in tiles_in_radius(center, radius):
 		area[p] = true
+		# Blasts set off buried mines and tear up barbed wire.
+		_mines.erase(p)
+		if get_terrain(p) == Terrain.WIRE:
+			set_terrain(p, Terrain.FLOOR)
+			destroyed += 1
 		if get_object(p) != Cover.NONE:
 			set_object(p, Cover.NONE)
 			set_terrain(p, Terrain.RUBBLE)
@@ -298,7 +361,7 @@ func to_dict() -> Dictionary:
 	return {
 		"width": width, "height": height, "terrain": _terrain.duplicate(), "objects": _objects.duplicate(),
 		"object_kinds": _object_kinds.duplicate(), "edges": _edges.duplicate(), "edge_kinds": _edge_kinds.duplicate(),
-		"smoke": _smoke.duplicate(), "vehicles": _vehicles.duplicate(),
+		"smoke": _smoke.duplicate(), "vehicles": _vehicles.duplicate(), "fires": _fires.duplicate(), "mines": _mines.duplicate(),
 	}
 
 
@@ -311,6 +374,8 @@ static func from_dict(data: Dictionary) -> TacticalMap:
 	map._edge_kinds = data["edge_kinds"].duplicate()
 	map._smoke = data["smoke"].duplicate()
 	map._vehicles = data["vehicles"].duplicate()
+	map._fires = data.get("fires", {}).duplicate()
+	map._mines = data.get("mines", {}).duplicate()
 	return map
 
 

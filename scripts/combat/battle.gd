@@ -3,7 +3,8 @@ extends RefCounted
 ## The combat engine. Owns all battle state and applies the rules.
 ## Commands validate, change state and return event dictionaries for the view to play back.
 ## Event types: move, pivot, shot, throw, damage, death, explosion, smoke, smoke_clear, mortar_fire, strike,
-## suppression, status, heal, objective, score, reinforcements, turn, game_over, stance.
+## suppression, status, heal, objective, score, reinforcements, turn, game_over, stance,
+## detonation, fire, fire_out, mine, mines_spotted, object_shot, mine_cleared.
 ## A "shot" that went astray carries "stray" (the tile it ended up on) and, if it hit someone, "stray_unit".
 ##
 ## Every command can also be given as data through execute(), which is how AI moves, saved replays
@@ -37,6 +38,8 @@ var max_rounds := 20
 var reinforcements: Array[Dictionary] = []
 ## Mortar shells in the air: {"team", "unit", "target": Vector2i, "kind": "he" or "smoke"}.
 var strikes: Array[Dictionary] = []
+## Per team: the mines (tile -> true) that side has spotted. Others are hidden from it.
+var known_mines := [{}, {}]
 
 ## Vector3i(x, y, sight) -> tiles visible from there. Rebuilt when the map changes.
 var _vision := {}
@@ -98,6 +101,8 @@ func reachable(u: Unit) -> Dictionary:
 	for other in alive_units():
 		if other != u:
 			blocked[other.pos] = true
+	# Nobody walks into a mine they know about.
+	blocked.merge(known_mines[u.team])
 	return Pathfinder.search(map, u.pos, u.current_mobility() * mini(u.actions, Unit.ACTIONS_PER_TURN), blocked, u.vehicle, u.facing)
 
 
@@ -405,6 +410,37 @@ func can_pivot(u: Unit, dir: Vector2i) -> String:
 	return ""
 
 
+## Shooting at a fuel drum or oil tank to blow it up. Like any shot, it ends the turn.
+func can_shoot_object(u: Unit, tile: Vector2i) -> String:
+	var err := can_fire(u)
+	if err != "":
+		return err
+	if not map.in_bounds(tile) or not map.is_explosive(tile):
+		return "Nothing there to blow up"
+	if not LineOfSight.can_see(map, u.pos, tile, u.current_sight(), false):
+		return "No line of sight"
+	return ""
+
+
+## Lifting a spotted mine on a neighbouring tile, for one action.
+func can_clear_mine(u: Unit, tile: Vector2i) -> String:
+	var err := can_act(u)
+	if err != "":
+		return err
+	if u.vehicle:
+		return "Tanks can't clear mines"
+	if maxi(absi(tile.x - u.pos.x), absi(tile.y - u.pos.y)) != 1:
+		return "Only next to the mine"
+	if not map.has_mine(tile) or not known_mines[u.team].has(tile):
+		return "No known mine there"
+	return ""
+
+
+## Mines this side knows about, and so may see on the map.
+func mines_known_to(team: int) -> Dictionary:
+	return known_mines[team]
+
+
 func can_hunker(u: Unit) -> String:
 	var err := can_act(u)
 	if err != "":
@@ -527,10 +563,40 @@ func move(u: Unit, dest: Vector2i) -> Array:
 		var previous := u.pos
 		u.pos = step
 		u.facing = facings[i] if u.vehicle else step - previous
+		var crushed := map.get_object_kind(step) if u.vehicle and map.is_explosive(step) else ""
 		if u.vehicle:
 			_drive(previous, step)
+		# Wheat walked through is trampled flat behind the soldier; crawling leaves it standing, tanks flatten all.
+		if u.stance != Unit.Stance.PRONE and map.get_terrain(previous) == TacticalMap.Terrain.WHEAT:
+			map.set_terrain(previous, TacticalMap.Terrain.TRAMPLED)
+		if u.vehicle and map.get_terrain(step) == TacticalMap.Terrain.WHEAT:
+			map.set_terrain(step, TacticalMap.Terrain.TRAMPLED)
 		segment.append(step)
 		segment_facings.append(u.facing)
+		var hazard := []
+		if crushed != "":
+			hazard.append_array(_detonate(null, step, crushed))
+		if map.has_mine(step):
+			hazard.append_array(_trigger_mine(u, step))
+		if not hazard.is_empty():
+			events.append({"type": "move", "unit": u.id, "path": segment, "facings": segment_facings})
+			segment = [step]
+			segment_facings = [u.facing]
+			events.append_array(hazard)
+			if u.is_alive():
+				u.actions = 0
+			break
+		if not u.vehicle:
+			var spotted := _spot_mines(u)
+			if not spotted.is_empty():
+				events.append({"type": "move", "unit": u.id, "path": segment, "facings": segment_facings})
+				segment = [step]
+				segment_facings = [u.facing]
+				events.append({"type": "mines_spotted", "team": u.team, "unit": u.id, "tiles": spotted})
+				if i + 1 < path.size() and spotted.has(path[i + 1]):
+					# A mine right ahead: he stops short instead of stepping on it.
+					events.append({"type": "status", "unit": u.id, "text": "Mines!"})
+					break
 		for watcher in _overwatchers_seeing(u):
 			if segment.size() > 1:
 				events.append({"type": "move", "unit": u.id, "path": segment, "facings": segment_facings})
@@ -625,6 +691,34 @@ func pivot(u: Unit, dir: Vector2i) -> Array:
 	u.actions -= 1
 	var events: Array = [{"type": "pivot", "unit": u.id, "from": u.facing, "to": dir}]
 	u.facing = dir
+	events.append_array(_after_action())
+	return events
+
+
+func shoot_object(u: Unit, tile: Vector2i) -> Array:
+	if can_shoot_object(u, tile) != "":
+		return []
+	u.actions = 0
+	u.ammo -= 1
+	u.fired = true
+	var kind := map.get_object_kind(tile)
+	var chance := CombatRules.object_odds(u, u.pos, tile, kind)
+	var hit := rng.randi_range(1, 100) <= chance
+	var events: Array = [{"type": "object_shot", "unit": u.id, "tile": tile, "kind": kind, "chance": chance, "hit": hit}]
+	if hit:
+		events.append_array(_detonate(u, tile, kind))
+	events.append_array(_after_action())
+	return events
+
+
+func clear_mine(u: Unit, tile: Vector2i) -> Array:
+	if can_clear_mine(u, tile) != "":
+		return []
+	u.actions -= 1
+	map.set_mine(tile, false)
+	for known: Dictionary in known_mines:
+		known.erase(tile)
+	var events: Array = [{"type": "mine_cleared", "unit": u.id, "tile": tile}]
 	events.append_array(_after_action())
 	return events
 
@@ -754,6 +848,10 @@ func execute(command: Dictionary) -> Array:
 			return fire_mortar(u, tile, command.get("kind", "he"))
 		"medkit":
 			return use_medkit(u, target) if target != null else []
+		"shoot_object":
+			return shoot_object(u, tile)
+		"clear_mine":
+			return clear_mine(u, tile)
 	return []
 
 
@@ -790,6 +888,15 @@ func _begin_turn(team: int) -> Array:
 	var cleared := map.clear_smoke(turn_index)
 	if not cleared.is_empty():
 		events.append({"type": "smoke_clear", "tiles": cleared})
+	var burnt_out := map.clear_fires(turn_index)
+	if not burnt_out.is_empty():
+		events.append({"type": "fire_out", "tiles": burnt_out})
+	for u in alive_units(team):
+		if map.has_fire(u.pos):
+			events.append({"type": "status", "unit": u.id, "text": "Burning!"})
+			events.append_array(_damage(u, CombatRules.FIRE_DAMAGE, 0))
+			if u.is_alive():
+				events.append_array(_suppress(u, CombatRules.FIRE_SUPPRESSION))
 	for strike in strikes.duplicate():
 		if strike["team"] == team:
 			strikes.erase(strike)
@@ -845,7 +952,7 @@ func to_dict() -> Dictionary:
 		"winner": winner, "started": started, "rng_seed": rng.seed, "rng_state": rng.state,
 		"objectives": objectives.duplicate(true), "victory_points": victory_points.duplicate(),
 		"vp_to_win": vp_to_win, "max_rounds": max_rounds,
-		"reinforcements": waves, "strikes": strikes.duplicate(true),
+		"reinforcements": waves, "strikes": strikes.duplicate(true), "known_mines": known_mines.duplicate(true),
 	}
 
 
@@ -871,6 +978,7 @@ static func from_dict(data: Dictionary) -> Battle:
 			wave_units.append(Unit.from_dict(u))
 		battle.reinforcements.append({"round": wave["round"], "team": wave["team"], "units": wave_units})
 	battle.strikes.assign(data["strikes"].duplicate(true))
+	battle.known_mines = data.get("known_mines", [{}, {}]).duplicate(true)
 	return battle
 
 
@@ -900,9 +1008,18 @@ func _land_strike(strike: Dictionary) -> Array:
 
 ## Damages everyone in the radius (tanks barely), suppresses everyone near it and destroys cover.
 ## `spared` (the direct-hit target of a tank shell) takes no blast damage on top of the hit.
+## `source` may be null (a mine, or drums a tank ran over). Fuel drums and oil tanks in the blast go up after it.
 func _explode(source: Unit, center: Vector2i, radius: float, damage_min: int, damage_max: int, shred: int, spared: Unit = null) -> Array:
+	var caught := []
+	for p in map.tiles_in_radius(center, radius):
+		if map.is_explosive(p):
+			caught.append([p, map.get_object_kind(p)])
+	for p in map.tiles_in_radius(center, radius):
+		if map.has_mine(p):
+			for known: Dictionary in known_mines:
+				known.erase(p)
 	var destroyed := map.destroy_cover(center, radius)
-	var events: Array = [{"type": "explosion", "unit": source.id, "center": center, "radius": radius, "destroyed": destroyed}]
+	var events: Array = [{"type": "explosion", "unit": source.id if source != null else -1, "center": center, "radius": radius, "destroyed": destroyed}]
 	for victim in alive_units():
 		if victim == spared:
 			continue
@@ -915,7 +1032,47 @@ func _explode(source: Unit, center: Vector2i, radius: float, damage_min: int, da
 				events.append_array(_damage(victim, damage, shred, source))
 		if victim.is_alive() and distance <= radius + 1.0:
 			events.append_array(_suppress(victim, CombatRules.EXPLOSION_SUPPRESSION))
+	for item: Array in caught:
+		events.append_array(_detonate(source, item[0], item[1]))
 	return events
+
+
+## A fuel drum or oil tank goes up: a blast (which may set off others), then fire around it.
+func _detonate(source: Unit, tile: Vector2i, kind: String) -> Array:
+	var spec: Dictionary = CombatRules.EXPLOSIVES[kind]
+	if map.get_object_kind(tile) == kind:
+		map.set_object(tile, Cover.NONE)
+	var events: Array = [{"type": "detonation", "tile": tile, "kind": kind}]
+	events.append_array(_explode(source, tile, spec["radius"], spec["damage_min"], spec["damage_max"], 0))
+	var burning: Array[Vector2i] = []
+	for p in map.tiles_in_radius(tile, spec["fire"]):
+		if map.get_object(p) == Cover.NONE and map.get_terrain(p) != TacticalMap.Terrain.INDOOR:
+			map.add_fire(p, turn_index + CombatRules.FIRE_TURNS)
+			burning.append(p)
+	if not burning.is_empty():
+		events.append({"type": "fire", "tiles": burning})
+	return events
+
+
+## A soldier or tank sets off the mine on `tile`.
+func _trigger_mine(u: Unit, tile: Vector2i) -> Array:
+	map.set_mine(tile, false)
+	for known: Dictionary in known_mines:
+		known.erase(tile)
+	var events: Array = [{"type": "mine", "unit": u.id, "tile": tile}]
+	events.append_array(_explode(null, tile, CombatRules.MINE_RADIUS, CombatRules.MINE_DAMAGE_MIN, CombatRules.MINE_DAMAGE_MAX, 0))
+	return events
+
+
+## A soldier looks at the ground around him: each hidden mine next to him may be spotted. Returns the new ones.
+func _spot_mines(u: Unit) -> Array[Vector2i]:
+	var found: Array[Vector2i] = []
+	for d: Vector2i in TacticalMap.DIRS8:
+		var p := u.pos + d
+		if map.has_mine(p) and not known_mines[u.team].has(p) and rng.randi_range(1, 100) <= CombatRules.MINE_SPOT_CHANCE:
+			known_mines[u.team][p] = true
+			found.append(p)
+	return found
 
 
 ## A random tile next to p, for shells that miss.
@@ -1023,6 +1180,8 @@ func _drive(a: Vector2i, b: Vector2i) -> void:
 	if map.get_object(b) != Cover.NONE:
 		map.set_object(b, Cover.NONE)
 		map.set_terrain(b, TacticalMap.Terrain.RUBBLE)
+	elif map.get_terrain(b) == TacticalMap.Terrain.WIRE:
+		map.set_terrain(b, TacticalMap.Terrain.FLOOR)
 	if (a.x == b.x or a.y == b.y) and map.get_edge(a, b) != Cover.NONE:
 		map.set_edge(a, b, Cover.NONE)
 

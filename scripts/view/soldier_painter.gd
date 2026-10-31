@@ -14,6 +14,10 @@ const BOOTS := Color("231f1b")
 const OUTLINE := Color(0.06, 0.06, 0.07)
 const WHITE := Color("e6e4dc")
 const RED_CROSS := Color("c8302a")
+const BRASS := Color("b8953e")
+const LEATHER := Color("5e4630")
+## Leaves and scrim tied onto a sniper's helmet.
+const FOLIAGE := [Color("4f6b2c"), Color("6b7a35"), Color("5a4a2a")]
 ## Optional fifth entry of a model part: how it is laid down for the prone pose. Body parts are laid down
 ## whole, held parts (the weapon) are placed directly, arms are laid down at the shoulder and keep the hand.
 const BODY := 0
@@ -113,11 +117,17 @@ static func _model(unit: Unit, pose: Dictionary) -> Array:
 		[Vector3(0, -0.11, chest - 0.02), grip.lerp(muzzle, 0.6) + Vector3(0, -0.01, 0), 4.5, jacket, ARM],
 	]
 	# Helmets: the American M1 has a round brim, the German Stahlhelm a flared skirt at the back.
-	if faction["stahlhelm"]:
+	# German officers wear the peaked field cap instead; American officers a white stripe down the helmet.
+	if faction["stahlhelm"] and unit.role == "Officer":
+		parts.append([Vector3(-0.03, 0, head + 0.035), Vector3(0.03, 0, head + 0.045), 13.0, uniform.darkened(0.25)])
+		parts.append([Vector3(0.09, 0, head + 0.0), Vector3(0.09, 0, head + 0.0), 6.5, BOOTS])
+		parts.append([Vector3(0.05, 0, head + 0.045), Vector3(0.05, 0, head + 0.045), 3.0, Color("c9c2a8")])
+	elif faction["stahlhelm"]:
 		parts.append([Vector3(-0.07, 0, head - 0.035), Vector3(0.0, 0, head - 0.005), 14.5, helmet.darkened(0.15)])
 	else:
 		parts.append([Vector3(-0.05, 0, head - 0.005), Vector3(0.05, 0, head - 0.005), 14.0, helmet.darkened(0.15)])
-	parts.append([Vector3(-0.01, 0, head + 0.03), Vector3(-0.01, 0, head + 0.03), 12.5, helmet])
+	if not (faction["stahlhelm"] and unit.role == "Officer"):
+		parts.append([Vector3(-0.01, 0, head + 0.03), Vector3(-0.01, 0, head + 0.03), 12.5, helmet])
 
 	match unit.weapon.kind:
 		"smg":
@@ -133,17 +143,43 @@ static func _model(unit: Unit, pose: Dictionary) -> Array:
 					parts.append([bipod, foot, 2.0, GUN, HELD])
 	match unit.role:
 		"Officer":
+			# Binoculars on the chest and a map case at the hip.
 			for side in [-0.025, 0.025]:
-				parts.append([Vector3(0.08, side, chest - 0.06), Vector3(0.08, side, chest - 0.06), 4.0, GUN])
+				parts.append([Vector3(0.08, side, chest - 0.06), Vector3(0.08, side, chest - 0.06), 4.5, GUN])
+			parts.append([Vector3(0.0, -0.13, hip + 0.02), Vector3(0.0, -0.13, hip - 0.08), 6.0, LEATHER])
+			if not faction["stahlhelm"]:
+				parts.append([Vector3(-0.07, 0, head + 0.045), Vector3(0.05, 0, head + 0.05), 3.0, WHITE])
 		"Medic":
 			parts.append([Vector3(-0.1, 0, hip + 0.12), Vector3(-0.1, 0, chest - 0.03), 9.0, WHITE])
 			parts.append([Vector3(-0.15, 0, chest - 0.1), Vector3(-0.15, 0, chest - 0.1), 4.5, RED_CROSS])
 			parts.append([Vector3(0.05, 0, head + 0.06), Vector3(0.05, 0, head + 0.06), 5.0, WHITE])
 			parts.append([Vector3(0.065, 0, head + 0.065), Vector3(0.065, 0, head + 0.065), 2.5, RED_CROSS])
 		"Mortar":
+			# The tube over the shoulder and the round baseplate on the back.
 			parts.append([Vector3(-0.12, 0.06, hip + 0.02), Vector3(-0.17, -0.06, chest + 0.28), 6.0, GUN.lightened(0.15)])
-		"Rifleman", "Sniper", "MG", "AT":
+			parts.append([Vector3(-0.13, 0, chest - 0.12), Vector3(-0.13, 0, chest - 0.12), 11.0, GUN.lightened(0.05)])
+		"Rifleman":
 			parts.append([Vector3(-0.09, 0, hip + 0.12), Vector3(-0.09, 0, chest - 0.03), 9.0, uniform.darkened(0.15)])
+		"SMG":
+			# Magazine pouches across the front.
+			for side in [-0.05, 0.05]:
+				parts.append([Vector3(0.07, side, hip + 0.1), Vector3(0.07, side, hip + 0.18), 4.0, faction["webbing"]])
+		"MG":
+			# An ammunition belt over the shoulder and a box at the hip.
+			parts.append([Vector3(0.05, -0.1, hip + 0.06), Vector3(0.05, 0.1, chest + 0.02), 3.5, BRASS])
+			parts.append([Vector3(-0.02, 0.15, hip - 0.02), Vector3(-0.02, 0.15, hip - 0.1), 7.0, GUN.lightened(0.2)])
+			parts.append([Vector3(-0.09, 0, hip + 0.12), Vector3(-0.09, 0, chest - 0.03), 10.0, uniform.darkened(0.15)])
+		"Sniper":
+			# Camouflage scrim on the helmet.
+			for i in 4:
+				var angle := TAU * i / 4.0 + 0.4
+				parts.append([Vector3(cos(angle) * 0.05, sin(angle) * 0.06, head + 0.06), Vector3(cos(angle) * 0.05, sin(angle) * 0.06, head + 0.06),
+						5.0, FOLIAGE[i % FOLIAGE.size()]])
+		"AT":
+			# A bag of spare rockets on the back, warheads showing.
+			parts.append([Vector3(-0.1, 0.03, hip + 0.06), Vector3(-0.1, 0.03, chest + 0.02), 8.0, LEATHER])
+			for side in [-0.01, 0.07]:
+				parts.append([Vector3(-0.11, side, chest + 0.06), Vector3(-0.11, side, chest + 0.06), 4.0, GUN.lightened(0.25)])
 	if pose["wounded"]:
 		parts.append([Vector3(0, -0.12, chest - 0.06), Vector3(0, -0.12, chest - 0.06), 5.0, WHITE])
 	if prone:

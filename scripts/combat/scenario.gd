@@ -15,7 +15,8 @@ extends RefCounted
 ##     "legend": {".": "Grass", ",": "Rough ground", ...},   (informative; see TERRAIN_CHARS)
 ##     "terrain": ["..=.", "..=.", "ww=."],                   (one string per row, one char per tile)
 ##     "objects": [[1, 0, "tree"], [2, 2, "sandbags"]],      ([x, y, kind], cover comes from the kind)
-##     "edges": [[0, 1, "E", "hedge"], [3, 0, "S", "wall"]]  ([x, y, side N/E/S/W of that tile, kind])
+##     "edges": [[0, 1, "E", "hedge"], [3, 0, "S", "wall"]], ([x, y, side N/E/S/W of that tile, kind])
+##     "mines": [[2, 0]]                                      (buried mines, hidden from both sides; optional)
 ##   },
 ##   "objectives": [{"name": "Crossroads", "center": [2, 1.5], "radius": 2.5}],
 ##   "units": [{"team": "Allies", "role": "Officer", "pos": [0, 1], "facing": "E", "name": "Lt. Adams", "rank": 1}],
@@ -31,9 +32,10 @@ const VERSION := 1
 const BUNDLED_DIR := "res://scenarios/"
 const USER_DIR := "user://scenarios/"
 ## One character per TacticalMap.Terrain value, in enum order.
-const TERRAIN_CHARS := ".,:#=wo"
+const TERRAIN_CHARS := ".,:#=wotx"
 ## Object and edge kinds and the cover they give.
-const OBJECT_COVER := {"rock": Cover.FULL, "tree": Cover.FULL, "crate": Cover.HALF, "sandbags": Cover.HALF, "hay": Cover.HALF, "pew": Cover.HALF, "wreck": Cover.FULL}
+const OBJECT_COVER := {"rock": Cover.FULL, "tree": Cover.FULL, "crate": Cover.HALF, "sandbags": Cover.HALF, "hay": Cover.HALF, "pew": Cover.HALF, "wreck": Cover.FULL,
+		"fuel": Cover.HALF, "oil_tank": Cover.FULL}
 const EDGE_COVER := {"wall": Cover.FULL, "hedge": Cover.FULL, "window": Cover.HALF, "stone": Cover.HALF, "fence": Cover.HALF}
 const ROLES := ["Officer", "Rifleman", "SMG", "MG", "AT", "Medic", "Sniper", "Mortar", "Tank"]
 const FACINGS := {
@@ -138,6 +140,8 @@ static func copy_map(source: TacticalMap) -> TacticalMap:
 			copy.set_terrain(p, source.get_terrain(p))
 			if source.get_object(p) != Cover.NONE:
 				copy.set_object(p, source.get_object(p), source.get_object_kind(p))
+			if source.has_mine(p):
+				copy.set_mine(p, true)
 	for key in _sorted_edges(source):
 		var pair := TacticalMap.edge_tiles(key)
 		copy.set_edge(pair[0], pair[1], source.get_edges()[key], source.edge_kind(key))
@@ -177,7 +181,8 @@ func is_symmetric() -> bool:
 		for x in map.width / 2:
 			var p := Vector2i(x, y)
 			var m := mirror_tile(p)
-			if map.get_terrain(p) != map.get_terrain(m) or map.get_object(p) != map.get_object(m) or map.get_object_kind(p) != map.get_object_kind(m):
+			if map.get_terrain(p) != map.get_terrain(m) or map.get_object(p) != map.get_object(m) or map.get_object_kind(p) != map.get_object_kind(m) \
+					or map.has_mine(p) != map.has_mine(m):
 				return false
 	for key: Vector3i in map.get_edges():
 		var pair := TacticalMap.edge_tiles(key)
@@ -198,6 +203,7 @@ func mirror_west_to_east() -> void:
 				var m := mirror_tile(p)
 				map.set_terrain(m, map.get_terrain(p))
 				map.set_object(m, map.get_object(p), map.get_object_kind(p) if map.get_object(p) != Cover.NONE else "")
+				map.set_mine(m, map.has_mine(p))
 	for key: Vector3i in map.get_edges().keys():
 		if _edge_half(key) > 0:
 			var pair := TacticalMap.edge_tiles(key)
@@ -344,6 +350,11 @@ func to_data() -> Dictionary:
 		if EDGE_COVER.get(kind, -1) != map.get_edges()[key]:
 			entry.append("full" if map.get_edges()[key] == Cover.FULL else "half")
 		edges.append(entry)
+	var mines := []
+	for y in map.height:
+		for x in map.width:
+			if map.has_mine(Vector2i(x, y)):
+				mines.append([x, y])
 	var unit_data := []
 	for u in units:
 		var entry := {"team": Battle.TEAM_NAMES[u["team"]], "role": u["role"], "pos": _pair(u["pos"]), "facing": facing_name(u["facing"])}
@@ -356,11 +367,14 @@ func to_data() -> Dictionary:
 	for wave in reinforcements:
 		wave_data.append({"round": wave["round"], "team": Battle.TEAM_NAMES[wave["team"]], "roster": wave["roster"].duplicate(true),
 				"spawns": wave["spawns"].map(func(p: Vector2i) -> Array: return _pair(p))})
+	var map_data := {"width": map.width, "height": map.height, "legend": legend, "terrain": rows, "objects": objects, "edges": edges}
+	if not mines.is_empty():
+		map_data["mines"] = mines
 	return {
 		"format": FORMAT, "version": VERSION,
 		"title": title, "briefing": briefing,
 		"vp_to_win": vp_to_win, "max_rounds": max_rounds, "mirrored": mirrored,
-		"map": {"width": map.width, "height": map.height, "legend": legend, "terrain": rows, "objects": objects, "edges": edges},
+		"map": map_data,
 		"objectives": objectives.map(func(o: Dictionary) -> Dictionary: return {"name": o["name"], "center": _pair(o["center"]), "radius": _number(o["radius"])}),
 		"units": unit_data,
 		"reinforcements": wave_data,
@@ -423,6 +437,10 @@ static func from_data(data: Variant) -> Scenario:
 			cover = Cover.FULL if entry[4] == "full" else Cover.HALF
 		if s.map.in_bounds(p) and s.map.in_bounds(p + side):
 			s.map.set_edge(p, p + side, cover, kind)
+	for entry in m.get("mines", []):
+		var p := Vector2i(int(entry[0]), int(entry[1]))
+		if s.map.in_bounds(p):
+			s.map.set_mine(p, true)
 	for o in data.get("objectives", []):
 		s.objectives.append({"name": str(o.get("name", "Objective")), "center": _vec2(o.get("center", [0, 0])), "radius": float(o.get("radius", 2.5))})
 	for u in data.get("units", []):

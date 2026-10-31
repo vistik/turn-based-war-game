@@ -35,6 +35,12 @@ func object(p: Vector2i, cover: int, kind: String, mirrored := true) -> void:
 		map.set_object(mirror(p), cover, kind)
 
 
+func mine(p: Vector2i, mirrored := true) -> void:
+	map.set_mine(p, true)
+	if mirrored:
+		map.set_mine(mirror(p), true)
+
+
 ## Sets the edge on the dir side of tile p.
 func side(p: Vector2i, dir: Vector2i, cover: int, kind: String, mirrored := true) -> void:
 	map.set_edge(p, p + dir, cover, kind)

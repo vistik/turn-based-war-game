@@ -103,6 +103,11 @@ func show_proposal(suggestion: Dictionary) -> void:
 			"shoot", "aimed_shot", "suppress":
 				view._shot_cmd = suggestion["kind"]
 				view._set_mode(view.Mode.SHOOT)
+			"shoot_object":
+				view._shot_cmd = "shoot"
+				view._set_mode(view.Mode.SHOOT)
+			"clear_mine":
+				view._set_mode(view.Mode.CLEAR_MINE)
 			"grenade":
 				view._set_mode(view.Mode.GRENADE)
 			"smoke":
@@ -427,6 +432,12 @@ func _draw() -> void:
 		"pivot":
 			view._draw_heading(self, u.pos, command["tile"], color)
 			label = "TURN"
+		"shoot_object", "clear_mine":
+			var at: Vector2 = view._center(command["tile"])
+			draw_line(proj.project(from, 0.6), proj.project(at, 0.4), Color(color, 0.8), 2.5)
+			draw_polyline(TerrainPainter.ground_circle(proj, at, 0.5), color, 3.0)
+			label = "BLOW IT UP" if command["cmd"] == "shoot_object" else "CLEAR MINE"
+			label_at = at
 		_:
 			label = command["cmd"].replace("_", " ").to_upper()
 	var top := proj.project(label_at, 1.2) + Vector2(0, -14)

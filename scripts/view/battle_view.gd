@@ -13,7 +13,7 @@ const DrawLayer := preload("res://scripts/view/draw_layer.gd")
 const PANEL_WIDTH := 280.0
 const TOP_BAR_HEIGHT := 50.0
 ## Controls listed by the "?" button in the top bar.
-const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nTab next unit   Enter end turn\n1-0, T, C, Z, X, B: actions (see buttons)\nH: suggest a move (Shift+H: this soldier)\nWASD / arrows / middle drag: pan\nWheel: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\n+ / -: playback speed"
+const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nTab next unit   Enter end turn\n1-0, T, C, Z, X, B, G: actions (see buttons)\nH: suggest a move (Shift+H: this soldier)\nWASD / arrows / middle drag: pan\nWheel: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\n+ / -: playback speed"
 ## UI accent colours: Allied green and German field grey.
 const TEAM_COLORS := [Color("9cc45a"), Color("b8c0c8")]
 const NEUTRAL_COLOR := Color("e8e2cf")
@@ -22,19 +22,18 @@ const DASH_COLOR := Color("f5c542")
 const KEY_ACTIONS := {
 	KEY_1: "shoot", KEY_2: "overwatch", KEY_3: "hunker", KEY_4: "reload", KEY_5: "grenade",
 	KEY_6: "smoke", KEY_7: "set_up", KEY_8: "rally", KEY_9: "medkit", KEY_0: "mortar", KEY_T: "pivot",
-	KEY_C: "crouch", KEY_Z: "prone", KEY_X: "aimed", KEY_B: "suppress",
+	KEY_C: "crouch", KEY_Z: "prone", KEY_X: "aimed", KEY_B: "suppress", KEY_G: "clear_mine",
 	KEY_TAB: "next", KEY_ENTER: "end", KEY_KP_ENTER: "end",
 }
 const ACTION_BUTTONS := [
 	["shoot", "1 Shoot"], ["overwatch", "2 Overwatch"], ["hunker", "3 Hunker"], ["reload", "4 Reload"],
 	["grenade", "5 Grenade"], ["smoke", "6 Smoke"], ["set_up", "7 Set up MG"], ["rally", "8 Rally"],
 	["medkit", "9 Medkit"], ["mortar", "0 Mortar"], ["pivot", "T Turn tank"],
-	["crouch", "C Crouch"], ["prone", "Z Prone"], ["aimed", "X Aimed shot"], ["suppress", "B Suppress"],
+	["crouch", "C Crouch"], ["prone", "Z Prone"], ["aimed", "X Aimed shot"], ["suppress", "B Suppress"], ["clear_mine", "G Clear mine"],
 	["next", "Tab Next"], ["end", "Enter End turn"],
 ]
 const SHOT_LABELS := {"miss": "MISS", "graze": "GRAZE", "hit": "HIT", "crit": "CRITICAL", "suppressing": "SUPPRESSING FIRE"}
 const STANCE_COLOR := "8fd3ff"
-const ROLE_TAGS := {"Officer": "Lt", "Rifleman": "Rfl", "Medic": "Med", "SMG": "SMG", "MG": "MG", "Sniper": "Snp", "Mortar": "Mtr", "AT": "AT", "Tank": "Tank"}
 ## Playback speeds; 0 means instant.
 const SPEEDS := [1.0, 2.0, 4.0, 0.0]
 const SPEED_NAMES := ["1x", "2x", "4x", "Instant"]
@@ -52,7 +51,7 @@ const TOP_Z := 4000
 ## Chunks repainted per frame, to spread the cost of a full repaint.
 const CHUNK_BUDGET := 3
 
-enum Mode { MOVE, SHOOT, GRENADE, SMOKE, MEDKIT, MORTAR, PIVOT }
+enum Mode { MOVE, SHOOT, GRENADE, SMOKE, MEDKIT, MORTAR, PIVOT, CLEAR_MINE }
 
 var battle: Battle
 ## Per team: null for a human player, otherwise the TacticalAI playing it.
@@ -136,6 +135,7 @@ func _ready() -> void:
 	if GameSession.battle == null:
 		# Started straight from the editor: a quick skirmish against the AI.
 		GameSession.campaign = null
+		GameSession.war = null
 		GameSession.start_battle(NormandyScenario.build(), [false, true], "Normandy village")
 	battle = GameSession.battle
 	_proj = ViewProjection.new(Vector2(battle.map.width, battle.map.height))
@@ -204,7 +204,7 @@ func _quit_to_menu() -> void:
 		_save()
 	Net.close()
 	GameSession.battle = null
-	GameSession.show_campaign = GameSession.campaign != null
+	GameSession.show_campaign = GameSession.campaign != null or GameSession.war != null
 	get_tree().change_scene_to_file(GameSession.MENU_SCENE)
 
 
@@ -231,7 +231,7 @@ func _process(delta: float) -> void:
 	_update_prop_fading()
 	for node: Node2D in _smoke_nodes.values():
 		node.queue_redraw()
-	if not battle.strikes.is_empty():
+	if not battle.strikes.is_empty() or not battle.map.get_fires().is_empty():
 		_overlay_layer.queue_redraw()
 	if not busy and _overlay_state == "":
 		_set_hover(_mouse_tile())
@@ -342,8 +342,16 @@ func _on_click(tile: Vector2i) -> void:
 		Mode.SHOOT:
 			if u != null and _can_fire_at(u) == "":
 				_command({"cmd": _shot_cmd, "unit": selected.id, "target": u.id})
+			elif u == null and _shot_cmd == "shoot" and battle.map.is_explosive(tile):
+				err = battle.can_shoot_object(selected, tile)
+				if err == "":
+					_command({"cmd": "shoot_object", "unit": selected.id, "tile": tile})
 			elif own:
 				_select(u)
+		Mode.CLEAR_MINE:
+			err = battle.can_clear_mine(selected, tile)
+			if err == "":
+				_command({"cmd": "clear_mine", "unit": selected.id, "tile": tile})
 		Mode.GRENADE:
 			err = battle.can_throw_grenade(selected, tile)
 			if err == "":
@@ -413,11 +421,17 @@ func _on_action(action: String) -> void:
 				err = "This weapon can't lay down suppressive fire"
 			if err == "" and action == "suppress" and selected.ammo < CombatRules.SUPPRESSIVE_FIRE_AMMO:
 				err = "Needs %d rounds, reload first" % CombatRules.SUPPRESSIVE_FIRE_AMMO
-			if err == "" and battle.visible_enemies(selected).is_empty():
+			if err == "" and battle.visible_enemies(selected).is_empty() and (action != "shoot" or _explosives_in_sight(selected).is_empty()):
 				err = "No enemies in line of sight"
 			if err == "":
 				_shot_cmd = {"shoot": "shoot", "aimed": "aimed_shot", "suppress": "suppress"}[action]
 				_set_mode(Mode.SHOOT)
+		"clear_mine":
+			err = battle.can_act(selected)
+			if err == "" and _clearable_mines(selected).is_empty():
+				err = "No spotted mine next to this soldier"
+			if err == "":
+				_set_mode(Mode.CLEAR_MINE)
 		"crouch", "prone":
 			var stance := _stance_for(action)
 			err = battle.can_change_stance(selected, stance)
@@ -495,12 +509,14 @@ func _dismiss_overlay() -> void:
 		Net.close()
 		if GameSession.campaign != null:
 			GameSession.campaign.complete_mission(battle)
+		if GameSession.war != null:
+			GameSession.war.complete_map(battle)
 		GameSession.battle = null
 		if not _online:
 			GameSession.save_game()
 		else:
 			GameSession.end_online()
-		GameSession.show_campaign = GameSession.campaign != null
+		GameSession.show_campaign = GameSession.campaign != null or GameSession.war != null
 		get_tree().change_scene_to_file(GameSession.MENU_SCENE)
 		return
 	_overlay_state = ""
@@ -803,6 +819,30 @@ func _play_event(e: Dictionary) -> void:
 			await _wait(0.4)
 		"smoke_clear":
 			_log_line("[color=#999]The smoke clears.[/color]")
+		"detonation":
+			_float(_center(e["tile"]), "KABOOM!", Color("ff8a3d"))
+			_log_line("[color=#ff9b6b]The %s %s![/color]" % [_object_name(e["kind"]).to_lower(), "go up" if e["kind"] == "fuel" else "goes up"])
+		"fire":
+			_log_line("[color=#ffb84d]Fire spreads over %d tiles.[/color]" % e["tiles"].size())
+		"fire_out":
+			_log_line("[color=#999]The fire burns out.[/color]")
+		"mine":
+			var u := battle.get_unit(e["unit"])
+			_float(_center(e["tile"]), "MINE!", Color("ff3b3b"))
+			_log_line("[color=#ff6b6b]%s steps on a mine![/color]" % u.name)
+		"mines_spotted":
+			if _view_team() == -1 or _view_team() == e["team"]:
+				for tile: Vector2i in e["tiles"]:
+					_float(_center(tile), "Mine", Color("e7d9a8"))
+				_log_line("%s spots %d mine%s." % [battle.get_unit(e["unit"]).name, e["tiles"].size(), "" if e["tiles"].size() == 1 else "s"])
+				await _wait(0.3)
+		"mine_cleared":
+			var u := battle.get_unit(e["unit"])
+			_float(_center(e["tile"]), "Cleared", Color("8fe08a"))
+			_log_line("%s clears a mine." % u.name)
+			await _wait(0.3)
+		"object_shot":
+			await _play_object_shot(e)
 		"mortar_fire":
 			await _play_mortar_fire(e)
 		"strike":
@@ -970,6 +1010,55 @@ func _play_throw(e: Dictionary) -> void:
 		_log_line("%s's %s lands %.1f tiles off target." % [u.name, "grenade" if e["kind"] == "grenade" else "smoke grenade", off])
 
 
+## A shot at fuel drums or an oil tank: a tracer to it, then either the blast (its own events) or a miss.
+func _play_object_shot(e: Dictionary) -> void:
+	var u := battle.get_unit(e["unit"])
+	var to := _center(e["tile"])
+	_revealed[u.id] = true
+	_facing[u.id] = (to - _display_pos[u.id]).normalized()
+	var from := _proj.project(_display_pos[u.id], 0.7)
+	_effects.append({"kind": "muzzle", "at": from, "age": 0.0, "life": 0.1})
+	_effects.append({"kind": "tracer", "from": from, "to": _proj.project(to, 0.4), "age": 0.0, "life": 0.25})
+	await _wait(0.25)
+	if not e["hit"]:
+		_float(to, "MISS (%d%%)" % e["chance"], Color.WHITE)
+	_log_line("%s shoots at the %s: %s (%d%%)" % [u.name, _object_name(e["kind"]).to_lower(), "hit" if e["hit"] else "miss", e["chance"]])
+	await _wait(0.2)
+
+
+static func _object_name(kind: String) -> String:
+	return {"fuel": "Fuel drums", "oil_tank": "Oil tank"}.get(kind, kind.capitalize())
+
+
+## Explosive objects the unit could shoot at right now.
+func _explosives_in_sight(u: Unit) -> Array[Vector2i]:
+	var result: Array[Vector2i] = []
+	if u == null:
+		return result
+	var r := ceili(u.current_sight())
+	for y in range(u.pos.y - r, u.pos.y + r + 1):
+		for x in range(u.pos.x - r, u.pos.x + r + 1):
+			var p := Vector2i(x, y)
+			if battle.map.in_bounds(p) and battle.map.is_explosive(p) and battle.can_shoot_object(u, p) == "":
+				result.append(p)
+	return result
+
+
+## Spotted mines next to the unit that it could lift.
+func _clearable_mines(u: Unit) -> Array[Vector2i]:
+	var result: Array[Vector2i] = []
+	for d: Vector2i in TacticalMap.DIRS8:
+		if battle.can_clear_mine(u, u.pos + d) == "":
+			result.append(u.pos + d)
+	return result
+
+
+## Whether the shown side knows about the mine on p (everyone does when watching AI vs AI).
+func _mine_known(p: Vector2i) -> bool:
+	var view := _view_team()
+	return view == -1 or battle.mines_known_to(view).has(p)
+
+
 func _play_mortar_fire(e: Dictionary) -> void:
 	var u := battle.get_unit(e["unit"])
 	var target := _center(e["target"])
@@ -1124,6 +1213,7 @@ func _update_panel() -> void:
 		"pivot": s != null and s.vehicle, "hunker": s == null or not s.vehicle,
 		"crouch": s == null or not s.vehicle, "prone": s == null or not s.vehicle,
 		"suppress": s == null or not (s.vehicle or s.weapon.anti_tank),
+		"clear_mine": s != null and not s.vehicle and not _clearable_mines(s).is_empty(),
 	}
 	for action: String in visible:
 		_buttons[action].visible = visible[action]
@@ -1181,7 +1271,9 @@ func _describe_unit(u: Unit) -> String:
 		Mode.SHOOT when _shot_cmd == "suppress":
 			lines.append("[color=#ffb84d]Suppressive fire (%d rounds, no damage): click a target. Right click cancels.[/color]" % CombatRules.SUPPRESSIVE_FIRE_AMMO)
 		Mode.SHOOT:
-			lines.append("[color=#ff9b8a]Shooting: click a target. Right click cancels.[/color]")
+			lines.append("[color=#ff9b8a]Shooting: click a target, or fuel drums / an oil tank to blow them up. Right click cancels.[/color]")
+		Mode.CLEAR_MINE:
+			lines.append("[color=#e7d9a8]Clear mine: click a spotted mine next to the soldier (1 action). Right click cancels.[/color]")
 		Mode.GRENADE:
 			lines.append("[color=#ffb84d]Grenade: click a tile in range. Right click cancels.[/color]")
 		Mode.SMOKE:
@@ -1201,6 +1293,12 @@ func _update_target_info() -> void:
 	if selected != null and map.in_bounds(hover) and _is_human_turn():
 		var target := battle.unit_at(hover)
 		match mode:
+			Mode.MOVE, Mode.SHOOT when target == null and mode == Mode.SHOOT and _shot_cmd == "shoot" and map.is_explosive(hover):
+				var kind := map.get_object_kind(hover)
+				var spec: Dictionary = CombatRules.EXPLOSIVES[kind]
+				text = "[b]%s[/b]  %d%% to hit\nBlows up: %d-%d damage within %.1f tiles, sets the ground alight, destroys cover.\nEnds the turn." % [
+					_object_name(kind), CombatRules.object_odds(selected, selected.pos, hover, kind), spec["damage_min"], spec["damage_max"], spec["radius"]]
+				text += _error_line(battle.can_shoot_object(selected, hover))
 			Mode.MOVE, Mode.SHOOT:
 				if target != null and target.team != selected.team and _seen_units.has(target.id) and battle.can_see(selected, target):
 					if mode == Mode.SHOOT and _shot_cmd == "suppress":
@@ -1321,6 +1419,17 @@ func _describe_tile(p: Vector2i) -> String:
 		lines.append("Cover: " + (", ".join(covers) if not covers.is_empty() else "none"))
 	if map.has_smoke(p):
 		lines.append("[color=#c8d0d8]Smoke: blocks sight[/color]")
+	if map.is_explosive(p):
+		lines.append("[color=#ff9b6b]Explosive: blows up when shot, caught in a blast or run over[/color]")
+	if map.has_fire(p):
+		lines.append("[color=#ffb84d]Burning: no one can enter; burns anyone in it[/color]")
+	if map.has_mine(p) and _mine_known(p):
+		lines.append("[color=#ff6b6b]Mine (spotted): G to clear from next to it[/color]")
+	match map.get_terrain(p):
+		TacticalMap.Terrain.WHEAT:
+			lines.append("Hides soldiers at range; trampled flat when walked through")
+		TacticalMap.Terrain.WIRE:
+			lines.append("Slow to cross on foot; tanks and explosions flatten it")
 	for objective in battle.objectives:
 		if (Vector2(p) + Vector2(0.5, 0.5)).distance_to(objective["center"]) <= objective["radius"]:
 			lines.append("Objective: %s" % objective["name"])
@@ -1780,6 +1889,18 @@ func _draw() -> void:
 
 
 func _paint_ground_overlays(c: CanvasItem) -> void:
+	for p: Vector2i in battle.map.get_fires():
+		TerrainPainter.draw_fire(c, _proj, p, _time)
+	for p: Vector2i in battle.map.get_mines():
+		if _mine_known(p):
+			TerrainPainter.draw_mine(c, _proj, p)
+	if not busy and selected != null and _is_human_turn():
+		if mode == Mode.SHOOT and _shot_cmd == "shoot":
+			for p in _explosives_in_sight(selected):
+				c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(p), 0.5), Color("ff8a3d"), 2.0)
+		elif mode == Mode.CLEAR_MINE:
+			for p in _clearable_mines(selected):
+				c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(p), 0.4), Color("e7d9a8"), 2.5)
 	for objective in battle.objectives:
 		var owner: int = objective["owner"]
 		var color: Color = TEAM_COLORS[owner] if owner != -1 else NEUTRAL_COLOR
@@ -1911,6 +2032,8 @@ func _paint_unit(c: CanvasItem, u: Unit) -> void:
 	var pose := _pose(u)
 	if u.vehicle:
 		c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, g + TerrainPainter.LIGHT * 0.3, 0.55, false), Color(0, 0, 0, 0.3))
+		if pose["death"] == 0.0:
+			c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.62), Color(TEAM_COLORS[u.team], 0.55), 2.0)
 		if u == selected:
 			c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.65), Color.WHITE, 2.5)
 		if mode == Mode.SHOOT and _target_odds.has(u.id):
@@ -1922,6 +2045,8 @@ func _paint_unit(c: CanvasItem, u: Unit) -> void:
 		c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, g - facing * 0.3, 0.05 + 0.25 * pose["death"], false), Color(0.33, 0.03, 0.03, 0.7))
 	else:
 		c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, g + TerrainPainter.LIGHT * 0.25, 0.26, false), Color(0, 0, 0, 0.3))
+		# A ring in the side's colour under every soldier, so the sides read apart at a glance.
+		c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.34), Color(TEAM_COLORS[u.team], 0.6), 2.0)
 		if u == selected:
 			c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.42), Color.WHITE, 2.5)
 		if mode == Mode.SHOOT and _target_odds.has(u.id):
@@ -1968,7 +2093,7 @@ func _draw_markers() -> void:
 			var bar_color := Color("ff5544") if suppression >= Unit.PINNED_AT else (Color("ffa040") if suppression >= Unit.SUPPRESSED_AT else Color("c8b060"))
 			draw_rect(Rect2(top + Vector2(-13, 4), Vector2(26.0 * suppression / 100.0, 2)), bar_color)
 		draw_rect(Rect2(top + Vector2(-14, 8), Vector2(28, 2)), TEAM_COLORS[u.team])
-		draw_string(_font, top + Vector2(-44, 7), ROLE_TAGS.get(u.role, ""), HORIZONTAL_ALIGNMENT_RIGHT, 28, 10, Color(TEAM_COLORS[u.team], 0.9))
+		RoleIcons.draw_badge(self, top + Vector2(-24, 4), u.role, TEAM_COLORS[u.team])
 		if u.team == battle.current_team and _is_human_turn():
 			for i in u.actions:
 				draw_circle(top + Vector2(19 + i * 6, 3), 2.5, Color("f5c542"))

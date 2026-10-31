@@ -25,6 +25,13 @@ const DEPLOYMENTS := [
 ## [label, Allies are AI, Germany is AI, side an agent plays over the agent link (-1: none)]
 const SKIRMISH_MODES := [["Play vs AI", false, true, -1], ["Hotseat", false, false, -1], ["Watch AI vs AI", true, true, -1],
 		["Agent vs AI", false, true, 0], ["Me vs agent", false, false, 1]]
+const SKIRMISH_MODE_HINTS := [
+	"You play the Allies against the AI.",
+	"Two players on this computer take turns; the screen hides each side's view from the other.",
+	"Sit back and watch the AI fight itself.",
+	"An AI agent (such as Claude Code) plays the Allies against the AI through the agent link; the battle screen shows how to connect it. See docs/MCP.md.",
+	"You play the Allies against an AI agent connected through the agent link.",
+]
 
 var _page: Control
 var _map_choice: OptionButton
@@ -34,6 +41,10 @@ var _recruit_choice: OptionButton
 ## Per side, the skirmish deployment picked (an index into DEPLOYMENTS), kept while the game runs.
 var _deploy_choices: Array[OptionButton] = []
 static var _last_deployments := [0, 0]
+## The map, skirmish mode and online port picked last, kept while the game runs.
+static var _last_map := 0
+static var _last_mode := 0
+static var _last_port := Net.DEFAULT_PORT
 ## The orders being written on the two-player campaign's orders page.
 var _order_side := 0
 var _order_counts := {}
@@ -82,35 +93,83 @@ func _ready() -> void:
 
 # --- Main menu ---
 
+## The first page: what's saved to carry on with, then one button per way to play. Each opens its own page
+## with that mode's options.
 func _show_main() -> void:
-	var box := _new_page(560)
+	var box := _new_page(480)
 	_title(box, "Normandy 1944", 48)
 	_text(box, "Squad tactics in the bocage, June 1944. Allies against Germany.", MUTED, 16, true)
-	_gap(box, 16)
+	_gap(box, 12)
+	var saves := _saved_games()
+	for entry: Array in saves:
+		_button(box, entry[0], entry[1], true)
+	if not saves.is_empty():
+		_gap(box, 8)
+	_menu_button(box, "Campaign", "Five missions with one squad", _show_campaign_menu)
+	_menu_button(box, "Two-player campaign", "Spend supply over 3 to 5 maps", _show_war_setup)
+	_menu_button(box, "Skirmish", "One battle against the AI, a friend or an agent", _show_skirmish)
+	_menu_button(box, "Online", "Play another computer directly", _show_online)
+	_gap(box, 8)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	box.add_child(row)
+	for spec: Array in [["Replays", _show_replays], ["Map editor", func() -> void: get_tree().change_scene_to_file("res://scenes/editor.tscn")],
+			["Settings", _show_settings], ["Quit", get_tree().quit]]:
+		_button(row, spec[0], spec[1]).size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
+
+## [label, action] for each saved game that can be continued.
+func _saved_games() -> Array:
+	var result := []
 	var campaign_save := GameSession.peek("campaign")
 	if not campaign_save.is_empty():
 		var saved := Campaign.from_dict(campaign_save["campaign"])
-		var label := "Continue campaign: %s" % ("in battle" if not campaign_save["battle"].is_empty() else "mission %d of %d" % [mini(saved.mission_index + 1, Campaign.MISSIONS.size()), Campaign.MISSIONS.size()])
-		_button(box, label, _continue.bind("campaign"), true)
-	var skirmish_save := GameSession.peek("skirmish")
-	if not skirmish_save.is_empty():
-		_button(box, "Continue skirmish: %s" % skirmish_save["title"], _continue.bind("skirmish"), true)
-
-	_section(box, "Campaign")
-	_text(box, "Five missions from the beaches to Caen with one squad. Soldiers gain rank, get hurt and die for good.", MUTED, 14, true)
-	_button(box, "New campaign", _new_campaign, true)
-
-	_section(box, "Two-player campaign")
-	_text(box, "3 to 5 maps worth different points, one pool of supply each. Before every map both sides secretly commit supply, buy units and pick a deployment.", MUTED, 14, true)
+		result.append(["Continue campaign: %s" % ("in battle" if not campaign_save["battle"].is_empty() else "mission %d of %d" % [mini(saved.mission_index + 1, Campaign.MISSIONS.size()), Campaign.MISSIONS.size()]), _continue.bind("campaign")])
 	var war_save := GameSession.peek("war")
 	if not war_save.is_empty():
 		var saved_war := WarCampaign.from_dict(war_save["war"])
 		var where := "in battle" if not war_save["battle"].is_empty() else ("finished" if saved_war.is_over() else "map %d of %d" % [saved_war.current + 1, saved_war.maps.size()])
-		_button(box, "Continue two-player campaign: %s" % where, _continue.bind("war"), true)
-	_button(box, "New two-player campaign", _show_war_setup)
+		result.append(["Continue two-player campaign: %s" % where, _continue.bind("war")])
+	var skirmish_save := GameSession.peek("skirmish")
+	if not skirmish_save.is_empty():
+		result.append(["Continue skirmish: %s" % skirmish_save["title"], _continue.bind("skirmish")])
+	var online_save := GameSession.peek("online")
+	if not online_save.is_empty():
+		result.append(["Continue online game: %s, round %d" % [online_save["title"], online_save["round"]], _show_online])
+	return result
 
-	_section(box, "Skirmish")
+
+## A large menu button with a one-line description under its name.
+func _menu_button(parent: Control, text: String, hint: String, action: Callable) -> void:
+	var button := _button(parent, "", action)
+	button.custom_minimum_size = Vector2(0, 58)
+	var labels := VBoxContainer.new()
+	labels.set_anchors_preset(Control.PRESET_FULL_RECT)
+	labels.alignment = BoxContainer.ALIGNMENT_CENTER
+	labels.add_theme_constant_override("separation", -2)
+	labels.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	button.add_child(labels)
+	for line: Array in [[text, UITheme.PAPER, 20], [hint, MUTED, 13]]:
+		var label := _text(labels, line[0], line[1], line[2])
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+
+func _show_campaign_menu() -> void:
+	var box := _new_page(480)
+	_title(box, "Campaign", 40)
+	_text(box, "Five missions from the beaches to Caen with one squad. Soldiers gain rank, get hurt and die for good.", MUTED, 15, true)
+	_gap(box, 8)
+	var campaign_save := GameSession.peek("campaign")
+	if not campaign_save.is_empty():
+		_button(box, "Continue campaign", _continue.bind("campaign"), true)
+	_button(box, "New campaign" + (" (replaces the saved one)" if not campaign_save.is_empty() else ""), _new_campaign, campaign_save.is_empty())
+	_gap(box, 8)
+	_button(box, "Back", _show_main)
+
+
+## The map list: the built-in skirmish maps, then the scenarios on disk.
+func _add_map_choice(parent: Control) -> void:
 	_map_choice = OptionButton.new()
 	for map_spec: Array in SKIRMISH_MAPS:
 		_map_choice.add_item(map_spec[0])
@@ -118,82 +177,126 @@ func _show_main() -> void:
 	for entry in Scenario.list_files():
 		_map_choice.add_item("Scenario: %s" % entry["title"])
 		_scenario_paths.append(entry["path"])
+	_map_choice.selected = clampi(_last_map, 0, _map_choice.item_count - 1)
+	_map_choice.item_selected.connect(func(index: int) -> void: _last_map = index)
 	_map_choice.custom_minimum_size = Vector2(0, 40)
-	box.add_child(_map_choice)
+	_map_choice.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	parent.add_child(_map_choice)
+
+
+## A label and a control side by side.
+func _field(parent: Control, label: String, control: Control) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	parent.add_child(row)
+	_text(row, label, MUTED, 15).custom_minimum_size = Vector2(90, 0)
+	control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(control)
+
+
+func _show_skirmish() -> void:
+	var box := _new_page(520)
+	_title(box, "Skirmish", 40)
+	var map_row := HBoxContainer.new()
+	_add_map_choice(map_row)
+	_field(box, "Map", map_row)
+	var opponent := OptionButton.new()
+	for mode: Array in SKIRMISH_MODES:
+		opponent.add_item(mode[0])
+	opponent.selected = _last_mode
+	opponent.item_selected.connect(func(index: int) -> void: _last_mode = index)
+	_field(box, "Mode", opponent)
+	var mode_hint := _text(box, "", MUTED, 13, true)
+	var describe := func(index: int) -> void:
+		mode_hint.text = SKIRMISH_MODE_HINTS[index]
+	opponent.item_selected.connect(describe)
+	describe.call(opponent.selected)
+
+	# Deployments are folded away: most battles use the usual spawns.
+	var deploy_toggle := CheckButton.new()
+	deploy_toggle.text = "Choose deployments"
+	deploy_toggle.button_pressed = _last_deployments != [0, 0]
+	box.add_child(deploy_toggle)
+	var deploy_box := VBoxContainer.new()
+	deploy_box.add_theme_constant_override("separation", 6)
+	box.add_child(deploy_box)
 	_deploy_choices.clear()
 	for side in 2:
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 8)
-		box.add_child(row)
-		var label := _text(row, Battle.TEAM_NAMES[side], ALLIED if side == 0 else GERMAN, 14)
-		label.custom_minimum_size = Vector2(70, 0)
 		var choice := OptionButton.new()
 		for entry: Array in DEPLOYMENTS:
 			choice.add_item(entry[0])
 		choice.selected = _last_deployments[side]
-		choice.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		choice.item_selected.connect(func(index: int) -> void: _last_deployments[side] = index)
-		row.add_child(choice)
+		_field(deploy_box, Battle.TEAM_NAMES[side], choice)
 		_deploy_choices.append(choice)
-	_text(box, "Deployment: balanced along your edge or massed on the left or right flank (seen from your own edge), offensive (further forward) or defensive (further back, behind sandbags, crouched). Not for scenarios, which place their own units.", MUTED, 13, true)
-	var modes := HBoxContainer.new()
-	modes.add_theme_constant_override("separation", 8)
-	box.add_child(modes)
-	var agent_modes := HBoxContainer.new()
-	agent_modes.add_theme_constant_override("separation", 8)
-	for i in SKIRMISH_MODES.size():
-		var button := _button(agent_modes if SKIRMISH_MODES[i][3] != -1 else modes, SKIRMISH_MODES[i][0], _start_skirmish.bind(i))
-		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_text(box, "An AI agent (such as Claude Code) plays a whole side through the agent link, on this computer only. The battle screen shows the address and token to connect it; see docs/MCP.md.", MUTED, 13, true)
-	box.add_child(agent_modes)
-	_button(box, "Map and scenario editor", func() -> void: get_tree().change_scene_to_file("res://scenes/editor.tscn"))
+	_text(deploy_box, "Balanced along your edge or massed on a flank (seen from your own edge); offensive deploys further forward, defensive further back behind sandbags. Scenarios place their own units.", MUTED, 13, true)
+	deploy_box.visible = deploy_toggle.button_pressed
+	deploy_toggle.toggled.connect(func(on: bool) -> void:
+		deploy_box.visible = on
+		if not on:
+			for side in 2:
+				_deploy_choices[side].selected = 0
+				_last_deployments[side] = 0)
+	_gap(box, 8)
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 10)
+	box.add_child(buttons)
+	_button(buttons, "Start", func() -> void: _start_skirmish(opponent.selected), true).size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_button(buttons, "Back", _show_main)
 
-	_section(box, "Online")
-	_text(box, "Play another computer directly, at home or over the internet, no server needed. The host picks the map above and plays the Allies. Both games check after every order that they still agree.", MUTED, 14, true)
-	var password_row := HBoxContainer.new()
-	password_row.add_theme_constant_override("separation", 8)
-	box.add_child(password_row)
-	_text(password_row, "Password", MUTED, 14)
+
+func _show_online() -> void:
+	var box := _new_page(520)
+	_title(box, "Online", 40)
+	_text(box, "Play another computer directly, at home or over the internet, no server needed. Both games check after every order that they still agree.", MUTED, 14, true)
 	_password = LineEdit.new()
 	_password.secret = true
 	_password.text = _last_password
-	_password.placeholder_text = "Agree one with your opponent; both type the same"
-	_password.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_password.placeholder_text = "Agree one with your opponent"
+	var password_row := HBoxContainer.new()
+	password_row.add_theme_constant_override("separation", 8)
 	password_row.add_child(_password)
+	_password.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var show_password := CheckBox.new()
 	show_password.text = "Show"
 	show_password.toggled.connect(func(on: bool) -> void: _password.secret = not on)
 	password_row.add_child(show_password)
-	var host_row := HBoxContainer.new()
-	host_row.add_theme_constant_override("separation", 8)
-	box.add_child(host_row)
-	_text(host_row, "Port", MUTED, 14)
+	_field(box, "Password", password_row)
 	_port = LineEdit.new()
-	_port.text = str(Net.DEFAULT_PORT)
-	_port.custom_minimum_size = Vector2(90, 0)
-	host_row.add_child(_port)
-	var host_button := _button(host_row, "Host game", _host)
-	host_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var join_row := HBoxContainer.new()
-	join_row.add_theme_constant_override("separation", 8)
-	box.add_child(join_row)
-	_address = LineEdit.new()
-	_address.placeholder_text = "Host address, e.g. 192.168.1.20 or 203.0.113.7:24944"
-	_address.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	join_row.add_child(_address)
-	_button(join_row, "Join game", _join)
+	_port.text = str(_last_port)
+	_port.text_changed.connect(func(text: String) -> void: _last_port = text.to_int() if text.is_valid_int() else Net.DEFAULT_PORT)
+
 	var online_save := GameSession.peek("online")
 	if not online_save.is_empty():
-		var side: String = Battle.TEAM_NAMES[online_save["team"]]
-		_button(box, "Continue online game: %s, round %d, as %s" % [online_save["title"], online_save["round"], side], _host_resume, true)
-		var hint := "Hosts your saved game on the port above; your opponent (%s) joins as usual and keeps their side. Or join them if they host it." % online_save["opponent"]
-		_text(box, hint, MUTED, 14, true)
-		if not online_save["hosted"]:
-			_address.text = online_save["opponent"]
-	_gap(box, 12)
-	_button(box, "Replays", _show_replays)
-	_button(box, "Settings", _show_settings)
-	_button(box, "Quit", get_tree().quit)
+		_section(box, "Your saved game")
+		_text(box, "%s, round %d, as %s, against %s. Host it again and your opponent joins as usual, or join them if they host it." % [
+				online_save["title"], online_save["round"], Battle.TEAM_NAMES[online_save["team"]], online_save["opponent"]], MUTED, 14, true)
+		_button(box, "Continue: host the saved game", _host_resume, true)
+
+	_section(box, "Host a new game")
+	_text(box, "You play the Allies on the map you pick.", MUTED, 14, true)
+	var map_row := HBoxContainer.new()
+	_add_map_choice(map_row)
+	_field(box, "Map", map_row)
+	_button(box, "Host game", _host, online_save.is_empty())
+
+	_section(box, "Join a game")
+	_address = LineEdit.new()
+	_address.placeholder_text = "The address the host's game shows"
+	if not online_save.is_empty() and not online_save["hosted"]:
+		_address.text = online_save["opponent"]
+	var join_row := HBoxContainer.new()
+	join_row.add_theme_constant_override("separation", 8)
+	join_row.add_child(_address)
+	_address.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_button(join_row, "Join", _join)
+	_field(box, "Address", join_row)
+
+	_gap(box, 8)
+	_field(box, "Port", _port)
+	_text(box, "UDP port to host on (%d unless you need another). Joining uses the port in the address, or this one." % Net.DEFAULT_PORT, MUTED, 12, true)
+	_gap(box, 8)
+	_button(box, "Back", _show_main)
 
 
 func _continue(slot: String) -> void:
@@ -325,7 +428,7 @@ func _show_host_page(what: String, port: int) -> void:
 	_gap(box, 12)
 	_button(box, "Cancel", func() -> void:
 		Net.close()
-		_show_main())
+		_show_online())
 
 
 func _join() -> void:
@@ -369,7 +472,7 @@ func _join() -> void:
 		_gap(box, 12)
 		_button(box, "Cancel", func() -> void:
 			Net.close()
-			_show_main())
+			_show_online())
 	else:
 		_show_net_page("Connecting to %s:%d..." % [host, port], "Waiting for the host. If nothing happens, check the address and port, and that the host clicked Host game.", "Cancel")
 
@@ -382,7 +485,7 @@ func _show_net_page(title: String, text: String, button: String) -> void:
 	_gap(box, 12)
 	_button(box, button, func() -> void:
 		Net.close()
-		_show_main())
+		_show_online())
 
 
 func _on_peer_joined() -> void:
@@ -438,7 +541,7 @@ func _on_resume_offered(offer: Dictionary) -> void:
 	_button(box, "Continue from the host's save", _accept_resume.bind(offer), true)
 	_button(box, "Leave", func() -> void:
 		Net.decline_resume()
-		_show_main())
+		_show_online())
 
 
 func _accept_resume(offer: Dictionary) -> void:
@@ -681,10 +784,13 @@ func _show_war_setup() -> void:
 	opponent.add_item("AI")
 	row.add_child(opponent)
 	_gap(box, 8)
+	var saved := not GameSession.peek("war").is_empty()
+	if saved:
+		_button(box, "Continue the saved campaign", _continue.bind("war"), true)
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 10)
 	box.add_child(buttons)
-	_button(buttons, "Start", func() -> void: _new_war(WarCampaign.MAP_COUNTS[count.selected], opponent.selected == 1), true)
+	_button(buttons, "Start a new one" + (" (replaces the saved one)" if saved else ""), func() -> void: _new_war(WarCampaign.MAP_COUNTS[count.selected], opponent.selected == 1), not saved)
 	_button(buttons, "Back", _show_main)
 
 

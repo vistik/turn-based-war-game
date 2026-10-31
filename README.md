@@ -145,14 +145,22 @@ Godot --path .                 # play from the project
 Godot --path . --editor        # open in the Godot editor
 ```
 
-**macOS app:**
+**macOS and Windows builds, and GitHub releases:**
 
 ```sh
-Godot --headless --path . --export-release "macOS" "build/Normandy 1944.app"
-codesign --force --deep -s - "build/Normandy 1944.app"
+tools/release.sh --build-only   # build/Normandy 1944.app, build/windows/Normandy 1944.exe and both zips in build/release/
+tools/release.sh --draft        # build, then create a draft GitHub release v<version> with both zips
+tools/release.sh                # build, then publish the release
 ```
 
-Run the export command once first so the export templates for 4.7 are installed. To try online play on one
+The version is `config/version` in `project.godot`: bump it and commit before releasing. To publish, the
+commit has to be pushed, the tree clean, and the [GitHub CLI](https://cli.github.com) logged in. The script
+finds Godot in `~/Downloads` or `/Applications` (or set `GODOT=`) and downloads the export templates it's
+missing the first time (about 1 GB). The Mac app is universal and ad-hoc signed but not notarized, so first
+open it with right-click > Open. The Windows build is one 64-bit `.exe` with the game inside, unsigned, so
+SmartScreen asks once (More info > Run anyway).
+
+To try online play on one
 computer, open the app twice (`open -n "build/Normandy 1944.app"`), type the same password in both, host in
 one and join `127.0.0.1` in the other. Players behind the same router always use the "On your network"
 address: most routers won't pass a connection to their own internet address back inside, and the joining

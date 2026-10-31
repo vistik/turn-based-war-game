@@ -2,8 +2,9 @@ class_name Battle
 extends RefCounted
 ## The combat engine. Owns all battle state and applies the rules.
 ## Commands validate, change state and return event dictionaries for the view to play back.
-## Event types: move, pivot, shot, damage, death, explosion, smoke, smoke_clear, mortar_fire, strike,
+## Event types: move, pivot, shot, throw, damage, death, explosion, smoke, smoke_clear, mortar_fire, strike,
 ## suppression, status, heal, objective, score, reinforcements, turn, game_over.
+## A "shot" that went astray carries "stray" (the tile it ended up on) and, if it hit someone, "stray_unit".
 ##
 ## Every command can also be given as data through execute(), which is how AI moves, saved replays
 ## and the online opponent's moves are applied: {"cmd": "move", "unit": id, "tile": Vector2i}, etc.
@@ -12,6 +13,9 @@ const TEAM_COUNT := 2
 const TEAM_NAMES := ["Allies", "Germany"]
 ## `winner` value when the game ends level.
 const DRAW := 2
+## throw_landings() samples a grenade's spread on this many rings of this many points.
+const THROW_SAMPLE_RINGS := 4
+const THROW_SAMPLE_SPOKES := 8
 
 var map: TacticalMap
 var units: Array[Unit] = []
@@ -162,6 +166,109 @@ func officer_near(u: Unit) -> bool:
 ## Where a mortar shell could land when aimed at target from origin.
 static func mortar_scatter(origin: Vector2i, target: Vector2i) -> float:
 	return Vector2(origin).distance_to(Vector2(target)) * CombatRules.MORTAR_SCATTER
+
+
+## Where a grenade aimed at `tile` with this scatter (CombatRules.throw_scatter) may land: {tile: probability}.
+## Samples the same spread throw_grenade rolls, walls included, so previews and the AI match the dice.
+func throw_landings(tile: Vector2i, scatter: float) -> Dictionary:
+	if scatter <= 0.0:
+		return {tile: 1.0}
+	var result := {}
+	var weight := 1.0 / (THROW_SAMPLE_RINGS * THROW_SAMPLE_SPOKES)
+	for ring in THROW_SAMPLE_RINGS:
+		for spoke in THROW_SAMPLE_SPOKES:
+			var offset := Vector2.from_angle((spoke + 0.5) / THROW_SAMPLE_SPOKES * TAU) * (ring + 0.5) / THROW_SAMPLE_RINGS * scatter
+			var spot := _throw_landing(tile, offset, scatter)
+			result[spot] = result.get(spot, 0.0) + weight
+	return result
+
+
+## Tiles a missed rocket or tank shell fired from `from` at `target` may land on (see CombatRules.STRAY_*).
+func stray_tiles(from: Vector2i, target: Vector2i) -> Array[Vector2i]:
+	var result: Array[Vector2i] = []
+	var dir := Vector2(target - from).normalized()
+	var side := Vector2(-dir.y, dir.x)
+	var r := ceili(CombatRules.STRAY_LONG + CombatRules.STRAY_WIDTH)
+	for y in range(target.y - r, target.y + r + 1):
+		for x in range(target.x - r, target.x + r + 1):
+			var p := Vector2i(x, y)
+			var offset := Vector2(p - target)
+			var along := offset.dot(dir)
+			if p == target or not map.in_bounds(p) or Vector2(p).distance_to(Vector2(from)) < 1.5:
+				continue
+			if along >= -CombatRules.STRAY_SHORT - 0.01 and along <= CombatRules.STRAY_LONG + 0.01 and absf(offset.dot(side)) <= CombatRules.STRAY_WIDTH + 0.01:
+				result.append(p)
+	return result
+
+
+## Everyone but the target a machine gun firing from `from` could hit with a miss: anyone beside the target,
+## or close to the line of fire between the gun and the target. Tanks are safe from it.
+func mg_bystanders(shooter: Unit, from: Vector2i, target: Unit) -> Array[Unit]:
+	var result: Array[Unit] = []
+	var a := Vector2(from)
+	var b := Vector2(target.pos)
+	for u in alive_units():
+		if u == shooter or u == target or u.vehicle:
+			continue
+		var p := Vector2(u.pos)
+		var t := (p - a).dot(b - a) / maxf(0.001, a.distance_squared_to(b))
+		var near_line := t > 0.0 and t < 1.0 and p.distance_to(a.lerp(b, t)) <= CombatRules.MG_STRAY_LINE
+		if near_line or p.distance_to(b) <= CombatRules.MG_AREA_RADIUS:
+			result.append(u)
+	return result
+
+
+## Who else a shot from `from` could hurt if it misses: [{"unit", "chance" (0-1, given a miss), "damage" (expected
+## if it does)}]. Machine guns endanger bystanders near the line of fire; rockets and shells whoever is near
+## where they may land. Empty for other weapons.
+func stray_risks(shooter: Unit, from: Vector2i, target: Unit) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	var weapon := shooter.weapon
+	var rolls := weapon.damage_max - weapon.damage_min + 1
+	if weapon.needs_setup:
+		var half := 0.0
+		for d in range(weapon.damage_min, weapon.damage_max + 1):
+			half += maxi(1, floori(d / 2.0)) / float(rolls)
+		# Bystanders are rolled for in turn, and only one can be hit.
+		var untouched := 1.0
+		for u in mg_bystanders(shooter, from, target):
+			var chance := untouched * CombatRules.MG_STRAY_CHANCE / 100.0
+			untouched -= chance
+			result.append({"unit": u, "chance": chance, "damage": maxf(0.0, half - u.armor)})
+	elif weapon.anti_tank:
+		var radius := weapon.blast_radius if weapon.blast_radius > 0.0 else CombatRules.ROCKET_BLAST_RADIUS
+		var reach := CombatRules.STRAY_LONG + CombatRules.STRAY_WIDTH + radius
+		var tiles: Array[Vector2i] = []
+		for u in alive_units():
+			if u != shooter and u != target and Vector2(u.pos).distance_to(Vector2(target.pos)) <= reach:
+				tiles = stray_tiles(from, target.pos)
+				break
+		var direct := (weapon.damage_min + weapon.damage_max) / 2.0
+		var splash := (CombatRules.SPLASH_DAMAGE_MIN + CombatRules.SPLASH_DAMAGE_MAX) / 2.0
+		var hit_chance := CombatRules.STRAY_HIT_CHANCE / 100.0
+		for u in alive_units():
+			if u == shooter or u == target or tiles.is_empty():
+				continue
+			if Vector2(u.pos).distance_to(Vector2(target.pos)) > reach:
+				continue
+			var on := 0
+			var near := 0
+			for t in tiles:
+				if t == u.pos:
+					on += 1
+				elif Vector2(t).distance_to(Vector2(u.pos)) <= radius:
+					near += 1
+			if on + near == 0:
+				continue
+			var hit := maxf(0.0, direct - u.armor)
+			var blast := maxf(0.0, splash - u.armor)
+			if u.vehicle:
+				hit = maxf(0.0, direct - CombatRules.VEHICLE_ARMOR[CombatRules.armor_side(u, from)])
+				blast = maxf(0.0, splash - CombatRules.EXPLOSION_VS_ARMOR)
+			var damage := (on * (hit_chance * hit + (1.0 - hit_chance) * blast) + near * blast) / (on + near)
+			if damage > 0.0:
+				result.append({"unit": u, "chance": float(on + near) / tiles.size(), "damage": damage})
+	return result
 
 
 # --- Validation: each returns "" when allowed, otherwise the reason it isn't ---
@@ -452,12 +559,15 @@ func rally(u: Unit) -> Array:
 
 
 ## Grenades ignore cover, destroy it, shred armor and hit everyone in the blast, friends included.
+## They may land off target (CombatRules.throw_scatter) and bounce back off walls.
 func throw_grenade(u: Unit, tile: Vector2i) -> Array:
 	if can_throw_grenade(u, tile) != "":
 		return []
 	u.actions = 0
 	u.grenades -= 1
-	var events := _explode(u, tile, CombatRules.GRENADE_RADIUS, CombatRules.GRENADE_DAMAGE_MIN, CombatRules.GRENADE_DAMAGE_MAX, CombatRules.GRENADE_SHRED)
+	var landing := _roll_throw(u, tile)
+	var events: Array = [{"type": "throw", "unit": u.id, "target": tile, "center": landing, "kind": "grenade"}]
+	events.append_array(_explode(u, landing, CombatRules.GRENADE_RADIUS, CombatRules.GRENADE_DAMAGE_MIN, CombatRules.GRENADE_DAMAGE_MAX, CombatRules.GRENADE_SHRED))
 	events.append_array(_after_action())
 	return events
 
@@ -468,7 +578,9 @@ func throw_smoke(u: Unit, tile: Vector2i) -> Array:
 		return []
 	u.actions -= 1
 	u.smoke_grenades -= 1
-	var events := _make_smoke(u, tile, CombatRules.SMOKE_RADIUS)
+	var landing := _roll_throw(u, tile)
+	var events: Array = [{"type": "throw", "unit": u.id, "target": tile, "center": landing, "kind": "smoke"}]
+	events.append_array(_make_smoke(u, landing, CombatRules.SMOKE_RADIUS))
 	events.append_array(_after_action())
 	return events
 
@@ -702,6 +814,98 @@ func _near(p: Vector2i) -> Vector2i:
 	return (p + d).clamp(Vector2i.ZERO, Vector2i(map.width - 1, map.height - 1))
 
 
+## Where a grenade thrown by u at tile actually lands.
+func _roll_throw(u: Unit, tile: Vector2i) -> Vector2i:
+	var scatter := CombatRules.throw_scatter(u, u.pos, tile)
+	if scatter <= 0.0:
+		return tile
+	var offset := Vector2.from_angle(rng.randf() * TAU) * rng.randf() * scatter
+	return _throw_landing(tile, offset, scatter)
+
+
+## The tile a grenade aimed at tile and thrown `offset` off lands on: never more than scatter tiles from the
+## target, and short of any wall or building in the way, which it bounces back off.
+func _throw_landing(tile: Vector2i, offset: Vector2, scatter: float) -> Vector2i:
+	var spot := Vector2i((Vector2(tile) + offset).round())
+	while Vector2(spot).distance_to(Vector2(tile)) > scatter + 0.001:
+		spot -= Vector2i(signi(spot.x - tile.x), signi(spot.y - tile.y))
+	spot = spot.clamp(Vector2i.ZERO, Vector2i(map.width - 1, map.height - 1))
+	return _trace(tile, spot)
+
+
+## The last tile reached going in a straight line from a toward b, stopping in front of walls, buildings and
+## other full cover (smoke doesn't stop anything). The same tile stepping as LineOfSight.has_line.
+func _trace(a: Vector2i, b: Vector2i) -> Vector2i:
+	var step := Vector2i(signi(b.x - a.x), signi(b.y - a.y))
+	var nx := absi(b.x - a.x)
+	var ny := absi(b.y - a.y)
+	var ix := 0
+	var iy := 0
+	var current := a
+	while ix < nx or iy < ny:
+		var cmp := (1 + 2 * ix) * ny - (1 + 2 * iy) * nx
+		var next: Vector2i
+		var blocked := false
+		if cmp == 0:
+			next = current + step
+			var side_x := Vector2i(next.x, current.y)
+			var side_y := Vector2i(current.x, next.y)
+			blocked = not _open_step(current, side_x, next) and not _open_step(current, side_y, next)
+			ix += 1
+			iy += 1
+		elif cmp < 0:
+			next = Vector2i(current.x + step.x, current.y)
+			blocked = map.edge_blocks_sight(current, next)
+			ix += 1
+		else:
+			next = Vector2i(current.x, current.y + step.y)
+			blocked = map.edge_blocks_sight(current, next)
+			iy += 1
+		if blocked or map.get_object(next) == Cover.FULL:
+			return current
+		current = next
+	return current
+
+
+func _open_step(a: Vector2i, via: Vector2i, b: Vector2i) -> bool:
+	return not map.edge_blocks_sight(a, via) and map.get_object(via) != Cover.FULL and not map.edge_blocks_sight(via, b)
+
+
+## Where a miss goes. A machine gun burst may hit someone near the line of fire instead (half damage); a rocket
+## or shell lands on a stray tile near or behind the target, may hit whoever stands there and bursts.
+## Marks the stray tile (and anyone hit) on the shot event.
+func _stray(shooter: Unit, target: Unit, shot: Dictionary) -> Array:
+	var weapon := shooter.weapon
+	var events := []
+	if weapon.needs_setup:
+		for bystander in mg_bystanders(shooter, shooter.pos, target):
+			if rng.randi_range(0, 99) < CombatRules.MG_STRAY_CHANCE:
+				shot["stray"] = bystander.pos
+				shot["stray_unit"] = bystander.id
+				var damage := maxi(1, floori(rng.randi_range(weapon.damage_min, weapon.damage_max) / 2.0))
+				events.append_array(_damage(bystander, damage, 0, shooter))
+				if bystander.is_alive():
+					events.append_array(_suppress(bystander, CombatRules.HIT_SUPPRESSION_BONUS))
+				break
+		return events
+	var tiles := stray_tiles(shooter.pos, target.pos)
+	var landing := _near(target.pos) if tiles.is_empty() else _trace(target.pos, tiles[rng.randi_range(0, tiles.size() - 1)])
+	shot["stray"] = landing
+	var victim := unit_at(landing)
+	if victim == target or (victim != null and rng.randi_range(0, 99) >= CombatRules.STRAY_HIT_CHANCE):
+		victim = null
+	var radius := weapon.blast_radius if weapon.blast_radius > 0.0 else CombatRules.ROCKET_BLAST_RADIUS
+	events.append_array(_explode(shooter, landing, radius, CombatRules.SPLASH_DAMAGE_MIN, CombatRules.SPLASH_DAMAGE_MAX, 0, victim))
+	if victim != null and victim.is_alive():
+		# A direct hit (after the blast, so a knocked-out tank's wreck survives it).
+		shot["stray_unit"] = victim.id
+		var damage := rng.randi_range(weapon.damage_min, weapon.damage_max)
+		if victim.vehicle:
+			damage = maxi(0, damage - CombatRules.VEHICLE_ARMOR[CombatRules.armor_side(victim, shooter.pos)])
+		events.append_array(_damage(victim, damage, 0, shooter))
+	return events
+
+
 ## A tank moving from a to b flattens what's in its way: crates, sandbags, trees, fences, walls and hedges.
 func _drive(a: Vector2i, b: Vector2i) -> void:
 	map.set_vehicle(a, false)
@@ -764,11 +968,11 @@ func _fire(shooter: Unit, target: Unit, reaction: bool) -> Array:
 				events[0]["armor"] = side
 				damage = maxi(0, damage - CombatRules.VEHICLE_ARMOR[side])
 			events.append_array(_damage(target, damage, 0, shooter))
-	if weapon.blast_radius > 0.0:
-		# High explosive: bursts on the target, or close by on a miss.
-		var hit := result != "miss"
-		var center := target.pos if hit else _near(target.pos)
-		events.append_array(_explode(shooter, center, weapon.blast_radius, CombatRules.SPLASH_DAMAGE_MIN, CombatRules.SPLASH_DAMAGE_MAX, 0, target if hit else null))
+	if result == "miss" and CombatRules.misses_stray(weapon):
+		events.append_array(_stray(shooter, target, events[0]))
+	elif weapon.blast_radius > 0.0 and result != "miss":
+		# High explosive bursts on the target.
+		events.append_array(_explode(shooter, target.pos, weapon.blast_radius, CombatRules.SPLASH_DAMAGE_MIN, CombatRules.SPLASH_DAMAGE_MAX, 0, target))
 	if target.is_alive():
 		var suppression := shooter.weapon.suppression + (CombatRules.HIT_SUPPRESSION_BONUS if result != "miss" else 0)
 		events.append_array(_suppress(target, suppression))

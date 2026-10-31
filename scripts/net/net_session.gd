@@ -4,7 +4,12 @@ extends Node
 ## exchange commands. Both run the same deterministic engine, and every command carries the sender's state
 ## checksum after applying it, so the receiver notices at once if the two games ever disagree.
 ##
-## Autoloaded as `Net`. The host plays the Allies, the joining player Germany.
+## A saved online game is continued the same way: the host offers its saved battle instead of a setup, the
+## joining player loads it (after confirming, if their own save differs), and play only resumes once the host
+## has seen that both loaded games have the same checksum.
+##
+## Autoloaded as `Net`. In a new game the host plays the Allies, the joining player Germany; in a continued
+## game each keeps the side they had.
 
 signal peer_joined
 signal setup_received(setup: Dictionary)
@@ -12,19 +17,31 @@ signal command_received
 signal desynced(reason: String)
 signal disconnected
 signal connection_failed
+## Joiner: the host offers a saved game to continue (see GameSession.online_offer).
+signal resume_offered(offer: Dictionary)
+## Both: the two games loaded the same saved battle; play on.
+signal resume_started
+## Host: the joining player chose not to continue the saved game.
+signal resume_declined
+## Both games agree on the state after a turn change: the turn index and checksum to save at.
+signal turn_agreed(turn_index: int, checksum: String)
 
 const DEFAULT_PORT := 24944
 ## Bumped whenever the rules or the protocol change, so different versions refuse to play each other.
-const PROTOCOL := 1
+const PROTOCOL := 3
 
 ## True while connected to an opponent.
 var active := false
 var is_host := false
 var local_team := 0
+## Where the opponent is: the address joined, or the address they joined from. A hint for the saved game.
+var opponent := ""
 ## Commands from the opponent waiting to be applied: {"command", "checksum"}.
 var _queue: Array[Dictionary] = []
 ## Bumped by close(), so anyone still waiting on a closed session gives up.
 var _session := 0
+## Host, while offering a saved game: the checksum the joining player must load.
+var _resume_checksum := ""
 
 
 func _ready() -> void:
@@ -35,7 +52,8 @@ func _ready() -> void:
 	multiplayer.server_disconnected.connect(_on_peer_disconnected.bind(1))
 
 
-func host(port := DEFAULT_PORT) -> Error:
+## `team` is the side the host plays: the Allies in a new game, or its side in a continued one.
+func host(port := DEFAULT_PORT, team := 0) -> Error:
 	close()
 	var peer := ENetMultiplayerPeer.new()
 	var err := peer.create_server(port, 1)
@@ -43,7 +61,7 @@ func host(port := DEFAULT_PORT) -> Error:
 		return err
 	multiplayer.multiplayer_peer = peer
 	is_host = true
-	local_team = 0
+	local_team = team
 	return OK
 
 
@@ -56,12 +74,14 @@ func join(address: String, port := DEFAULT_PORT) -> Error:
 	multiplayer.multiplayer_peer = peer
 	is_host = false
 	local_team = 1
+	opponent = "%s:%d" % [address, port]
 	return OK
 
 
 func close() -> void:
 	_session += 1
 	active = false
+	_resume_checksum = ""
 	_queue.clear()
 	if multiplayer.multiplayer_peer != null and not multiplayer.multiplayer_peer is OfflineMultiplayerPeer:
 		multiplayer.multiplayer_peer.close()
@@ -103,6 +123,36 @@ func next_command() -> Dictionary:
 	return _queue.pop_front()
 
 
+## Host only: offer the joined player a saved game to continue (GameSession.online_offer). Answered by
+## resume_started once both games hold the same battle, or by resume_declined, desynced or disconnected.
+func send_resume(offer: Dictionary) -> void:
+	_resume_checksum = offer["checksum"]
+	_receive_resume.rpc(offer)
+
+
+## Joiner: we loaded the offered battle, and this is its checksum. The host checks it and says go.
+func accept_resume(checksum: String) -> void:
+	_resume_loaded.rpc_id(1, checksum)
+
+
+## Joiner: we don't want to continue the offered game. Hangs up shortly after telling the host.
+func decline_resume() -> void:
+	active = false
+	_resume_declined.rpc_id(1)
+	var session := _session
+	await get_tree().create_timer(0.5).timeout
+	if session == _session:
+		close()
+
+
+## Called by whoever verified the opponent's command that changed the turn (or ended the battle): tells
+## the opponent the state matched, and both sides emit turn_agreed so they can save it.
+func agree_turn(turn_index: int, checksum: String) -> void:
+	if active:
+		_turn_agreed.rpc(turn_index, checksum)
+	turn_agreed.emit(turn_index, checksum)
+
+
 ## Tells both sides the games no longer match.
 func report_desync(reason: String) -> void:
 	if active:
@@ -121,6 +171,9 @@ func _hello(protocol: int) -> void:
 		_refuse.rpc_id(sender, "The other game is a different version.")
 		return
 	active = true
+	var enet := multiplayer.multiplayer_peer as ENetMultiplayerPeer
+	if enet != null and enet.get_peer(sender) != null:
+		opponent = enet.get_peer(sender).get_remote_address()
 	peer_joined.emit()
 
 
@@ -140,6 +193,41 @@ func _receive_setup(setup: Dictionary) -> void:
 func _receive_command(command: Dictionary, checksum: String) -> void:
 	_queue.append({"command": command, "checksum": checksum})
 	command_received.emit()
+
+
+@rpc("authority", "call_remote", "reliable")
+func _receive_resume(offer: Dictionary) -> void:
+	active = true
+	local_team = 1 - clampi(int(offer.get("team", 0)), 0, 1)
+	resume_offered.emit(offer)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _resume_loaded(checksum: String) -> void:
+	if not is_host or _resume_checksum == "":
+		return
+	if checksum != _resume_checksum:
+		report_desync("The two games loaded different battles.")
+		return
+	_resume_checksum = ""
+	_resume_start.rpc()
+	resume_started.emit()
+
+
+@rpc("authority", "call_remote", "reliable")
+func _resume_start() -> void:
+	resume_started.emit()
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _resume_declined() -> void:
+	if is_host and _resume_checksum != "":
+		resume_declined.emit()
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _turn_agreed(turn_index: int, checksum: String) -> void:
+	turn_agreed.emit(turn_index, checksum)
 
 
 @rpc("any_peer", "call_remote", "reliable")

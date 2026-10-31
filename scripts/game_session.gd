@@ -1,9 +1,10 @@
 class_name GameSession
 extends RefCounted
 ## What the battle scene should play, plus saving and loading. Static so it survives scene changes.
-## There are two save slots: the campaign (with any battle in progress) and a skirmish battle.
+## There are two save slots: the campaign (with any battle in progress) and a skirmish battle, plus a third
+## for the online game in progress, saved at every turn change both players agreed on.
 
-const SLOTS := {"campaign": "user://campaign.sav", "skirmish": "user://skirmish.sav"}
+const SLOTS := {"campaign": "user://campaign.sav", "skirmish": "user://skirmish.sav", "online": "user://online.sav"}
 const SAVE_VERSION := 1
 const MENU_SCENE := "res://scenes/main_menu.tscn"
 const BATTLE_SCENE := "res://scenes/battle.tscn"
@@ -18,6 +19,11 @@ static var battle_title := ""
 static var campaign: Campaign
 ## Ask the main menu to open the campaign screen.
 static var show_campaign := false
+## The online game being played: {"game_id", "title", "opponent", "hosted"}, or {} when offline.
+static var online := {}
+## The folder the save slots live in: user:// unless the command line gives --save-dir=PATH (after "--"),
+## so tests, and two copies of the game on one computer, keep separate saves.
+static var save_dir := _save_dir_from_args()
 
 
 static func start_battle(p_battle: Battle, p_ai_teams: Array, title: String) -> void:
@@ -61,8 +67,19 @@ static func current_slot() -> String:
 	return "campaign" if campaign != null else "skirmish"
 
 
+static func slot_path(slot: String) -> String:
+	return save_dir.path_join(SLOTS[slot].get_file())
+
+
+static func _save_dir_from_args() -> String:
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--save-dir="):
+			return arg.trim_prefix("--save-dir=")
+	return "user://"
+
+
 static func has_save(slot: String) -> bool:
-	return FileAccess.file_exists(SLOTS[slot])
+	return FileAccess.file_exists(slot_path(slot))
 
 
 ## Saves the current slot: the campaign (if any) and the battle in progress (if any).
@@ -79,7 +96,12 @@ static func save_game() -> void:
 		"battle": battle.to_dict() if running else {},
 		"ai_teams": ai_teams, "ai_states": ai_states, "title": battle_title,
 	}
-	var file := FileAccess.open(SLOTS[slot], FileAccess.WRITE)
+	_write(slot, data)
+
+
+static func _write(slot: String, data: Dictionary) -> void:
+	DirAccess.make_dir_recursive_absolute(save_dir)
+	var file := FileAccess.open(slot_path(slot), FileAccess.WRITE)
 	if file == null:
 		push_error("Could not save: %s" % FileAccess.get_open_error())
 		return
@@ -103,7 +125,7 @@ static func load_game(slot: String) -> bool:
 static func peek(slot: String) -> Dictionary:
 	if not has_save(slot):
 		return {}
-	var file := FileAccess.open(SLOTS[slot], FileAccess.READ)
+	var file := FileAccess.open(slot_path(slot), FileAccess.READ)
 	if file == null:
 		return {}
 	var data: Variant = file.get_var()
@@ -114,4 +136,97 @@ static func peek(slot: String) -> Dictionary:
 
 static func delete_save(slot: String) -> void:
 	if has_save(slot):
-		DirAccess.remove_absolute(SLOTS[slot])
+		DirAccess.remove_absolute(slot_path(slot))
+
+
+# --- Online games ---
+# Both players save the online battle at every turn change their two games agreed on (Net.turn_agreed).
+# To continue, either player hosts the saved game again and offers it (online_offer); the other joins and
+# compares it with their own save (compare_online). The host's save is the one played on: when the saves
+# differ the joining player is asked first, and once both have loaded it their checksums must match.
+
+## A fresh id for a new online game; it goes out with the setup so both players file their saves under it.
+static func new_game_id() -> String:
+	return "%08x%08x" % [randi(), randi()]
+
+
+## Starts playing an online battle. `title` is the map's name, `team` the side played on this computer,
+## `opponent` a hint for finding them again (the address used) and `hosted` whether this computer hosts.
+static func start_online(p_battle: Battle, title: String, team: int, game_id: String, opponent: String, hosted: bool) -> void:
+	campaign = null
+	start_battle(p_battle, [false, false], "%s, online as %s" % [title, Battle.TEAM_NAMES[team]])
+	online = {"game_id": game_id, "title": title, "opponent": opponent, "hosted": hosted}
+
+
+## Saves the online battle as it is now, or clears its slot once the battle is over.
+static func save_online(team: int) -> void:
+	if battle == null or online.is_empty():
+		return
+	if battle.winner != -1:
+		end_online()
+		return
+	_write("online", {
+		"version": SAVE_VERSION, "game_id": online["game_id"], "team": team, "title": online["title"],
+		"opponent": online["opponent"], "hosted": online["hosted"], "battle": battle.to_dict(),
+		"checksum": battle.checksum(), "round": battle.round_number, "turn_index": battle.turn_index,
+		"current_team": battle.current_team, "saved_at": int(Time.get_unix_time_from_system()),
+	})
+
+
+## Both games agree on the state after a turn change (Net.turn_agreed): save it if we are still there.
+static func on_turn_agreed(turn_index: int, checksum: String, team: int) -> void:
+	if battle != null and battle.turn_index == turn_index and battle.checksum() == checksum:
+		save_online(team)
+
+
+## The online battle is over: clear its save (but not a different game's).
+static func end_online() -> void:
+	if not online.is_empty() and peek("online").get("game_id") == online["game_id"]:
+		delete_save("online")
+
+
+## The saved online game as an offer for the other player: everything they need to continue it, battle
+## state included. Returns {} if there is none or it doesn't reproduce its own checksum.
+static func online_offer() -> Dictionary:
+	var data := peek("online")
+	if data.is_empty():
+		return {}
+	if Battle.from_dict(data["battle"]).checksum() != data["checksum"]:
+		push_error("The online save doesn't load identically.")
+		return {}
+	var offer := {}
+	for key in ["game_id", "team", "title", "battle", "checksum", "round", "turn_index", "current_team"]:
+		offer[key] = data[key]
+	return offer
+
+
+## How the host's offer differs from our own online save, for the joining player to confirm: "" when the
+## two are identical.
+static func compare_online(offer: Dictionary) -> String:
+	var own := peek("online")
+	var theirs := "The host's save is from round %d, %s to move." % [int(offer.get("round", 0)), Battle.TEAM_NAMES[clampi(int(offer.get("current_team", 0)), 0, 1)]]
+	if own.is_empty():
+		return "You have no saved online game. " + theirs
+	if own["game_id"] != offer.get("game_id"):
+		return "Your saved online game is a different one (%s). " % own["title"] + theirs
+	if own["checksum"] == offer.get("checksum"):
+		return ""
+	if own["turn_index"] == offer.get("turn_index"):
+		return "Both saves are from round %d, but they differ." % own["round"]
+	var when := "older" if own["turn_index"] < int(offer.get("turn_index", 0)) else "newer"
+	return "Your save is %s: round %d, %s to move. " % [when, own["round"], Battle.TEAM_NAMES[own["current_team"]]] + theirs
+
+
+## Loads an offered online battle to play as `team`. Returns false (and loads nothing) if the offer is
+## malformed or its battle doesn't reproduce the offered checksum.
+static func resume_online(offer: Dictionary, team: int, opponent: String, hosted: bool) -> bool:
+	for key in ["game_id", "title", "battle", "checksum"]:
+		if not offer.has(key):
+			return false
+	if not offer["battle"] is Dictionary or not offer["checksum"] is String:
+		return false
+	var loaded := Battle.from_dict(offer["battle"])
+	if loaded.checksum() != offer["checksum"]:
+		return false
+	start_online(loaded, offer["title"], team, offer["game_id"], opponent, hosted)
+	return true

@@ -9,7 +9,11 @@ extends Node2D
 
 const DrawLayer := preload("res://scripts/view/draw_layer.gd")
 
-const PANEL_WIDTH := 400.0
+## The side panel's width (including its gap to the screen edge) and the height of the top bar.
+const PANEL_WIDTH := 280.0
+const TOP_BAR_HEIGHT := 50.0
+## Controls listed by the "?" button in the top bar.
+const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nTab next unit   Enter end turn\n1-0, T: actions (see buttons)\nWASD / arrows / middle drag: pan\nWheel: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\n+ / -: playback speed"
 ## UI accent colours: Allied green and German field grey.
 const TEAM_COLORS := [Color("9cc45a"), Color("b8c0c8")]
 const NEUTRAL_COLOR := Color("e8e2cf")
@@ -95,7 +99,8 @@ var _effects := []
 var _overlay_state := ""
 ## While events play back, map changes (crushed or blasted cover) are held back until the moment they happen.
 var _hold_layout := false
-## Playing an online opponent. Stays set after a disconnect, so the battle is never saved.
+## Playing an online opponent. Stays set after a disconnect. Online battles aren't saved by _save() but at
+## every turn change both games agree on (_on_turn_agreed), into the online slot.
 var _online := false
 
 var _font: Font
@@ -110,9 +115,17 @@ var _overlay: ColorRect
 var _overlay_label: Label
 var _title_label: Label
 var _banner: Label
+## Settings over the battle, and the end-turn confirmation; both made on first use.
+var _settings_popup: SettingsPopup
+var _end_turn_dialog: ConfirmationDialog
+var _log_toggle: Button
+## The newest log line, shown in the log's header while the log is folded away.
+var _log_last: RichTextLabel
+var _help: PanelContainer
 
 
 func _ready() -> void:
+	GameSettings.ensure_loaded()
 	_font = ThemeDB.fallback_font
 	if GameSession.battle == null:
 		# Started straight from the editor: a quick skirmish against the AI.
@@ -146,10 +159,11 @@ func _ready() -> void:
 		controllers[Net.remote_team()] = RemotePlayer.new(battle, Net.remote_team(), Net)
 		Net.desynced.connect(_on_desync)
 		Net.disconnected.connect(_on_net_disconnected)
+		Net.turn_agreed.connect(_on_turn_agreed)
 		_buttons["quit"].text = "Leave game"
-	if controllers[0] != null and controllers[1] != null:
-		_speed_index = 1
-	_update_speed_button()
+	# Move suggestions (H) and the agent link (MCP server); see scripts/advisor/.
+	add_child(AdvisorView.new(self))
+	_apply_turn_speed(battle.current_team)
 	_focus_on_team(_view_team() if _view_team() != -1 else battle.current_team)
 	_refresh()
 	if not battle.started:
@@ -170,7 +184,7 @@ func _focus_on_team(team: int) -> void:
 	_focus(sum / count if count > 0 else Vector2(battle.map.width, battle.map.height) * 0.5, false)
 
 
-## Autosave: the battle in its current state, plus the AI's memory. Online battles aren't saved.
+## Autosave: the battle in its current state, plus the AI's memory. Online battles are saved by _on_turn_agreed.
 func _save() -> void:
 	if _online:
 		return
@@ -225,6 +239,11 @@ func _process(delta: float) -> void:
 # --- Input ---
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _settings_popup != null and _settings_popup.visible:
+		if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+			_settings_popup.hide()
+			get_viewport().set_input_as_handled()
+		return
 	if _overlay_state != "":
 		if event is InputEventKey and event.pressed and not event.echo:
 			_dismiss_overlay()
@@ -299,7 +318,7 @@ func _pan_with_keys(delta: float) -> void:
 	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
 		dir.y += 1
 	if dir != Vector2.ZERO and _overlay_state == "":
-		_camera.position += dir.normalized() * PAN_SPEED * delta / _camera.zoom.x
+		_camera.position += dir.normalized() * PAN_SPEED * GameSettings.PAN_SPEEDS[GameSettings.pan_speed] * delta / _camera.zoom.x
 
 
 func _on_click(tile: Vector2i) -> void:
@@ -362,9 +381,15 @@ func _on_action(action: String) -> void:
 			if not busy:
 				_quit_to_menu()
 			return
+		"settings":
+			_show_settings()
+			return
 	if busy or _overlay_state != "" or battle.winner != -1 or not _is_human_turn():
 		return
 	if action == "end":
+		if GameSettings.confirm_end_turn and _next_ready_unit(null) != null:
+			_confirm_end_turn()
+			return
 		_command({"cmd": "end_turn"})
 		return
 	if action == "next":
@@ -455,6 +480,8 @@ func _dismiss_overlay() -> void:
 		GameSession.battle = null
 		if not _online:
 			GameSession.save_game()
+		else:
+			GameSession.end_online()
 		GameSession.show_campaign = GameSession.campaign != null
 		get_tree().change_scene_to_file(GameSession.MENU_SCENE)
 		return
@@ -488,7 +515,7 @@ func _set_hover(tile: Vector2i) -> void:
 
 
 func _mouse_tile() -> Vector2i:
-	if get_viewport().get_mouse_position().x >= _panel.global_position.x:
+	if get_viewport().gui_get_hovered_control() != null:
 		return Vector2i(-1, -1)
 	return _proj.tile_at(get_local_mouse_position())
 
@@ -531,7 +558,13 @@ func _on_desync(reason: String) -> void:
 
 func _on_net_disconnected() -> void:
 	if battle.winner == -1:
-		_show_overlay("net_ended", "The opponent left the game\n\nClick or press any key to leave", NEUTRAL_COLOR)
+		var saved := "\n\nThe game is saved from the last turn change: host it again from the main menu to continue." if GameSession.peek("online").get("game_id") == GameSession.online.get("game_id") else ""
+		_show_overlay("net_ended", "The opponent left the game%s\n\nClick or press any key to leave" % saved, NEUTRAL_COLOR)
+
+
+## Online: both games agree on the state after a turn change, so save it for continuing later.
+func _on_turn_agreed(turn_index: int, checksum: String) -> void:
+	GameSession.on_turn_agreed(turn_index, checksum, Net.local_team)
 
 
 ## The team whose fog of war is shown: the only human, the current human in hotseat, or -1 to see everything.
@@ -544,9 +577,9 @@ func _view_team() -> int:
 
 # --- Camera ---
 
-## The screen x offset that centres things in the map area left of the side panel.
+## The screen offset that centres things in the map area left of the side panel and below the top bar.
 func _view_shift() -> Vector2:
-	return Vector2(PANEL_WIDTH * 0.5, 0) / _camera.zoom.x
+	return Vector2(PANEL_WIDTH * 0.5, -TOP_BAR_HEIGHT * 0.5) / _camera.zoom.x
 
 
 func _focus(grid: Vector2, animate := true) -> void:
@@ -585,10 +618,46 @@ func _toggle_view() -> void:
 func _change_speed(step: int, wrap := false) -> void:
 	_speed_index = posmod(_speed_index + step, SPEEDS.size()) if wrap else clampi(_speed_index + step, 0, SPEEDS.size() - 1)
 	_update_speed_button()
+	GameSettings.set_speed_for(_is_human_turn(), _speed_index)
 
 
 func _update_speed_button() -> void:
 	_buttons["speed"].text = "Speed %s" % SPEED_NAMES[_speed_index]
+
+
+## Switches to the playback speed set for this team's turns: your own, or the AI's or online opponent's.
+func _apply_turn_speed(team: int) -> void:
+	_speed_index = GameSettings.speed_for(controllers[team] == null)
+	_update_speed_button()
+
+
+func _show_settings() -> void:
+	if _settings_popup == null:
+		_settings_popup = SettingsPopup.new()
+		_settings_popup.changed.connect(_on_settings_changed)
+		_overlay.get_parent().add_child(_settings_popup)
+	_settings_popup.show()
+
+
+## Applies changed settings that show at once; the rest are read when they're next needed.
+func _on_settings_changed() -> void:
+	_apply_turn_speed(battle.current_team)
+	_update_target_info()
+
+
+## Asks before ending the turn while some units still have actions.
+func _confirm_end_turn() -> void:
+	if _end_turn_dialog == null:
+		_end_turn_dialog = ConfirmationDialog.new()
+		_end_turn_dialog.title = "End turn"
+		_end_turn_dialog.ok_button_text = "End turn"
+		_end_turn_dialog.confirmed.connect(func() -> void:
+			if not busy and _overlay_state == "" and battle.winner == -1 and _is_human_turn():
+				_command({"cmd": "end_turn"}))
+		add_child(_end_turn_dialog)
+	var waiting := battle.alive_units(battle.current_team).filter(func(u: Unit) -> bool: return u.actions > 0).size()
+	_end_turn_dialog.dialog_text = "%d unit%s can still act. End the turn anyway?" % [waiting, "" if waiting == 1 else "s"]
+	_end_turn_dialog.popup_centered()
 
 
 ## The world-space rectangle currently on screen, for culling.
@@ -649,6 +718,8 @@ func _play_event(e: Dictionary) -> void:
 			_log_line("%s turns." % u.name)
 		"shot":
 			await _play_shot(e)
+		"throw":
+			await _play_throw(e)
 		"damage":
 			var u := battle.get_unit(e["unit"])
 			_display_hp[u.id] = e["hp"]
@@ -697,7 +768,7 @@ func _play_event(e: Dictionary) -> void:
 		"strike":
 			var center := _center(e["center"])
 			_effects.append({"kind": "incoming", "at": center, "age": 0.0, "life": 0.35})
-			if _view_team() == -1 or _viewer_sees(e["center"]) or controllers[battle.current_team] == null:
+			if (_view_team() == -1 or _viewer_sees(e["center"]) or controllers[battle.current_team] == null) and _follows(battle.get_unit(e["unit"]).team):
 				_focus(center)
 			await _wait(0.35)
 		"status":
@@ -732,6 +803,7 @@ func _play_event(e: Dictionary) -> void:
 			var who := "%s%s" % [Battle.TEAM_NAMES[team], _controller_name(team)]
 			_log_line("[b][color=%s]Round %d: %s[/color][/b]" % [TEAM_COLORS[team].to_html(false), e["round"], who])
 			_turn_started = true
+			_apply_turn_speed(team)
 			if controllers[0] == null and controllers[1] == null:
 				_show_overlay("handover", "%s's turn\n\nClick or press any key" % Battle.TEAM_NAMES[team], TEAM_COLORS[team])
 			else:
@@ -751,8 +823,11 @@ func _play_move(e: Dictionary) -> void:
 	var u := battle.get_unit(e["unit"])
 	var path: Array = e["path"]
 	var watched := u.team != _view_team() and _view_team() != -1
-	if controllers[u.team] != null and (not watched or _viewer_sees(path[0]) or _viewer_sees(path[-1])):
+	if controllers[u.team] != null and (not watched or _viewer_sees(path[0]) or _viewer_sees(path[-1])) and _follows(u.team):
 		_focus(_center(path[int(path.size() / 2.0)]))
+	if GameSettings.instant_movement:
+		await _jump_move(u, e)
+		return
 	_walking[u.id] = true
 	var facings: Array = e.get("facings", [])
 	for i in range(1, path.size()):
@@ -769,6 +844,29 @@ func _play_move(e: Dictionary) -> void:
 	_walking.erase(u.id)
 
 
+## Instant movement: the unit appears on its last tile, facing the way it last went, after a short beat.
+func _jump_move(u: Unit, e: Dictionary) -> void:
+	var path: Array = e["path"]
+	var facings: Array = e.get("facings", [])
+	if u.vehicle and not facings.is_empty():
+		_facing[u.id] = Vector2(facings[-1]).normalized()
+	elif path.size() > 1:
+		_facing[u.id] = Vector2(path[-1] - path[-2]).normalized()
+	if u.team != _view_team() and _view_team() != -1:
+		_move_visibility[u.id] = _viewer_sees(path[-1])
+	_display_pos[u.id] = _center(path[-1])
+	if u.vehicle:
+		for tile: Vector2i in path:
+			_hide_crushed(tile)
+	await _wait(0.1)
+
+
+## Whether the camera follows a team's moves: always your own, the opponent's only if the setting says so.
+## With no human playing (AI vs AI) it follows everyone.
+func _follows(team: int) -> bool:
+	return GameSettings.follow_opponent or controllers[team] == null or _view_team() == -1
+
+
 func _play_shot(e: Dictionary) -> void:
 	var shooter := battle.get_unit(e["shooter"])
 	var target := battle.get_unit(e["target"])
@@ -783,7 +881,11 @@ func _play_shot(e: Dictionary) -> void:
 	var from := SoldierPainter.muzzle(_proj, _display_pos[shooter.id], shooter, _pose(shooter))
 	var to := _proj.project(_display_pos[target.id], 0.7)
 	var hit: bool = e["result"] != "miss"
-	if not hit:
+	if e.has("stray_unit"):
+		to = _proj.project(_display_pos[e["stray_unit"]], 0.7)
+	elif e.has("stray"):
+		to = _proj.project(_center(e["stray"]), 0.3)
+	elif not hit:
 		to = _proj.project(_display_pos[target.id] + Vector2.from_angle(randf() * TAU) * 0.7, 0.3)
 	var bursts := 3 if shooter.weapon.kind in ["mg", "smg"] else 1
 	for i in bursts:
@@ -791,13 +893,36 @@ func _play_shot(e: Dictionary) -> void:
 		_effects.append({"kind": "tracer", "from": from, "to": to + Vector2(randf_range(-4, 4), randf_range(-4, 4)) * i, "age": 0.0, "life": 0.25})
 		await _wait(0.07)
 	await _wait(0.05)
-	_effects.append({"kind": "sparks" if hit else "puff", "at": to, "age": 0.0, "life": 0.4})
+	_effects.append({"kind": "sparks" if hit or e.has("stray_unit") else "puff", "at": to, "age": 0.0, "life": 0.4})
 	await _wait(0.15)
 	var label: String = SHOT_LABELS[e["result"]]
 	_float(_display_pos[target.id], "%s (%d%%)" % [label, e["chance"]], Color.WHITE if e["result"] != "crit" else Color("ffb84d"))
 	var armour := " on its %s armour" % e["armor"] if e.has("armor") else ""
 	_log_line("%s%s shoots at %s: %s (%d%%)%s" % ["Overwatch: " if e["reaction"] else "", shooter.name, target.name, label, e["chance"], armour])
+	if e.has("stray_unit"):
+		var victim := battle.get_unit(e["stray_unit"])
+		var friendly := victim.team == shooter.team
+		_float(_display_pos[victim.id], "Stray round!", Color("ff7b6b") if friendly else Color("ffd34d"))
+		_log_line("[color=%s]A stray round hits %s%s.[/color]" % ["#ff6b6b" if friendly else "#ffd34d", victim.name, " (friendly fire)" if friendly else ""])
+	elif e.has("stray"):
+		var off := roundi(Vector2(e["stray"]).distance_to(Vector2(target.pos)))
+		_log_line("The round flies on and lands %d tile%s from %s." % [off, "" if off == 1 else "s", target.name])
 	await _wait(0.25)
+
+
+## A grenade (or smoke grenade) arcs to where it lands, which may be off target.
+func _play_throw(e: Dictionary) -> void:
+	var u := battle.get_unit(e["unit"])
+	var landing := _center(e["center"])
+	if landing != _display_pos[u.id]:
+		_facing[u.id] = (landing - _display_pos[u.id]).normalized()
+	_revealed[u.id] = true
+	_effects.append({"kind": "shell", "from": _display_pos[u.id], "to": landing, "age": 0.0, "life": 0.5})
+	await _wait(0.5)
+	if e["center"] != e["target"]:
+		var off := Vector2(e["center"]).distance_to(Vector2(e["target"]))
+		_float(landing, "Off target", Color("ffd34d"))
+		_log_line("%s's %s lands %.1f tiles off target." % [u.name, "grenade" if e["kind"] == "grenade" else "smoke grenade", off])
 
 
 func _play_mortar_fire(e: Dictionary) -> void:
@@ -827,7 +952,7 @@ func _turn_hull(id: int, to: Vector2) -> void:
 	var from: Vector2 = _facing[id]
 	var angle := from.angle_to(to)
 	var speed: float = SPEEDS[_speed_index]
-	if absf(angle) < 0.01 or speed == 0.0:
+	if absf(angle) < 0.01 or speed == 0.0 or GameSettings.instant_movement:
 		_facing[id] = to
 		return
 	var tween := create_tween()
@@ -1019,9 +1144,11 @@ func _update_target_info() -> void:
 			Mode.GRENADE:
 				text = "[b]Frag grenade[/b]  range %d, radius %.1f\n%d-%d damage, ignores cover, destroys it.\nHits friends too." % [
 					CombatRules.GRENADE_RANGE, CombatRules.GRENADE_RADIUS, CombatRules.GRENADE_DAMAGE_MIN, CombatRules.GRENADE_DAMAGE_MAX]
+				text += _describe_scatter(hover, CombatRules.GRENADE_RADIUS, true)
 				text += _error_line(battle.can_throw_grenade(selected, hover))
 			Mode.SMOKE:
 				text = "[b]Smoke grenade[/b]  range %d, radius %.1f\nBlocks line of sight for two rounds. Takes one action." % [CombatRules.SMOKE_RANGE, CombatRules.SMOKE_RADIUS]
+				text += _describe_scatter(hover, CombatRules.SMOKE_RADIUS, false)
 				text += _error_line(battle.can_throw_smoke(selected, hover))
 			Mode.MORTAR:
 				text = "[b]Mortar, %s[/b]  range %d-%d\nLands at the start of your next turn, up to %.1f tiles off target.\nNeeds a soldier who can see the target." % [
@@ -1046,9 +1173,10 @@ func _describe_odds(shooter: Unit, target: Unit) -> String:
 	var odds := battle.shot_odds(shooter, target)
 	var lines := PackedStringArray()
 	lines.append("[b]Target: %s[/b] (%s)  HP %d/%d" % [target.name, target.role, target.hp, target.max_hp])
-	lines.append("[color=#8fff9b]Hit %d%%[/color]   Graze %d%%   Crit %d%%   Suppression +%d" % [odds["hit"], odds["graze"], odds["crit"], shooter.weapon.suppression])
-	for m: Array in odds["modifiers"]:
-		lines.append("    %s  %+d" % [m[0], m[1]])
+	if GameSettings.show_hit_chance:
+		lines.append("[color=#8fff9b]Hit %d%%[/color]   Graze %d%%   Crit %d%%   Suppression +%d" % [odds["hit"], odds["graze"], odds["crit"], shooter.weapon.suppression])
+		for m: Array in odds["modifiers"]:
+			lines.append("    %s  %+d" % [m[0], m[1]])
 	if target.vehicle:
 		if not shooter.weapon.anti_tank:
 			lines.append("[color=#ff6b6b]Small arms can't hurt a tank[/color]")
@@ -1061,7 +1189,41 @@ func _describe_odds(shooter: Unit, target: Unit) -> String:
 		lines.append("High explosive: blasts cover and anyone next to the target")
 	if target.overwatch:
 		lines.append("[color=#ffd34d]On overwatch[/color]")
+	if CombatRules.misses_stray(shooter.weapon):
+		if shooter.weapon.needs_setup:
+			lines.append("Misses may hit anyone beside the target or in the line of fire")
+		else:
+			lines.append("Misses fly on and burst up to %d tiles past the target" % CombatRules.STRAY_LONG)
+		var miss: int = 100 - odds["hit"] - odds["graze"]
+		var names := PackedStringArray()
+		for risk: Dictionary in battle.stray_risks(shooter, shooter.pos, target):
+			var u: Unit = risk["unit"]
+			if u.team == shooter.team or _seen_units.has(u.id):
+				var friendly := " (friendly)" if u.team == shooter.team else ""
+				names.append("%s%s %d%%" % [u.name, friendly, maxi(1, roundi(risk["chance"] * miss))])
+		if not names.is_empty():
+			lines.append("[color=#ff6b6b]Misses may hit: %s[/color]" % ", ".join(names))
 	return "\n".join(lines)
+
+
+## How far off a throw at tile may land and, for frag grenades, which of the thrower's squad it could catch.
+func _describe_scatter(tile: Vector2i, radius: float, harmful: bool) -> String:
+	var scatter := CombatRules.throw_scatter(selected, selected.pos, tile)
+	var text := "\nMay land up to %.1f tiles off target (range, aim, suppression)." % scatter
+	if not harmful:
+		return text
+	var landings := battle.throw_landings(tile, scatter)
+	var names := PackedStringArray()
+	for u in battle.alive_units(selected.team):
+		var chance := 0.0
+		for spot: Vector2i in landings:
+			if Vector2(u.pos).distance_to(Vector2(spot)) <= radius:
+				chance += landings[spot]
+		if chance > 0.0:
+			names.append("%s %d%%" % [u.name, maxi(1, roundi(chance * 100))])
+	if not names.is_empty():
+		text += "\n[color=#ff6b6b]Could catch: %s (friendly)[/color]" % ", ".join(names)
+	return text
 
 
 func _describe_tile(p: Vector2i) -> String:
@@ -1096,6 +1258,7 @@ func _describe_tile(p: Vector2i) -> String:
 
 func _log_line(text: String) -> void:
 	_log.append_text(text + "\n")
+	_log_last.text = text
 
 
 func _show_overlay(state: String, text: String, color: Color) -> void:
@@ -1114,76 +1277,141 @@ func _show_banner(text: String, color: Color) -> void:
 	tween.tween_property(_banner, "modulate:a", 0.0, 0.6)
 
 
+## The battle UI: a slim top bar (turn, score, view buttons) and a narrow side panel (unit, actions, target, log).
 func _build_ui() -> void:
+	UITheme.apply()
 	var layer := CanvasLayer.new()
 	add_child(layer)
-	_panel = PanelContainer.new()
-	_panel.set_anchors_preset(Control.PRESET_RIGHT_WIDE)
-	_panel.offset_left = -PANEL_WIDTH
-	_panel.offset_right = -12
-	_panel.offset_top = 12
-	_panel.offset_bottom = -12
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.11, 0.11, 0.1)
-	style.set_corner_radius_all(6)
-	_panel.add_theme_stylebox_override("panel", style)
-	layer.add_child(_panel)
-	var margin := MarginContainer.new()
-	for side in ["left", "right", "top", "bottom"]:
-		margin.add_theme_constant_override("margin_" + side, 10)
-	_panel.add_child(margin)
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 6)
-	margin.add_child(box)
 
+	var bar := PanelContainer.new()
+	bar.theme_type_variation = "TopBar"
+	bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	bar.offset_bottom = TOP_BAR_HEIGHT
+	layer.add_child(bar)
+	var bar_row := HBoxContainer.new()
+	bar_row.add_theme_constant_override("separation", 12)
+	bar.add_child(bar_row)
+	var heading := VBoxContainer.new()
+	heading.add_theme_constant_override("separation", -2)
+	heading.alignment = BoxContainer.ALIGNMENT_CENTER
+	bar_row.add_child(heading)
 	_title_label = Label.new()
 	_title_label.text = GameSession.battle_title
-	_title_label.add_theme_font_size_override("font_size", 13)
-	_title_label.modulate = Color(1, 1, 1, 0.6)
-	box.add_child(_title_label)
+	_title_label.theme_type_variation = "HelpLabel"
+	heading.add_child(_title_label)
 	_turn_label = Label.new()
-	_turn_label.add_theme_font_size_override("font_size", 20)
-	box.add_child(_turn_label)
-	_score_label = _rich_label(40)
-	box.add_child(_score_label)
-	box.add_child(HSeparator.new())
-	_unit_info = _rich_label(90)
-	box.add_child(_unit_info)
-
-	var actions := HFlowContainer.new()
-	box.add_child(actions)
-	for spec: Array in ACTION_BUTTONS:
-		_add_button(actions, spec[0], spec[1])
-
-	box.add_child(HSeparator.new())
-	_target_info = _rich_label(130)
-	box.add_child(_target_info)
-	box.add_child(HSeparator.new())
-	_log = _rich_label(0)
-	_log.fit_content = false
-	_log.scroll_following = true
-	_log.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	box.add_child(_log)
-
-	var view_row := HFlowContainer.new()
-	box.add_child(view_row)
+	_turn_label.theme_type_variation = "HeaderSmall"
+	_turn_label.add_theme_font_size_override("font_size", 18)
+	heading.add_child(_turn_label)
+	bar_row.add_child(VSeparator.new())
+	_score_label = _rich_label(0)
+	_score_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_score_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_score_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	bar_row.add_child(_score_label)
+	var view_row := HBoxContainer.new()
+	view_row.add_theme_constant_override("separation", 4)
+	view_row.alignment = BoxContainer.ALIGNMENT_END
+	view_row.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	bar_row.add_child(view_row)
 	_add_button(view_row, "rotate_left", "Q Rotate")
 	_add_button(view_row, "rotate_right", "E Rotate")
 	_add_button(view_row, "toggle_view", "V Iso / top")
 	_add_button(view_row, "speed", "Speed 1x")
+	var help_button := Button.new()
+	help_button.text = "?"
+	help_button.toggle_mode = true
+	help_button.focus_mode = Control.FOCUS_NONE
+	help_button.theme_type_variation = "SmallButton"
+	help_button.custom_minimum_size = Vector2(30, 0)
+	help_button.tooltip_text = "Controls"
+	help_button.toggled.connect(func(on: bool) -> void: _help.visible = on)
+	view_row.add_child(help_button)
+	_add_button(view_row, "settings", "Settings")
 	_add_button(view_row, "quit", "Save & quit")
+	_buttons["rotate_left"].tooltip_text = "Rotate the view a quarter turn left (Q)"
+	_buttons["rotate_right"].tooltip_text = "Rotate the view a quarter turn right (E)"
+	_buttons["toggle_view"].tooltip_text = "Switch between isometric and top-down (V)"
+	_buttons["speed"].tooltip_text = "Playback speed for moves and AI turns (+ / -)"
+
+	_panel = PanelContainer.new()
+	layer.add_child(_panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 5)
+	_panel.add_child(box)
+	_unit_info = _rich_label(58)
+	box.add_child(_unit_info)
+	var actions := GridContainer.new()
+	actions.columns = 2
+	actions.add_theme_constant_override("h_separation", 4)
+	actions.add_theme_constant_override("v_separation", 4)
+	box.add_child(actions)
+	var turn_row := HBoxContainer.new()
+	turn_row.add_theme_constant_override("separation", 4)
+	box.add_child(turn_row)
+	for spec: Array in ACTION_BUTTONS:
+		_add_button(turn_row if spec[0] in ["next", "end"] else actions, spec[0], spec[1])
+	for button: Button in actions.get_children() + turn_row.get_children():
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.clip_text = true
+	_buttons["end"].theme_type_variation = "PrimaryButton"
+	_buttons["end"].add_theme_font_size_override("font_size", 15)
+
+	box.add_child(HSeparator.new())
+	_target_info = _rich_label(36)
+	box.add_child(_target_info)
+	box.add_child(HSeparator.new())
+	var log_header := HBoxContainer.new()
+	log_header.add_theme_constant_override("separation", 6)
+	box.add_child(log_header)
+	_log_toggle = Button.new()
+	_log_toggle.toggle_mode = true
+	_log_toggle.focus_mode = Control.FOCUS_NONE
+	_log_toggle.theme_type_variation = "SmallButton"
+	_log_toggle.tooltip_text = "Show or hide the battle log"
+	_log_toggle.toggled.connect(_set_log_open)
+	log_header.add_child(_log_toggle)
+	_log_last = _rich_label(0)
+	_log_last.fit_content = false
+	_log_last.scroll_active = false
+	_log_last.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_log_last.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_log_last.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_log_last.custom_minimum_size = Vector2(0, 18)
+	_log_last.add_theme_font_size_override("normal_font_size", 12)
+	_log_last.add_theme_font_size_override("bold_font_size", 12)
+	_log_last.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	log_header.add_child(_log_last)
+	_log = _rich_label(0)
+	_log.fit_content = false
+	_log.scroll_following = true
+	_log.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_log.add_theme_font_size_override("normal_font_size", 12)
+	_log.add_theme_font_size_override("bold_font_size", 12)
+	box.add_child(_log)
+	_set_log_open(false)
+
+	_help = PanelContainer.new()
+	_help.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_help.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_help.offset_left = 8
+	_help.offset_bottom = -8
+	_help.offset_top = -8
+	_help.hide()
+	layer.add_child(_help)
 	var help := Label.new()
-	help.text = "LMB select / move / target   RMB, Esc cancel\nWASD or middle drag pan   Wheel zoom   F focus   +/- speed"
-	help.add_theme_font_size_override("font_size", 12)
-	help.modulate = Color(1, 1, 1, 0.6)
-	box.add_child(help)
+	help.text = HELP_TEXT
+	help.theme_type_variation = "HelpLabel"
+	help.add_theme_font_size_override("font_size", 13)
+	_help.add_child(help)
 
 	_banner = Label.new()
 	_banner.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	_banner.offset_left = -400 - PANEL_WIDTH * 0.5
 	_banner.offset_right = 400 - PANEL_WIDTH * 0.5
-	_banner.offset_top = 24
+	_banner.offset_top = TOP_BAR_HEIGHT + 20
 	_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_banner.theme_type_variation = "HeaderLarge"
 	_banner.add_theme_font_size_override("font_size", 30)
 	_banner.add_theme_constant_override("outline_size", 8)
 	_banner.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
@@ -1192,7 +1420,7 @@ func _build_ui() -> void:
 	layer.add_child(_banner)
 
 	_overlay = ColorRect.new()
-	_overlay.color = Color(0.06, 0.06, 0.05, 0.97)
+	_overlay.color = Color(UITheme.INK, 0.97)
 	_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_overlay.gui_input.connect(_on_overlay_input)
 	_overlay.hide()
@@ -1201,15 +1429,35 @@ func _build_ui() -> void:
 	_overlay_label.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_overlay_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_overlay_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_overlay_label.theme_type_variation = "HeaderLarge"
 	_overlay_label.add_theme_font_size_override("font_size", 32)
 	_overlay_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_overlay.add_child(_overlay_label)
+
+
+## Folds the log away (the panel then only takes the height it needs) or opens it down to the bottom of the screen.
+func _set_log_open(open: bool) -> void:
+	_log_toggle.set_pressed_no_signal(open)
+	_log_toggle.text = "Log ▾" if open else "Log ▸"
+	_log.visible = open
+	_log_last.visible = not open
+	_panel.anchor_left = 1.0
+	_panel.anchor_right = 1.0
+	_panel.anchor_top = 0.0
+	_panel.anchor_bottom = 1.0 if open else 0.0
+	_panel.offset_left = -PANEL_WIDTH
+	_panel.offset_right = -8
+	_panel.offset_top = TOP_BAR_HEIGHT + 8
+	_panel.offset_bottom = -8 if open else TOP_BAR_HEIGHT + 8
+	_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_panel.grow_vertical = Control.GROW_DIRECTION_END
 
 
 func _add_button(parent: Control, action: String, text: String) -> void:
 	var button := Button.new()
 	button.text = text
 	button.focus_mode = Control.FOCUS_NONE
+	button.theme_type_variation = "SmallButton"
 	button.pressed.connect(_on_action.bind(action))
 	parent.add_child(button)
 	_buttons[action] = button
@@ -1503,8 +1751,18 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 			c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(selected.pos), throw_range), Color(color, 0.6), 1.5)
 			var ok := battle.can_throw_grenade(selected, hover) == "" if grenade else battle.can_throw_smoke(selected, hover) == ""
 			if ok:
-				for p in battle.map.tiles_in_radius(hover, radius):
-					c.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), color)
+				# The blast on target, and fainter, everywhere it could reach if the throw goes astray.
+				var scatter := CombatRules.throw_scatter(selected, selected.pos, hover)
+				var area := {}
+				for spot: Vector2i in battle.throw_landings(hover, scatter):
+					for p in battle.map.tiles_in_radius(spot, radius):
+						area[p] = true
+				var core := battle.map.tiles_in_radius(hover, radius)
+				for p: Vector2i in area:
+					c.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), color if core.has(p) else Color(color, color.a * 0.35))
+				_draw_region_border(c, area, Color(color, 0.9))
+				if scatter >= 0.5:
+					c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(hover), scatter), Color(color, 0.9), 1.5)
 		Mode.MORTAR:
 			if battle.can_fire_mortar(selected, hover, _mortar_kind) == "":
 				var he := _mortar_kind == "he"
@@ -1516,6 +1774,16 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 			for u in battle.alive_units(selected.team):
 				if battle.can_use_medkit(selected, u) == "":
 					c.draw_polyline(TerrainPainter.ground_circle(_proj, _display_pos[u.id], 0.45), Color("6bff8a"), 2.5)
+	if (mode == Mode.MOVE or mode == Mode.SHOOT) and CombatRules.misses_stray(selected.weapon):
+		# Where misses may go: a rocket or shell's landing area, and friends in harm's way.
+		var target := battle.unit_at(hover)
+		if target != null and _seen_units.has(target.id) and battle.can_shoot(selected, target) == "":
+			if selected.weapon.anti_tank:
+				for p in battle.stray_tiles(selected.pos, hover):
+					c.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), Color(1, 0.4, 0.2, 0.12))
+			for risk: Dictionary in battle.stray_risks(selected, selected.pos, target):
+				if risk["unit"].team == selected.team:
+					c.draw_polyline(TerrainPainter.ground_circle(_proj, _display_pos[risk["unit"].id], 0.45), Color("ff6b6b"), 2.5)
 
 
 ## An arrow on the ground showing which way a tank will face on a tile.
@@ -1642,7 +1910,7 @@ func _draw_markers() -> void:
 			var tag_color := Color("ff7060") if suppression >= Unit.SUPPRESSED_AT or u.is_wounded() else Color("ffd34d")
 			draw_string_outline(_font, top + Vector2(-60, -5), " ".join(tags), HORIZONTAL_ALIGNMENT_CENTER, 120, 10, 3, Color(0, 0, 0, 0.7))
 			draw_string(_font, top + Vector2(-60, -5), " ".join(tags), HORIZONTAL_ALIGNMENT_CENTER, 120, 10, tag_color)
-		if mode == Mode.SHOOT and _target_odds.has(u.id):
+		if mode == Mode.SHOOT and _target_odds.has(u.id) and GameSettings.show_hit_chance:
 			draw_string_outline(_font, top + Vector2(-30, -18), "%d%%" % _target_odds[u.id], HORIZONTAL_ALIGNMENT_CENTER, 60, 15, 4, Color(0, 0, 0, 0.8))
 			draw_string(_font, top + Vector2(-30, -18), "%d%%" % _target_odds[u.id], HORIZONTAL_ALIGNMENT_CENTER, 60, 15, Color.WHITE)
 	if busy or selected == null or not battle.map.in_bounds(hover) or mode != Mode.MOVE or not _reach.has(hover) or hover == selected.pos:

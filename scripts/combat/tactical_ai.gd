@@ -34,6 +34,13 @@ const CROWDING_PENALTY := 4.0
 ## Danger of standing where a mortar shell is about to land.
 const STRIKE_DANGER := 45.0
 const GRENADE_COST := 20.0
+## Harm a stray round (see Battle.stray_risks) may do to our own soldiers counts this many times over, and
+## a shot that would hit one of them more than FRIENDLY_FIRE_LIMIT of the time costs FRIENDLY_FIRE_PENALTY more.
+## Strays into enemies count at STRAY_ENEMY_VALUE.
+const FRIENDLY_FIRE_WEIGHT := 3.0
+const FRIENDLY_FIRE_LIMIT := 0.12
+const FRIENDLY_FIRE_PENALTY := 25.0
+const STRAY_ENEMY_VALUE := 0.5
 const MORTAR_COST := 10.0
 ## Enemies may move before a mortar shell lands, so only part of its value counts.
 const MORTAR_CERTAINTY := 0.5
@@ -154,7 +161,7 @@ func _best_plan(u: Unit, seen: Array[Unit]) -> Dictionary:
 	if u.grenades > 0:
 		for tile in _tiles_around(seen):
 			if battle.can_throw_grenade(u, tile) == "":
-				var value := _blast_value(tile, CombatRules.GRENADE_RADIUS, CombatRules.GRENADE_DAMAGE_MIN, CombatRules.GRENADE_DAMAGE_MAX, CombatRules.GRENADE_SHRED, seen)
+				var value := _grenade_value(u, tile, seen)
 				if value > 0.0:
 					plans.append(_plan(u, "grenade", stay + value - GRENADE_COST, null, tile))
 	if u.role == "Mortar" and u.mortar_rounds > 0 and u.actions >= Unit.ACTIONS_PER_TURN:
@@ -316,6 +323,8 @@ func _followup_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 func _shot_value(u: Unit, from: Vector2i, target: Unit) -> float:
 	var outcome := _expected_damage(u, from, target, target.pos)
 	var value := outcome[0] * 10.0 + outcome[1] * KILL_BONUS + (5.0 if target.overwatch else 0.0)
+	if CombatRules.misses_stray(u.weapon):
+		value -= _stray_cost(u, from, target)
 	if target.vehicle:
 		# Tanks shrug off suppression; knocking one out is worth a lot.
 		return value * 1.5
@@ -332,6 +341,32 @@ func _shot_value(u: Unit, from: Vector2i, target: Unit) -> float:
 			if ally != target and Vector2(ally.pos).distance_to(Vector2(target.pos)) <= CombatRules.MG_AREA_RADIUS:
 				suppression += mini(100 - ally.suppression, int(u.weapon.suppression / 2.0))
 	return value + suppression * SUPPRESSION_VALUE
+
+
+## What a miss may cost: harm to our own soldiers near the line of fire or where the round may land,
+## minus the chance of hurting other enemies we can see.
+func _stray_cost(u: Unit, from: Vector2i, target: Unit) -> float:
+	var risks := battle.stray_risks(u, from, target)
+	if risks.is_empty():
+		return 0.0
+	var saved := u.pos
+	u.pos = from
+	var odds := battle.shot_odds(u, target)
+	u.pos = saved
+	var miss: float = 1.0 - (odds["hit"] + odds["graze"]) / 100.0
+	var cost := 0.0
+	for risk in risks:
+		var victim: Unit = risk["unit"]
+		var damage: float = risk["damage"]
+		var chance: float = risk["chance"] * miss
+		var harm := damage * 10.0 + (KILL_BONUS if victim.hp <= ceili(damage) else 0.0)
+		if victim.team == team:
+			cost += harm * chance * FRIENDLY_FIRE_WEIGHT
+			if chance > FRIENDLY_FIRE_LIMIT:
+				cost += FRIENDLY_FIRE_PENALTY
+		elif battle.team_sees(team, victim):
+			cost -= harm * chance * STRAY_ENEMY_VALUE
+	return cost
 
 
 func _overwatch_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
@@ -354,7 +389,22 @@ func _tiles_around(seen: Array[Unit]) -> Array[Vector2i]:
 	return tiles
 
 
-func _blast_value(tile: Vector2i, radius: float, damage_min: int, damage_max: int, shred: int, seen: Array[Unit]) -> float:
+## A grenade's value averaged over where it may land (it scatters with range, aim and suppression).
+func _grenade_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
+	var aimed := _blast_value(tile, CombatRules.GRENADE_RADIUS, CombatRules.GRENADE_DAMAGE_MIN, CombatRules.GRENADE_DAMAGE_MAX, CombatRules.GRENADE_SHRED, seen)
+	if aimed <= 0.0:
+		return 0.0
+	var landings := battle.throw_landings(tile, CombatRules.throw_scatter(u, u.pos, tile))
+	var value := 0.0
+	for spot: Vector2i in landings:
+		var spot_value := aimed if spot == tile else _blast_value(spot, CombatRules.GRENADE_RADIUS, CombatRules.GRENADE_DAMAGE_MIN, CombatRules.GRENADE_DAMAGE_MAX, CombatRules.GRENADE_SHRED, seen, false)
+		value += spot_value * landings[spot]
+	return value
+
+
+## Value of a blast on tile: damage, kills and suppression to enemies we can see, minus twice that to our own.
+## 0 when it would hit no enemy, unless require_hit is off (for where a grenade may stray).
+func _blast_value(tile: Vector2i, radius: float, damage_min: int, damage_max: int, shred: int, seen: Array[Unit], require_hit := true) -> float:
 	var value := 0.0
 	var hits := 0
 	var average := (damage_min + damage_max) / 2.0
@@ -378,7 +428,7 @@ func _blast_value(tile: Vector2i, radius: float, damage_min: int, damage_max: in
 				if battle.map.has_cover(victim.pos):
 					value += 6.0
 		value += -victim_value * 2.0 if victim.team == team else victim_value
-	return value if hits > 0 else 0.0
+	return value if hits > 0 or not require_hit else 0.0
 
 
 # --- Knowledge ---

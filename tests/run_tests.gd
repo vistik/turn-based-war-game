@@ -268,13 +268,16 @@ func test_reaction_fire_can_pin_a_runner() -> void:
 # --- Explosives ---
 
 func test_grenade_destroys_cover_and_leaves_a_crater() -> void:
-	var battle := make_battle([["Rifleman", 0, Vector2i(2, 5)], ["Rifleman", 1, Vector2i(7, 5)], ["Rifleman", 1, Vector2i(15, 15)]])
+	# Thrown from two tiles away: too close to land off target.
+	var battle := make_battle([["Rifleman", 0, Vector2i(5, 5)], ["Rifleman", 1, Vector2i(7, 5)], ["Rifleman", 1, Vector2i(15, 15)]])
 	battle.map.set_object(Vector2i(6, 5), Cover.HALF)
 	battle.map.set_edge(Vector2i(7, 5), Vector2i(7, 6), Cover.FULL)
 	var target := battle.units[1]
 	target.armor = 1
 	var events := battle.throw_grenade(battle.units[0], Vector2i(7, 5))
-	check_eq(events[0]["type"], "explosion", "explosion event")
+	check_eq(events[0]["type"], "throw", "throw event")
+	check_eq(events[0]["center"], Vector2i(7, 5), "a short throw lands on target")
+	check_eq(events[1]["type"], "explosion", "explosion event")
 	check_eq(battle.map.get_object(Vector2i(6, 5)), Cover.NONE, "crate destroyed")
 	check_eq(battle.map.get_edge(Vector2i(7, 5), Vector2i(7, 6)), Cover.NONE, "wall destroyed")
 	check_eq(battle.map.get_terrain(Vector2i(7, 5)), TacticalMap.Terrain.CRATER, "crater at the centre")
@@ -608,6 +611,150 @@ func test_tank_shell_splashes_and_wrecks_burn() -> void:
 	check_eq(wreck_battle.units[0].kills, 1, "kill credited")
 
 
+# --- Stray grenades and rounds ---
+
+func test_grenade_scatter_stays_in_radius_and_is_deterministic() -> void:
+	var landings := []
+	var off_target := 0
+	var outside := 0
+	for seed in range(1, 41):
+		var units: Array[Unit] = [Unit.create(0, "A", "Rifleman", 0, Vector2i(2, 8)), Unit.create(1, "B", "Rifleman", 1, Vector2i(15, 15))]
+		units[0].aim = 50
+		units[0].suppression = Unit.SUPPRESSED_AT
+		var battle := Battle.new(TacticalMap.new(16, 16), units, seed)
+		battle.start()
+		var target := Vector2i(11, 8)
+		var scatter := CombatRules.throw_scatter(units[0], units[0].pos, target)
+		var events := battle.throw_grenade(units[0], target)
+		var landing: Vector2i = events_of(events, "throw")[0]["center"]
+		check_eq(events_of(events, "explosion")[0]["center"], landing, "the blast is where it landed")
+		if Vector2(landing).distance_to(Vector2(target)) > scatter + 0.001:
+			outside += 1
+		if landing != target:
+			off_target += 1
+		landings.append(landing)
+		var spread := battle.throw_landings(target, scatter)
+		var total := 0.0
+		for spot: Vector2i in spread:
+			total += spread[spot]
+			if Vector2(spot).distance_to(Vector2(target)) > scatter + 0.001:
+				outside += 1
+		check(absf(total - 1.0) < 0.001, "landing odds add up to 1")
+	check_eq(outside, 0, "grenades never land beyond the stated scatter")
+	check(off_target > 0 and off_target < 40, "long, shaky throws sometimes land off target (%d of 40)" % off_target)
+	var again := []
+	for seed in [1, 2, 3]:
+		var units: Array[Unit] = [Unit.create(0, "A", "Rifleman", 0, Vector2i(2, 8)), Unit.create(1, "B", "Rifleman", 1, Vector2i(15, 15))]
+		units[0].aim = 50
+		units[0].suppression = Unit.SUPPRESSED_AT
+		var battle := Battle.new(TacticalMap.new(16, 16), units, seed)
+		battle.start()
+		again.append(events_of(battle.throw_grenade(units[0], Vector2i(11, 8)), "throw")[0]["center"])
+	check_eq(again, landings.slice(0, 3), "same seed, same landing")
+
+
+func test_grenades_bounce_off_walls() -> void:
+	var beyond := 0
+	for seed in range(1, 31):
+		var units: Array[Unit] = [Unit.create(0, "A", "Rifleman", 0, Vector2i(2, 8)), Unit.create(1, "B", "Rifleman", 1, Vector2i(0, 15))]
+		units[0].aim = 40
+		units[0].suppression = Unit.PINNED_AT
+		var map := TacticalMap.new(16, 16)
+		for y in 16:
+			map.set_edge(Vector2i(10, y), Vector2i(11, y), Cover.FULL)
+		var battle := Battle.new(map, units, seed)
+		battle.start()
+		var landing: Vector2i = events_of(battle.throw_grenade(units[0], Vector2i(10, 8)), "throw")[0]["center"]
+		if landing.x > 10:
+			beyond += 1
+	check_eq(beyond, 0, "a grenade never flies through a wall")
+
+
+func test_stray_rockets_can_hit_friends() -> void:
+	var friend_hits := 0
+	var outside := 0
+	for seed in range(1, 61):
+		var units: Array[Unit] = [
+			Unit.create(0, "AT", "AT", 0, Vector2i(2, 8)), Unit.create(1, "Target", "Rifleman", 1, Vector2i(6, 8)),
+			Unit.create(2, "Friend", "Rifleman", 0, Vector2i(8, 8)),
+		]
+		units[1].defense = 200
+		units[1].hp = 50
+		units[2].hp = 50
+		var battle := Battle.new(TacticalMap.new(16, 16), units, seed)
+		battle.start()
+		var zone := battle.stray_tiles(units[0].pos, units[1].pos)
+		var shot: Dictionary = events_of(battle.shoot(units[0], units[1]), "shot")[0]
+		check_eq(shot["result"], "miss", "can't hit")
+		if not zone.has(shot.get("stray", Vector2i(-1, -1))):
+			outside += 1
+		if units[2].hp < 50:
+			friend_hits += 1
+	check_eq(outside, 0, "missed rockets land in the stray zone")
+	check(friend_hits > 0, "stray rockets can hit friends (%d of 60)" % friend_hits)
+	var battle := make_battle([["AT", 0, Vector2i(2, 8)], ["Rifleman", 1, Vector2i(6, 8)], ["Rifleman", 0, Vector2i(8, 8)]])
+	var risks := battle.stray_risks(battle.units[0], battle.units[0].pos, battle.units[1])
+	check(risks.size() == 1 and risks[0]["unit"] == battle.units[2] and risks[0]["chance"] > 0.0, "the friend behind the target is at risk")
+
+
+func test_stray_machine_gun_rounds_hit_bystanders() -> void:
+	var hits := {}
+	for seed in range(1, 61):
+		var units: Array[Unit] = [
+			Unit.create(0, "MG", "MG", 0, Vector2i(2, 8)), Unit.create(1, "Target", "Rifleman", 1, Vector2i(9, 8)),
+			Unit.create(2, "Friend", "Rifleman", 0, Vector2i(9, 9)), Unit.create(3, "Enemy", "Rifleman", 1, Vector2i(5, 8)),
+			Unit.create(4, "Clear", "Rifleman", 0, Vector2i(5, 12)),
+		]
+		units[1].defense = 200
+		for u in units:
+			u.hp = 50
+		units[0].deployed = true
+		var battle := Battle.new(TacticalMap.new(16, 16), units, seed)
+		battle.start()
+		var shot: Dictionary = events_of(battle.shoot(units[0], units[1]), "shot")[0]
+		if shot.has("stray_unit"):
+			hits[shot["stray_unit"]] = true
+		check_eq(units[4].hp, 50, "nobody far from the line of fire is hit")
+	check(hits.has(2), "a stray burst can hit a friend beside the target")
+	check(hits.has(3), "or an enemy in the line of fire")
+	var battle := make_battle([["MG", 0, Vector2i(2, 8)], ["Rifleman", 1, Vector2i(9, 8)], ["Rifleman", 0, Vector2i(9, 9)], ["Rifleman", 0, Vector2i(5, 12)]])
+	var at_risk := battle.mg_bystanders(battle.units[0], battle.units[0].pos, battle.units[1])
+	check_eq(at_risk, [battle.units[2]], "only the friend beside the target is at risk")
+
+
+func test_odds_info_lists_the_stray_risk() -> void:
+	var battle := make_battle([["MG", 0, Vector2i(2, 8)], ["Rifleman", 1, Vector2i(9, 8)], ["Rifleman", 0, Vector2i(9, 9)]])
+	battle.units[0].deployed = true
+	battle.units[2].name = "Pvt. Friend"
+	var view: Node2D = load("res://scripts/view/battle_view.gd").new()
+	view.battle = battle
+	var text: String = view._describe_odds(battle.units[0], battle.units[1])
+	check(text.contains("Misses may hit: Pvt. Friend (friendly)"), "the odds panel warns about friends in the line of fire")
+	view.selected = battle.units[0]
+	var scatter_text: String = view._describe_scatter(Vector2i(9, 8), CombatRules.GRENADE_RADIUS, true)
+	check(scatter_text.contains("tiles off target") and scatter_text.contains("Pvt. Friend"), "the grenade panel shows the scatter and who it could catch")
+	view.free()
+
+
+func test_ai_weighs_friendly_fire() -> void:
+	var battle := make_battle([["MG", 0, Vector2i(2, 8)], ["Rifleman", 1, Vector2i(9, 8)], ["Rifleman", 0, Vector2i(9, 9)], ["Rifleman", 1, Vector2i(15, 2)]])
+	var mg := battle.units[0]
+	mg.deployed = true
+	var ai := TacticalAI.new(battle, 0)
+	var risky := ai._shot_value(mg, mg.pos, battle.units[1])
+	battle.units[2].pos = Vector2i(0, 15)
+	var clear := ai._shot_value(mg, mg.pos, battle.units[1])
+	check(risky < clear, "firing past a friend is worth less (%.1f vs %.1f)" % [risky, clear])
+	battle.units[2].pos = Vector2i(9, 9)
+	var grenade_battle := make_battle([["Rifleman", 0, Vector2i(2, 8)], ["Rifleman", 1, Vector2i(11, 8)], ["Rifleman", 0, Vector2i(12, 9)], ["Rifleman", 1, Vector2i(15, 2)]])
+	var thrower := grenade_battle.units[0]
+	thrower.aim = 50
+	var grenade_ai := TacticalAI.new(grenade_battle, 0)
+	var seen: Array[Unit] = [grenade_battle.units[1]]
+	var aimed := grenade_ai._blast_value(Vector2i(10, 8), CombatRules.GRENADE_RADIUS, CombatRules.GRENADE_DAMAGE_MIN, CombatRules.GRENADE_DAMAGE_MAX, CombatRules.GRENADE_SHRED, seen)
+	check(grenade_ai._grenade_value(thrower, Vector2i(10, 8), seen) < aimed, "a scattering grenade near a friend is worth less than a perfect throw")
+
+
 # --- Saving ---
 
 func test_save_and_load_round_trip() -> void:
@@ -632,6 +779,58 @@ func test_save_and_load_round_trip() -> void:
 		var a: Array = ais[battle.current_team].act()
 		var b: Array = copy_ais[copy.current_team].act()
 		check_eq(var_to_str(b), var_to_str(a), "step %d plays out the same after loading" % i)
+
+
+func test_online_save_continues_identically() -> void:
+	var saved_dir := GameSession.save_dir
+	GameSession.save_dir = OS.get_temp_dir().path_join("normandy-test-%d" % OS.get_process_id())
+	var battle: Battle = GameSession.build_skirmish({"map": "random", "size": 44, "seed": 99})[0]
+	battle.start()
+	var ai := TacticalAI.new(battle, 0)
+	while battle.round_number < 3:
+		ai.team = battle.current_team
+		battle.execute(ai.decide())
+	# Saved to disk and loaded back, the battle has the same checksum (dictionary order, floats, dice).
+	GameSession.start_online(battle, "Test map", 1, "game-1", "1.2.3.4:24944", false)
+	GameSession.save_online(1)
+	var offer := GameSession.online_offer()
+	check_eq(offer.get("checksum"), battle.checksum(), "the online save keeps the checksum")
+	check_eq(offer.get("team"), 1, "the save knows our side")
+	check_eq(GameSession.compare_online(offer), "", "our own save matches itself")
+	var other := offer.duplicate()
+	other["game_id"] = "game-2"
+	check(GameSession.compare_online(other) != "", "a different game is noticed")
+	var later := offer.duplicate()
+	later["checksum"] = "x"
+	later["turn_index"] = offer["turn_index"] + 2
+	check(GameSession.compare_online(later).contains("older"), "an older save of ours is noticed")
+	check(not GameSession.resume_online(later, 0, "", true), "a battle that doesn't match its checksum isn't loaded")
+	check(GameSession.resume_online(offer, 0, "", true), "the offer loads")
+	var copy := GameSession.battle
+	check(copy != battle, "a fresh battle was loaded")
+	check_eq(copy.checksum(), battle.checksum(), "loaded battle has the same checksum")
+	# Both play on under the same commands and stay identical.
+	for i in 60:
+		if battle.winner != -1:
+			break
+		ai.team = battle.current_team
+		var command := ai.decide()
+		check_eq(var_to_str(copy.execute(command)), var_to_str(battle.execute(command)), "command %d plays out the same after loading" % i)
+		if copy.checksum() != battle.checksum():
+			break
+	check_eq(copy.checksum(), battle.checksum(), "both games stay identical after loading")
+	# Agreeing on a turn change saves; a finished battle clears the save.
+	GameSession.on_turn_agreed(copy.turn_index, "not the state", 0)
+	check_eq(GameSession.peek("online")["checksum"], offer["checksum"], "a state the games don't agree on isn't saved")
+	GameSession.on_turn_agreed(copy.turn_index, copy.checksum(), 0)
+	check_eq(GameSession.peek("online")["checksum"], copy.checksum(), "an agreed turn change is saved")
+	copy.winner = 0
+	GameSession.save_online(0)
+	check(not GameSession.has_save("online"), "a finished online battle clears its save")
+	DirAccess.remove_absolute(GameSession.save_dir)
+	GameSession.save_dir = saved_dir
+	GameSession.online = {}
+	GameSession.battle = null
 
 
 # --- Map generator ---
@@ -703,3 +902,45 @@ func test_every_campaign_mission_builds() -> void:
 		var mission: Dictionary = Campaign.MISSIONS[i]
 		check_eq(battle.alive_units(1).size(), mission["enemy"].size(), "%s enemy force" % mission["name"])
 		check_eq(battle.objectives.size(), 3, "%s objectives" % mission["name"])
+
+
+# --- Settings ---
+
+const TEST_SETTINGS := "user://test_settings.cfg"
+
+
+func test_settings_save_and_load_round_trip() -> void:
+	GameSettings.reset()
+	check_eq(GameSettings.to_dict(), GameSettings.defaults(), "reset gives the defaults")
+	check(not GameSettings.load_settings("user://no_such_settings.cfg"), "a missing file reports false")
+	check_eq(GameSettings.to_dict(), GameSettings.defaults(), "a missing file keeps the defaults")
+	var changed := {
+		"instant_movement": true, "follow_opponent": false, "own_speed": 2, "opponent_speed": 3,
+		"pan_speed": 0, "show_hit_chance": false, "confirm_end_turn": true, "fullscreen": true,
+	}
+	GameSettings.from_dict(changed)
+	GameSettings.save_settings(TEST_SETTINGS)
+	GameSettings.reset()
+	check(GameSettings.load_settings(TEST_SETTINGS), "the saved file loads")
+	check_eq(GameSettings.to_dict(), changed, "every setting survives saving and loading")
+	check_eq(GameSettings.speed_for(true), 2, "own turns use their own speed")
+	check_eq(GameSettings.speed_for(false), 3, "opponent turns use theirs")
+	DirAccess.remove_absolute(TEST_SETTINGS)
+	GameSettings.reset()
+
+
+func test_settings_ignore_bad_values() -> void:
+	var file := ConfigFile.new()
+	file.set_value("settings", "instant_movement", "yes")
+	file.set_value("settings", "own_speed", 99)
+	file.set_value("settings", "pan_speed", -4)
+	file.set_value("settings", "follow_opponent", false)
+	file.set_value("settings", "unknown", 1)
+	file.save(TEST_SETTINGS)
+	check(GameSettings.load_settings(TEST_SETTINGS), "a hand-edited file still loads")
+	check_eq(GameSettings.instant_movement, false, "a wrongly typed value falls back to the default")
+	check_eq(GameSettings.own_speed, GameSettings.SPEED_NAMES.size() - 1, "speed clamped to the fastest")
+	check_eq(GameSettings.pan_speed, 0, "pan speed clamped to the slowest")
+	check_eq(GameSettings.follow_opponent, false, "good values are kept")
+	DirAccess.remove_absolute(TEST_SETTINGS)
+	GameSettings.reset()

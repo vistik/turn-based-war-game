@@ -4,7 +4,7 @@ extends Control
 
 const ALLIED := Color("9cc45a")
 const GERMAN := Color("b8c0c8")
-const MUTED := Color(1, 1, 1, 0.6)
+const MUTED := UITheme.PAPER_DIM
 const BAD := Color("ff7a6a")
 const GOOD := Color("8fe08a")
 ## [label, setup "map", size]. Random maps are generated fresh each game; bigger ones bring bigger forces.
@@ -24,15 +24,26 @@ var _address: LineEdit
 var _port: LineEdit
 ## The map choice to host with, kept while the waiting page is up.
 var _host_setup := {}
+## The saved online game being hosted to continue (GameSession.online_offer), or {} for a new game.
+var _host_offer := {}
 
 
 func _ready() -> void:
+	GameSettings.ensure_loaded()
 	Net.peer_joined.connect(_on_peer_joined)
 	Net.setup_received.connect(_start_online)
 	Net.connection_failed.connect(_on_connection_failed)
-	var background := ColorRect.new()
-	background.color = Color(0.07, 0.075, 0.065)
+	UITheme.apply()
+	Net.resume_offered.connect(_on_resume_offered)
+	Net.resume_started.connect(_on_resume_started)
+	Net.resume_declined.connect(_on_resume_declined)
+	Net.desynced.connect(_on_resume_failed)
+	Net.disconnected.connect(_on_resume_failed.bind("The other player left."))
+	var background := Control.new()
 	background.set_anchors_preset(Control.PRESET_FULL_RECT)
+	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	background.draw.connect(UITheme.draw_backdrop.bind(background))
+	background.resized.connect(background.queue_redraw)
 	add_child(background)
 	if GameSession.show_campaign and GameSession.campaign != null:
 		GameSession.show_campaign = false
@@ -95,7 +106,16 @@ func _show_main() -> void:
 	_address.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	join_row.add_child(_address)
 	_button(join_row, "Join game", _join)
+	var online_save := GameSession.peek("online")
+	if not online_save.is_empty():
+		var side: String = Battle.TEAM_NAMES[online_save["team"]]
+		_button(box, "Continue online game: %s, round %d, as %s" % [online_save["title"], online_save["round"], side], _host_resume, true)
+		var hint := "Hosts your saved game on the port above; your opponent (%s) joins as usual and keeps their side. Or join them if they host it." % online_save["opponent"]
+		_text(box, hint, MUTED, 14, true)
+		if not online_save["hosted"]:
+			_address.text = online_save["opponent"]
 	_gap(box, 12)
+	_button(box, "Settings", _show_settings)
 	_button(box, "Quit", get_tree().quit)
 
 
@@ -133,6 +153,8 @@ func _start_skirmish(mode: int) -> void:
 func _host() -> void:
 	var port := _port.text.to_int()
 	_host_setup = _skirmish_setup()
+	_host_setup["game_id"] = GameSession.new_game_id()
+	_host_offer = {}
 	var err := Net.host(port)
 	if err != OK:
 		_show_net_page("Can't host", "Couldn't open port %d (%s). Try another port." % [port, error_string(err)], "Back")
@@ -164,7 +186,7 @@ func _join() -> void:
 func _show_net_page(title: String, text: String, button: String) -> void:
 	var box := _new_page(560)
 	_title(box, title, 32)
-	_text(box, text, Color.WHITE, 16, true)
+	_text(box, text, UITheme.PAPER, 16, true)
 	_gap(box, 12)
 	_button(box, button, func() -> void:
 		Net.close()
@@ -172,6 +194,10 @@ func _show_net_page(title: String, text: String, button: String) -> void:
 
 
 func _on_peer_joined() -> void:
+	if not _host_offer.is_empty():
+		Net.send_resume(_host_offer)
+		_show_net_page("Continuing the saved game", "The other player joined and is loading the battle.", "Cancel")
+		return
 	Net.send_setup(_host_setup)
 	_start_online(_host_setup)
 
@@ -183,9 +209,89 @@ func _on_connection_failed() -> void:
 ## Both players build the same battle from the same setup.
 func _start_online(setup: Dictionary) -> void:
 	var built := GameSession.build_skirmish(setup)
-	GameSession.campaign = null
-	GameSession.start_battle(built[0], [false, false], "%s, online as %s" % [built[1], Battle.TEAM_NAMES[Net.local_team]])
+	GameSession.start_online(built[0], built[1], Net.local_team, setup.get("game_id", GameSession.new_game_id()), Net.opponent, Net.is_host)
 	get_tree().change_scene_to_file(GameSession.BATTLE_SCENE)
+
+
+# --- Continuing a saved online game ---
+
+## Host the saved online game again, on our old side, and wait for the opponent to join.
+func _host_resume() -> void:
+	var port := _port.text.to_int()
+	var offer := GameSession.online_offer()
+	if offer.is_empty() or not GameSession.resume_online(offer, offer["team"], GameSession.peek("online")["opponent"], true):
+		_show_net_page("Can't continue", "The saved online game couldn't be loaded.", "Back")
+		return
+	var err := Net.host(port, offer["team"])
+	if err != OK:
+		_show_net_page("Can't host", "Couldn't open port %d (%s). Try another port." % [port, error_string(err)], "Back")
+		return
+	_host_offer = offer
+	var addresses := Array(Net.local_addresses()).map(func(a: String) -> String: return "%s:%d" % [a, port])
+	_show_net_page("Waiting for the other player",
+			"Continuing %s, round %d, as %s.\n\nThey choose Join game and type:\n%s" % [offer["title"], offer["round"],
+			Battle.TEAM_NAMES[offer["team"]], "\n".join(addresses) if not addresses.is_empty() else "this computer's address"], "Cancel")
+
+
+## Joiner: the host wants to continue a saved game. Matching saves go straight on; otherwise ask first.
+func _on_resume_offered(offer: Dictionary) -> void:
+	var difference := GameSession.compare_online(offer)
+	if difference == "" or not GameSession.has_save("online"):
+		_accept_resume(offer)
+		return
+	var box := _new_page(560)
+	_title(box, "Continue the host's saved game?", 32)
+	_text(box, "%s, playing as %s.\n\n%s\n\nContinuing replaces your saved online game with the host's." % [
+			offer.get("title", "?"), Battle.TEAM_NAMES[Net.local_team], difference], Color.WHITE, 16, true)
+	_gap(box, 12)
+	_button(box, "Continue from the host's save", _accept_resume.bind(offer), true)
+	_button(box, "Leave", func() -> void:
+		Net.decline_resume()
+		_show_main())
+
+
+func _accept_resume(offer: Dictionary) -> void:
+	if not GameSession.resume_online(offer, Net.local_team, Net.opponent, false):
+		Net.report_desync("The host's saved battle doesn't load the same here.")
+		return
+	Net.accept_resume(GameSession.battle.checksum())
+	_show_net_page("Continuing the saved game", "Checking that both games loaded the same battle...", "Cancel")
+
+
+## Both games hold the same battle: save it as agreed, and play on.
+func _on_resume_started() -> void:
+	GameSession.save_online(Net.local_team)
+	get_tree().change_scene_to_file(GameSession.BATTLE_SCENE)
+
+
+func _on_resume_declined() -> void:
+	Net.close()
+	_show_net_page("Not continued", "The other player chose not to continue this game. Your save is kept.", "Back")
+
+
+## The connection broke, or the two games didn't load the same battle, while setting up.
+func _on_resume_failed(reason: String) -> void:
+	Net.close()
+	_show_net_page("Couldn't continue the game", reason + " Your save is kept.", "Back")
+
+
+# --- Settings ---
+
+func _show_settings() -> void:
+	var box := _new_page(560)
+	_title(box, "Settings", 40)
+	_text(box, "Saved as you change them. They only change how battles are shown, never how they play out.", MUTED, 14, true)
+	box.add_child(SettingsPanel.new())
+	_gap(box, 12)
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 10)
+	box.add_child(buttons)
+	_button(buttons, "Back", _show_main, true).size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_button(buttons, "Restore defaults", func() -> void:
+		GameSettings.reset()
+		GameSettings.save_settings()
+		GameSettings.apply_window()
+		_show_settings())
 
 
 # --- Campaign screen ---
@@ -210,12 +316,12 @@ func _show_campaign() -> void:
 		_section(box, "After action: %s" % report["mission"])
 		_text(box, "Victory" if report["won"] else "Defeat. The mission can be tried again.", GOOD if report["won"] else BAD, 17)
 		for line: String in report["lines"]:
-			_text(box, "• " + line, Color(1, 1, 1, 0.85), 14)
+			_text(box, "• " + line, Color(UITheme.PAPER, 0.85), 14)
 
 	if not campaign.is_won() and not campaign.is_lost():
 		var mission := campaign.current_mission()
 		_section(box, "Briefing")
-		_text(box, mission["briefing"], Color.WHITE, 15, true)
+		_text(box, mission["briefing"], UITheme.PAPER, 15, true)
 		_text(box, "Enemy: %s" % _force(mission["enemy"]), GERMAN, 14, true)
 		if mission.has("enemy_reinforcements"):
 			for wave: Dictionary in mission["enemy_reinforcements"]:
@@ -236,7 +342,7 @@ func _show_campaign() -> void:
 		_text(grid, header, MUTED, 13)
 	for soldier in campaign.roster:
 		var dead: bool = soldier["status"] == "dead"
-		var color := Color(1, 1, 1, 0.35) if dead else Color.WHITE
+		var color := Color(UITheme.PAPER, 0.35) if dead else UITheme.PAPER
 		_text(grid, Campaign.display_name(soldier), ALLIED if not dead else color, 14)
 		_text(grid, soldier["role"], color, 14)
 		_text(grid, str(soldier["xp"]), color, 14)
@@ -297,7 +403,7 @@ static func _force(roles: Array) -> String:
 
 # --- Widgets ---
 
-## Replaces the current page with a fresh, centred, scrollable column.
+## Replaces the current page with a fresh, centred, scrollable column on a canvas panel.
 func _new_page(width: float) -> VBoxContainer:
 	if _page != null:
 		_page.queue_free()
@@ -312,26 +418,35 @@ func _new_page(width: float) -> VBoxContainer:
 	scroll.add_child(center)
 	var margin := MarginContainer.new()
 	for side in ["top", "bottom"]:
-		margin.add_theme_constant_override("margin_" + side, 32)
+		margin.add_theme_constant_override("margin_" + side, 28)
+	for side in ["left", "right"]:
+		margin.add_theme_constant_override("margin_" + side, 16)
 	center.add_child(margin)
+	var panel := PanelContainer.new()
+	margin.add_child(panel)
+	var inner := MarginContainer.new()
+	for side in ["left", "right", "top", "bottom"]:
+		inner.add_theme_constant_override("margin_" + side, 14)
+	panel.add_child(inner)
 	var box := VBoxContainer.new()
 	box.custom_minimum_size = Vector2(width, 0)
 	box.add_theme_constant_override("separation", 8)
-	margin.add_child(box)
+	inner.add_child(box)
 	return box
 
 
 func _title(parent: Control, text: String, size: int) -> void:
 	var label := Label.new()
 	label.text = text
+	label.uppercase = true
+	label.theme_type_variation = "HeaderLarge"
 	label.add_theme_font_size_override("font_size", size)
-	label.add_theme_color_override("font_color", Color("e8e2cf"))
 	parent.add_child(label)
 
 
 func _section(parent: Control, text: String) -> void:
 	_gap(parent, 10)
-	_title(parent, text, 22)
+	_title(parent, text, 21)
 	parent.add_child(HSeparator.new())
 
 
@@ -340,6 +455,7 @@ func _text(parent: Control, text: String, color: Color, size: int, wrap := false
 	label.text = text
 	label.add_theme_color_override("font_color", color)
 	label.add_theme_font_size_override("font_size", size)
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	if wrap:
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		label.custom_minimum_size = Vector2(300, 0)
@@ -350,8 +466,10 @@ func _text(parent: Control, text: String, color: Color, size: int, wrap := false
 func _button(parent: Control, text: String, action: Callable, primary := false) -> Button:
 	var button := Button.new()
 	button.text = text
-	button.custom_minimum_size = Vector2(0, 46 if primary else 40)
-	button.add_theme_font_size_override("font_size", 18 if primary else 16)
+	button.custom_minimum_size = Vector2(0, 44 if primary else 38)
+	button.add_theme_font_size_override("font_size", 19 if primary else 16)
+	if primary:
+		button.theme_type_variation = "PrimaryButton"
 	button.pressed.connect(action)
 	parent.add_child(button)
 	return button

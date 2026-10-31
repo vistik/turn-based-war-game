@@ -58,6 +58,28 @@ const MORTAR_DAMAGE_MAX := 5
 ## Shells land up to this many tiles off target per tile of distance.
 const MORTAR_SCATTER := 0.08
 const MEDKIT_HEAL := 4
+## Thrown grenades (frag and smoke) land up to this many tiles off target per tile thrown, plus more for
+## throwers with aim below THROW_STEADY_AIM and for throwers under fire. They bounce back off walls.
+const THROW_SCATTER := 0.12
+const THROW_STEADY_AIM := 70
+const THROW_SCATTER_PER_AIM := 0.03
+const THROW_SCATTER_SUPPRESSED := 0.6
+const THROW_SCATTER_PINNED := 1.2
+
+# --- Stray rounds ---
+## A missed rocket or tank shell flies on and lands on a random tile from STRAY_SHORT tiles short of the
+## target to STRAY_LONG tiles past it, within STRAY_WIDTH tiles of the line of fire (never at the shooter's feet).
+const STRAY_SHORT := 1.0
+const STRAY_LONG := 3.0
+const STRAY_WIDTH := 1.0
+## Chance that whoever stands where a stray rocket or shell lands takes a direct hit; otherwise only the blast.
+const STRAY_HIT_CHANCE := 50
+## A stray rocket bursts on the tile it lands on (SPLASH_DAMAGE, destroys cover there).
+const ROCKET_BLAST_RADIUS := 0.5
+## A machine gun's miss can hit anyone else beside the target (MG_AREA_RADIUS) or within MG_STRAY_LINE
+## tiles of the line of fire, friends included: each in turn with MG_STRAY_CHANCE, for half damage.
+const MG_STRAY_LINE := 0.75
+const MG_STRAY_CHANCE := 20
 
 # --- Tanks ---
 ## Damage each armour side stops from anti-tank hits.
@@ -79,6 +101,22 @@ static func armor_side(target: Unit, from: Vector2i) -> String:
 	if alignment < -0.5:
 		return "rear"
 	return "side"
+
+
+## How far (in tiles) a grenade thrown from `from` at `tile` may land off target.
+static func throw_scatter(thrower: Unit, from: Vector2i, tile: Vector2i) -> float:
+	var scatter := Vector2(from).distance_to(Vector2(tile)) * THROW_SCATTER
+	scatter += maxi(0, THROW_STEADY_AIM - thrower.aim) * THROW_SCATTER_PER_AIM
+	if thrower.is_pinned():
+		scatter += THROW_SCATTER_PINNED
+	elif thrower.is_suppressed():
+		scatter += THROW_SCATTER_SUPPRESSED
+	return scatter
+
+
+## Whether a weapon's misses can hit something else: machine guns, rockets and tank guns.
+static func misses_stray(weapon: Weapon) -> bool:
+	return weapon.needs_setup or weapon.anti_tank
 
 
 ## Hit, graze and crit chances (0-100) plus the itemised modifiers behind the hit chance.

@@ -453,3 +453,167 @@ func test_ai_battle_finishes() -> void:
 		ais[battle.current_team].act()
 		steps += 1
 	check(battle.winner != -1, "AI vs AI on the Normandy map reaches a result (steps %d, round %d)" % [steps, battle.round_number])
+
+
+# --- Tanks ---
+
+func test_small_arms_bounce_off_tanks() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(2, 5)], ["Tank", 1, Vector2i(5, 5)], ["Rifleman", 1, Vector2i(15, 15)]])
+	var tank := battle.units[1]
+	for i in 6:
+		battle.units[0].actions = 2
+		battle.current_team = 0
+		battle.shoot(battle.units[0], tank)
+		battle.units[0].ammo = 8
+	check_eq(tank.hp, tank.max_hp, "rifle fire never hurts a tank")
+	check_eq(tank.suppression, 0, "tanks can't be suppressed")
+
+
+func test_anti_tank_damage_depends_on_armour_side() -> void:
+	var battle := make_battle([["AT", 0, Vector2i(2, 5)], ["Tank", 1, Vector2i(5, 5)], ["Rifleman", 1, Vector2i(15, 15)]])
+	var tank := battle.units[1]
+	tank.facing = Vector2i(-1, 0)
+	check_eq(CombatRules.armor_side(tank, Vector2i(2, 5)), "front", "facing the shooter")
+	check_eq(CombatRules.armor_side(tank, Vector2i(9, 5)), "rear", "shot from behind")
+	check_eq(CombatRules.armor_side(tank, Vector2i(5, 1)), "side", "shot from the side")
+	var ai := TacticalAI.new(battle, 0)
+	var front := ai._expected_damage(battle.units[0], Vector2i(2, 5), tank, tank.pos)[0]
+	var rear := ai._expected_damage(battle.units[0], Vector2i(8, 5), tank, tank.pos)[0]
+	check(rear > front, "rear shots do more damage (%.2f vs %.2f)" % [rear, front])
+	check_eq(ai._expected_damage(battle.units[2], Vector2i(10, 5), tank, tank.pos)[0], 0.0, "AI knows rifles can't hurt tanks")
+
+
+func test_tanks_crush_and_push_through() -> void:
+	var battle := make_battle([["Tank", 0, Vector2i(2, 5)], ["Rifleman", 1, Vector2i(15, 15)]])
+	var map := battle.map
+	# A line of crates with a hedge behind it, right across the map: the tank has to go through.
+	for y in map.height:
+		map.set_object(Vector2i(3, y), Cover.HALF, "crate")
+		map.set_edge(Vector2i(3, y), Vector2i(4, y), Cover.FULL, "hedge")
+	map.set_object(Vector2i(6, 6), Cover.FULL, "tree")
+	var tank := battle.units[0]
+	check(not battle.reachable(tank).has(Vector2i(6, 6)), "trees stop tanks")
+	battle.move(tank, Vector2i(5, 5))
+	check_eq(tank.pos, Vector2i(5, 5), "drove through")
+	var crates := 0
+	var hedges := 0
+	for y in map.height:
+		crates += int(map.get_object(Vector2i(3, y)) == Cover.HALF)
+		hedges += int(map.get_edge(Vector2i(3, y), Vector2i(4, y)) == Cover.FULL)
+	check_eq(crates, map.height - 1, "one crate crushed")
+	check_eq(hedges, map.height - 1, "one hedge flattened")
+	check(tank.facing.x > 0, "facing the way it drove")
+	check(map.has_vehicle(Vector2i(5, 5)) and not map.has_vehicle(Vector2i(2, 5)), "tank tile tracked")
+	check_eq(map.cover_toward(Vector2i(4, 5), Vector2i(1, 0)), Cover.HALF, "soldiers can shelter behind a tank")
+
+
+func test_tank_shell_splashes_and_wrecks_burn() -> void:
+	var battle := make_battle([["Tank", 0, Vector2i(2, 5)], ["Rifleman", 1, Vector2i(8, 5)], ["Rifleman", 1, Vector2i(8, 6)], ["Rifleman", 1, Vector2i(15, 15)]])
+	battle.map.set_object(Vector2i(7, 5), Cover.HALF, "sandbags")
+	battle.units[1].hp = 50
+	battle.units[2].hp = 50
+	var events := battle.shoot(battle.units[0], battle.units[1])
+	check_eq(events_of(events, "explosion").size(), 1, "the shell explodes")
+	check(battle.units[2].hp < 50 or Vector2(events_of(events, "explosion")[0]["center"]).distance_to(Vector2(8, 6)) > 1.0, "splash hits the neighbour")
+	var wreck_battle := make_battle([["AT", 0, Vector2i(2, 5)], ["Tank", 1, Vector2i(5, 5)], ["Rifleman", 1, Vector2i(15, 15)]])
+	wreck_battle._damage(wreck_battle.units[1], 100, 0, wreck_battle.units[0])
+	check_eq(wreck_battle.map.get_object(Vector2i(5, 5)), Cover.FULL, "a destroyed tank leaves a wreck")
+	check_eq(wreck_battle.map.get_object_kind(Vector2i(5, 5)), "wreck", "kind is wreck")
+	check_eq(wreck_battle.units[0].kills, 1, "kill credited")
+
+
+# --- Saving ---
+
+func test_save_and_load_round_trip() -> void:
+	var battle := NormandyScenario.build(42)
+	var ais := [TacticalAI.new(battle, 0), TacticalAI.new(battle, 1)]
+	battle.start()
+	for i in 12:
+		ais[battle.current_team].act()
+	var copy := Battle.from_dict(battle.to_dict())
+	check_eq(copy.round_number, battle.round_number, "round restored")
+	check_eq(copy.current_team, battle.current_team, "turn restored")
+	check_eq(copy.units.size(), battle.units.size(), "units restored")
+	for i in battle.units.size():
+		check_eq(copy.units[i].to_dict(), battle.units[i].to_dict(), "unit %d restored" % i)
+	check_eq(copy.map.to_dict(), battle.map.to_dict(), "map restored")
+	check_eq(copy.victory_points, battle.victory_points, "points restored")
+	# Same rolls after loading: both copies play on identically.
+	var copy_ais := [TacticalAI.new(copy, 0), TacticalAI.new(copy, 1)]
+	copy_ais[0].load_dict(ais[0].to_dict())
+	copy_ais[1].load_dict(ais[1].to_dict())
+	for i in 10:
+		var a: Array = ais[battle.current_team].act()
+		var b: Array = copy_ais[copy.current_team].act()
+		check_eq(var_to_str(b), var_to_str(a), "step %d plays out the same after loading" % i)
+
+
+# --- Map generator ---
+
+func test_generated_maps_are_fair_and_connected() -> void:
+	for seed in [1, 2, 3, 4, 5, 77, 1234]:
+		for size in [Vector2i(36, 36), Vector2i(46, 46)]:
+			var layout := MapGenerator.generate(seed, size)
+			var map: TacticalMap = layout["map"]
+			check(MapGenerator.is_playable(layout), "seed %d %s is connected" % [seed, size])
+			var mismatches := 0
+			for y in map.height:
+				for x in map.width:
+					var p := Vector2i(x, y)
+					var m := Vector2i(map.width - 1 - x, y)
+					if map.get_terrain(p) != map.get_terrain(m) or map.get_object(p) != map.get_object(m) \
+							or map.get_edge(p, p + Vector2i(0, 1)) != map.get_edge(m, m + Vector2i(0, 1)):
+						mismatches += 1
+			check_eq(mismatches, 0, "seed %d %s is mirrored" % [seed, size])
+	var a: Dictionary = MapGenerator.generate(9, Vector2i(40, 40))["map"].to_dict()
+	var b: Dictionary = MapGenerator.generate(9, Vector2i(40, 40))["map"].to_dict()
+	check_eq(a, b, "same seed, same map")
+
+
+# --- Campaign ---
+
+func test_campaign_mission_updates_the_roster() -> void:
+	var campaign := Campaign.create(5)
+	check_eq(campaign.deployable().size(), 8, "full squad deploys")
+	var battle := campaign.build_battle(11)
+	var ours := battle.alive_units(0)
+	check_eq(ours.size(), 8, "squad on the field")
+	check_eq(ours[0].role, "Officer", "officer leads")
+	ours[1].hp = 0
+	ours[2].kills = 3
+	ours[3].hp = 1
+	battle.winner = 0
+	var report := campaign.complete_mission(battle)
+	check(report["won"], "mission won")
+	check_eq(campaign.mission_index, 1, "on to mission two")
+	check_eq(campaign.supplies, Campaign.STARTING_SUPPLIES + Campaign.WIN_SUPPLIES, "supplies earned")
+	var dead := campaign._soldier(ours[1].record_id)
+	var veteran := campaign._soldier(ours[2].record_id)
+	var hurt := campaign._soldier(ours[3].record_id)
+	check_eq(dead["status"], "dead", "the dead stay dead")
+	check_eq(veteran["xp"], 4, "xp from the mission and kills")
+	check_eq(veteran["rank"], 1, "promoted to corporal")
+	check_eq(hurt["status"], "recovering", "badly wounded sits out")
+	check(not campaign.deployable().has(hurt), "not deployable while recovering")
+	var recruit := campaign.recruit("Mortar")
+	check_eq(recruit["role"], "Mortar", "recruited a replacement")
+	check_eq(campaign.supplies, Campaign.STARTING_SUPPLIES + Campaign.WIN_SUPPLIES - Campaign.RECRUIT_COST, "recruiting costs supplies")
+	var promoted := campaign.build_battle(12).units.filter(func(u: Unit) -> bool: return u.record_id == veteran["id"])
+	check_eq(promoted[0].aim, 65 + Unit.RANK_AIM, "rank improves aim in battle")
+	var restored := Campaign.from_dict(campaign.to_dict())
+	check_eq(restored.to_dict(), campaign.to_dict(), "campaign saves and loads")
+	battle = campaign.build_battle(13)
+	battle.winner = 1
+	campaign.complete_mission(battle)
+	check_eq(hurt["status"], "ready", "back after sitting one out")
+	check_eq(campaign.mission_index, 1, "a lost mission is retried")
+
+
+func test_every_campaign_mission_builds() -> void:
+	var campaign := Campaign.create(3)
+	for i in Campaign.MISSIONS.size():
+		campaign.mission_index = i
+		var battle := campaign.build_battle(i + 1)
+		var mission: Dictionary = Campaign.MISSIONS[i]
+		check_eq(battle.alive_units(1).size(), mission["enemy"].size(), "%s enemy force" % mission["name"])
+		check_eq(battle.objectives.size(), 3, "%s objectives" % mission["name"])

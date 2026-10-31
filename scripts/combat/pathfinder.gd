@@ -4,8 +4,8 @@ extends RefCounted
 
 
 ## Returns {tile: {"cost": float, "prev": Vector2i}} for every tile reachable within max_cost.
-## Tiles in `blocked` (e.g. occupied by units) can't be entered.
-static func search(map: TacticalMap, start: Vector2i, max_cost: float, blocked := {}) -> Dictionary:
+## Tiles in `blocked` (e.g. occupied by units) can't be entered. Vehicles use the tank movement rules.
+static func search(map: TacticalMap, start: Vector2i, max_cost: float, blocked := {}, vehicle := false) -> Dictionary:
 	var result := {start: {"cost": 0.0, "prev": start}}
 	var open: Array[Vector2i] = [start]
 	while not open.is_empty():
@@ -20,7 +20,7 @@ static func search(map: TacticalMap, start: Vector2i, max_cost: float, blocked :
 			var next := current + d
 			if blocked.has(next):
 				continue
-			var cost := current_cost + map.step_cost(current, next)
+			var cost := current_cost + (map.vehicle_step_cost(current, next) if vehicle else map.step_cost(current, next))
 			if cost > max_cost + 0.001:
 				continue
 			if not result.has(next):

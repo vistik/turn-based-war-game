@@ -16,7 +16,7 @@ const COVER_WEIGHT := 4.0
 const APPROACH_WEIGHT := 3.0
 ## Score lost per tile away from the role's preferred range to the nearest seen enemy.
 const RANGE_WEIGHT := 1.5
-const PREFERRED_RANGE := {"Officer": 5.0, "Rifleman": 7.0, "Medic": 6.0, "SMG": 3.0, "MG": 9.0, "Sniper": 12.0, "Mortar": 14.0}
+const PREFERRED_RANGE := {"Officer": 5.0, "Rifleman": 7.0, "Medic": 6.0, "SMG": 3.0, "MG": 9.0, "Sniper": 12.0, "Mortar": 14.0, "AT": 4.0, "Tank": 8.0}
 ## Score per point of suppression a shot or blast adds to an enemy.
 const SUPPRESSION_VALUE := 0.15
 ## Standing on an objective we don't hold / already hold, and the pull toward the nearest one we don't hold.
@@ -66,6 +66,21 @@ func _init(p_battle: Battle, p_team: int) -> void:
 			sum += Vector2(u.pos)
 			count += 1
 	_objective = sum / maxi(1, count)
+
+
+## The AI's memory, for save games.
+func to_dict() -> Dictionary:
+	return {"last_seen": _last_seen.duplicate(), "searching": _searching, "search_goal": _search_goal, "quiet_rounds": _quiet_rounds, "round": _round}
+
+
+func load_dict(data: Dictionary) -> void:
+	if data.is_empty():
+		return
+	_last_seen = data["last_seen"].duplicate()
+	_searching = data["searching"]
+	_search_goal = data["search_goal"]
+	_quiet_rounds = data["quiet_rounds"]
+	_round = data["round"]
 
 
 func act() -> Array:
@@ -270,7 +285,17 @@ func _followup_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 func _shot_value(u: Unit, from: Vector2i, target: Unit) -> float:
 	var outcome := _expected_damage(u, from, target, target.pos)
 	var value := outcome[0] * 10.0 + outcome[1] * KILL_BONUS + (5.0 if target.overwatch else 0.0)
+	if target.vehicle:
+		# Tanks shrug off suppression; knocking one out is worth a lot.
+		return value * 1.5
 	var suppression := mini(100 - target.suppression, u.weapon.suppression)
+	if u.weapon.blast_radius > 0.0:
+		var splash := (CombatRules.SPLASH_DAMAGE_MIN + CombatRules.SPLASH_DAMAGE_MAX) / 2.0 * 10.0
+		for other in battle.alive_units():
+			if other != target and Vector2(other.pos).distance_to(Vector2(target.pos)) <= u.weapon.blast_radius:
+				value += splash * (-2.0 if other.team == team else 0.6)
+		if battle.map.has_cover(target.pos):
+			value += 6.0
 	if u.weapon.needs_setup:
 		for ally in battle.alive_units(target.team):
 			if ally != target and Vector2(ally.pos).distance_to(Vector2(target.pos)) <= CombatRules.MG_AREA_RADIUS:
@@ -308,9 +333,9 @@ func _blast_value(tile: Vector2i, radius: float, damage_min: int, damage_max: in
 			continue
 		if victim.team != team and not seen.has(victim):
 			continue
-		var victim_value := mini(100 - victim.suppression, CombatRules.EXPLOSION_SUPPRESSION) * SUPPRESSION_VALUE
+		var victim_value := 0.0 if victim.vehicle else mini(100 - victim.suppression, CombatRules.EXPLOSION_SUPPRESSION) * SUPPRESSION_VALUE
 		if distance <= radius:
-			var armor := maxi(0, victim.armor - shred)
+			var armor := CombatRules.EXPLOSION_VS_ARMOR if victim.vehicle else maxi(0, victim.armor - shred)
 			var kill := 0.0
 			if damage_min - armor >= victim.hp:
 				kill = 1.0
@@ -420,17 +445,25 @@ func _expected_damage(shooter: Unit, from: Vector2i, target: Unit, at: Vector2i)
 	shooter.pos = saved[0]
 	target.pos = saved[1]
 
+	var w := shooter.weapon
+	var armor := target.armor
+	if target.vehicle:
+		if not w.anti_tank:
+			return [0.0, 0.0]
+		var saved_pos := target.pos
+		target.pos = at
+		armor = CombatRules.VEHICLE_ARMOR[CombatRules.armor_side(target, from)]
+		target.pos = saved_pos
 	var hit: float = odds["hit"] / 100.0
 	var crit: float = odds["crit"] / 100.0
 	var graze: float = odds["graze"] / 100.0
-	var w := shooter.weapon
 	var rolls := w.damage_max - w.damage_min + 1
 	var expected := 0.0
 	var kill := 0.0
 	for d in range(w.damage_min, w.damage_max + 1):
-		var normal := maxi(0, d - target.armor)
-		var critical := maxi(0, d + w.crit_damage - target.armor)
-		var grazed := maxi(0, maxi(1, floori(d / 2.0)) - target.armor)
+		var normal := maxi(0, d - armor)
+		var critical := maxi(0, d + w.crit_damage - armor)
+		var grazed := maxi(0, maxi(1, floori(d / 2.0)) - armor)
 		expected += (hit * ((1.0 - crit) * normal + crit * critical) + graze * grazed) / rolls
 		kill += (hit * ((1.0 - crit) * float(normal >= target.hp) + crit * float(critical >= target.hp)) + graze * float(grazed >= target.hp)) / rolls
 	return [expected, kill]

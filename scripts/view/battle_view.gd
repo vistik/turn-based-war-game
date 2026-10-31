@@ -25,10 +25,8 @@ const ACTION_BUTTONS := [
 	["grenade", "5 Grenade"], ["smoke", "6 Smoke"], ["set_up", "7 Set up MG"], ["rally", "8 Rally"],
 	["medkit", "9 Medkit"], ["mortar", "0 Mortar"], ["next", "Tab Next unit"], ["end", "Enter End turn"],
 ]
-## [label, Allies are AI, Germany is AI]
-const GAME_MODES := [["Play vs AI (you are the Allies)", false, true], ["Hotseat: two players", false, false], ["Watch AI vs AI", true, true]]
 const SHOT_LABELS := {"miss": "MISS", "graze": "GRAZE", "hit": "HIT", "crit": "CRITICAL"}
-const ROLE_TAGS := {"Officer": "Lt", "Rifleman": "Rfl", "Medic": "Med", "SMG": "SMG", "MG": "MG", "Sniper": "Snp", "Mortar": "Mtr"}
+const ROLE_TAGS := {"Officer": "Lt", "Rifleman": "Rfl", "Medic": "Med", "SMG": "SMG", "MG": "MG", "Sniper": "Snp", "Mortar": "Mtr", "AT": "AT", "Tank": "Tank"}
 ## Playback speeds; 0 means instant.
 const SPEEDS := [1.0, 2.0, 4.0, 0.0]
 const SPEED_NAMES := ["1x", "2x", "4x", "Instant"]
@@ -106,13 +104,17 @@ var _log: RichTextLabel
 var _buttons := {}
 var _overlay: ColorRect
 var _overlay_label: Label
-var _menu: Control
+var _title_label: Label
 var _banner: Label
 
 
 func _ready() -> void:
 	_font = ThemeDB.fallback_font
-	battle = NormandyScenario.build()
+	if GameSession.battle == null:
+		# Started straight from the editor: a quick skirmish against the AI.
+		GameSession.campaign = null
+		GameSession.start_battle(NormandyScenario.build(), [false, true], "Normandy village")
+	battle = GameSession.battle
 	_proj = ViewProjection.new(Vector2(battle.map.width, battle.map.height))
 	z_index = TOP_Z
 	for cy in ceili(battle.map.height / float(CHUNK)):
@@ -130,9 +132,47 @@ func _ready() -> void:
 	for u in battle.units:
 		_add_display_state(u)
 	_build_ui()
-	_focus(Vector2(battle.map.width, battle.map.height) * 0.5, false)
+	for team in 2:
+		if GameSession.ai_teams[team]:
+			var ai := TacticalAI.new(battle, team)
+			ai.load_dict(GameSession.ai_states[team])
+			controllers[team] = ai
+	if controllers[0] != null and controllers[1] != null:
+		_speed_index = 1
+	_update_speed_button()
+	_focus_on_team(_view_team() if _view_team() != -1 else battle.current_team)
 	_refresh()
-	_show_overlay("setup", "", Color.WHITE)
+	if not battle.started:
+		_run(battle.start())
+	elif controllers[0] == null and controllers[1] == null:
+		_show_overlay("handover", "%s's turn\n\nClick or press any key" % Battle.TEAM_NAMES[battle.current_team], TEAM_COLORS[battle.current_team])
+	else:
+		_turn_started = true
+		_run([])
+
+
+func _focus_on_team(team: int) -> void:
+	var sum := Vector2.ZERO
+	var count := 0
+	for u in battle.alive_units(team):
+		sum += _center(u.pos)
+		count += 1
+	_focus(sum / count if count > 0 else Vector2(battle.map.width, battle.map.height) * 0.5, false)
+
+
+## Autosave: the battle in its current state, plus the AI's memory.
+func _save() -> void:
+	for team in 2:
+		GameSession.ai_states[team] = controllers[team].to_dict() if controllers[team] != null else {}
+	GameSession.save_game()
+
+
+func _quit_to_menu() -> void:
+	if battle.winner == -1:
+		_save()
+	GameSession.battle = null
+	GameSession.show_campaign = GameSession.campaign != null
+	get_tree().change_scene_to_file(GameSession.MENU_SCENE)
 
 
 func _add_display_state(u: Unit) -> void:
@@ -141,19 +181,6 @@ func _add_display_state(u: Unit) -> void:
 	_display_suppression[u.id] = u.suppression
 	_facing[u.id] = Vector2(1, 0) if u.team == 0 else Vector2(-1, 0)
 	_unit_nodes[u.id] = _layer(0, _paint_unit.bind(u))
-
-
-func _start_game(mode_index: int) -> void:
-	for team in 2:
-		controllers[team] = TacticalAI.new(battle, team) if GAME_MODES[mode_index][team + 1] else null
-	if controllers[0] != null and controllers[1] != null:
-		_speed_index = 1
-	_update_speed_button()
-	_overlay_state = ""
-	_overlay.hide()
-	if controllers[0] == null:
-		_focus(Vector2(8, 24), false)
-	_run(battle.start())
 
 
 func _process(delta: float) -> void:
@@ -186,7 +213,7 @@ func _process(delta: float) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if _overlay_state != "":
-		if event is InputEventKey and event.pressed and not event.echo and _overlay_state != "setup":
+		if event is InputEventKey and event.pressed and not event.echo:
 			_dismiss_overlay()
 		return
 	if _handle_camera_input(event):
@@ -313,6 +340,10 @@ func _on_action(action: String) -> void:
 		"speed":
 			_change_speed(1, true)
 			return
+		"quit":
+			if not busy:
+				_quit_to_menu()
+			return
 	if busy or _overlay_state != "" or battle.winner != -1 or not _is_human_turn():
 		return
 	if action == "end":
@@ -385,13 +416,18 @@ func _on_action(action: String) -> void:
 
 
 func _on_overlay_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.pressed and _overlay_state != "setup":
+	if event is InputEventMouseButton and event.pressed:
 		_dismiss_overlay()
 
 
 func _dismiss_overlay() -> void:
 	if _overlay_state == "game_over":
-		get_tree().reload_current_scene()
+		if GameSession.campaign != null:
+			GameSession.campaign.complete_mission(battle)
+		GameSession.battle = null
+		GameSession.save_game()
+		GameSession.show_campaign = GameSession.campaign != null
+		get_tree().change_scene_to_file(GameSession.MENU_SCENE)
 		return
 	_overlay_state = ""
 	_overlay.hide()
@@ -521,6 +557,8 @@ func _run(events: Array) -> void:
 		selected = _next_ready_unit(null)
 		if selected != null:
 			_focus(_display_pos[selected.id])
+	if _turn_started and battle.winner == -1 and _is_human_turn():
+		_save()
 	elif selected == null or battle.can_act(selected) != "":
 		selected = _next_ready_unit(selected)
 	_turn_started = false
@@ -552,8 +590,13 @@ func _play_event(e: Dictionary) -> void:
 		"death":
 			var u := battle.get_unit(e["unit"])
 			_died_at[u.id] = _time
-			_float(_display_pos[u.id], "KILLED", Color("ff3b3b"))
-			_log_line("[color=#ff6b6b]%s (%s) was killed.[/color]" % [u.name, u.role])
+			if u.vehicle:
+				_effects.append({"kind": "explosion", "at": _display_pos[u.id], "radius": 1.2, "age": 0.0, "life": 1.4})
+				_float(_display_pos[u.id], "KNOCKED OUT", Color("ff3b3b"))
+				_log_line("[color=#ff6b6b]%s is knocked out![/color]" % u.name)
+			else:
+				_float(_display_pos[u.id], "KILLED", Color("ff3b3b"))
+				_log_line("[color=#ff6b6b]%s (%s) was killed.[/color]" % [u.name, u.role])
 			await _wait(0.6)
 		"suppression":
 			var u := battle.get_unit(e["unit"])
@@ -620,16 +663,16 @@ func _play_event(e: Dictionary) -> void:
 			if controllers[0] == null and controllers[1] == null:
 				_show_overlay("handover", "%s's turn\n\nClick or press any key" % Battle.TEAM_NAMES[team], TEAM_COLORS[team])
 			else:
-				_show_banner("%s's turn" % who, TEAM_COLORS[team])
+				_show_banner("Turn: %s" % who, TEAM_COLORS[team])
 		"game_over":
 			var winner: int = e["winner"]
 			var how := "by holding the objectives" if e.get("reason") == "points" else "by wiping out the enemy"
 			if winner == Battle.DRAW:
 				_log_line("[b]The battle ends in a draw.[/b]")
-				_show_overlay("game_over", "A draw: %d to %d\n\nClick or press any key for the menu" % battle.victory_points, NEUTRAL_COLOR)
+				_show_overlay("game_over", "A draw: %d to %d\n\nClick or press any key to continue" % battle.victory_points, NEUTRAL_COLOR)
 			else:
 				_log_line("[b]%s win %s![/b]" % [Battle.TEAM_NAMES[winner], how])
-				_show_overlay("game_over", "%s win %s!\n%d to %d\n\nClick or press any key for the menu" % [Battle.TEAM_NAMES[winner], how, battle.victory_points[0], battle.victory_points[1]], TEAM_COLORS[winner])
+				_show_overlay("game_over", "%s win %s!\n%d to %d\n\nClick or press any key to continue" % [Battle.TEAM_NAMES[winner], how, battle.victory_points[0], battle.victory_points[1]], TEAM_COLORS[winner])
 
 
 func _play_move(e: Dictionary) -> void:
@@ -673,7 +716,8 @@ func _play_shot(e: Dictionary) -> void:
 	await _wait(0.15)
 	var label: String = SHOT_LABELS[e["result"]]
 	_float(_display_pos[target.id], "%s (%d%%)" % [label, e["chance"]], Color.WHITE if e["result"] != "crit" else Color("ffb84d"))
-	_log_line("%s%s shoots at %s: %s (%d%%)" % ["Overwatch: " if e["reaction"] else "", shooter.name, target.name, label, e["chance"]])
+	var armour := " on its %s armour" % e["armor"] if e.has("armor") else ""
+	_log_line("%s%s shoots at %s: %s (%d%%)%s" % ["Overwatch: " if e["reaction"] else "", shooter.name, target.name, label, e["chance"], armour])
 	await _wait(0.25)
 
 
@@ -894,8 +938,16 @@ func _describe_odds(shooter: Unit, target: Unit) -> String:
 	lines.append("[color=#8fff9b]Hit %d%%[/color]   Graze %d%%   Crit %d%%   Suppression +%d" % [odds["hit"], odds["graze"], odds["crit"], shooter.weapon.suppression])
 	for m: Array in odds["modifiers"]:
 		lines.append("    %s  %+d" % [m[0], m[1]])
-	if odds["flanked"]:
+	if target.vehicle:
+		if not shooter.weapon.anti_tank:
+			lines.append("[color=#ff6b6b]Small arms can't hurt a tank[/color]")
+		else:
+			var side := CombatRules.armor_side(target, shooter.pos)
+			lines.append("[color=#ffb84d]Hitting its %s armour: -%d damage[/color]" % [side, CombatRules.VEHICLE_ARMOR[side]])
+	elif odds["flanked"]:
 		lines.append("[color=#ffb84d]No cover from this angle: +%d crit[/color]" % CombatRules.FLANK_CRIT_BONUS)
+	if shooter.weapon.blast_radius > 0.0:
+		lines.append("High explosive: blasts cover and anyone next to the target")
 	if target.overwatch:
 		lines.append("[color=#ffd34d]On overwatch[/color]")
 	return "\n".join(lines)
@@ -939,8 +991,6 @@ func _show_overlay(state: String, text: String, color: Color) -> void:
 	_overlay_state = state
 	_overlay_label.text = text
 	_overlay_label.add_theme_color_override("font_color", color)
-	_overlay_label.visible = state != "setup"
-	_menu.visible = state == "setup"
 	_overlay.show()
 
 
@@ -975,6 +1025,11 @@ func _build_ui() -> void:
 	box.add_theme_constant_override("separation", 6)
 	margin.add_child(box)
 
+	_title_label = Label.new()
+	_title_label.text = GameSession.battle_title
+	_title_label.add_theme_font_size_override("font_size", 13)
+	_title_label.modulate = Color(1, 1, 1, 0.6)
+	box.add_child(_title_label)
 	_turn_label = Label.new()
 	_turn_label.add_theme_font_size_override("font_size", 20)
 	box.add_child(_turn_label)
@@ -1005,6 +1060,7 @@ func _build_ui() -> void:
 	_add_button(view_row, "rotate_right", "E Rotate")
 	_add_button(view_row, "toggle_view", "V Iso / top")
 	_add_button(view_row, "speed", "Speed 1x")
+	_add_button(view_row, "quit", "Save & quit")
 	var help := Label.new()
 	help.text = "LMB select / move / target   RMB, Esc cancel\nWASD or middle drag pan   Wheel zoom   F focus   +/- speed"
 	help.add_theme_font_size_override("font_size", 12)
@@ -1037,31 +1093,6 @@ func _build_ui() -> void:
 	_overlay_label.add_theme_font_size_override("font_size", 32)
 	_overlay_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_overlay.add_child(_overlay_label)
-
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_overlay.add_child(center)
-	_menu = center
-	var menu := VBoxContainer.new()
-	menu.add_theme_constant_override("separation", 14)
-	center.add_child(menu)
-	var title := Label.new()
-	title.text = "Normandy, June 1944"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 40)
-	menu.add_child(title)
-	var subtitle := Label.new()
-	subtitle.text = "Allies vs Germany. Hold the church, the crossroads and the farm.\nFirst to %d points wins. Pin them with the MG, flank with the rifles." % battle.vp_to_win
-	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	subtitle.modulate = Color(1, 1, 1, 0.65)
-	menu.add_child(subtitle)
-	for i in GAME_MODES.size():
-		var button := Button.new()
-		button.text = GAME_MODES[i][0]
-		button.custom_minimum_size = Vector2(360, 48)
-		button.add_theme_font_size_override("font_size", 20)
-		button.pressed.connect(_start_game.bind(i))
-		menu.add_child(button)
 
 
 func _add_button(parent: Control, action: String, text: String) -> void:
@@ -1397,12 +1428,21 @@ func _pose(u: Unit) -> Dictionary:
 		"death": death,
 		"flash": clampf(1.0 - (_time - _hit_at.get(u.id, -10.0)) / 0.3, 0.0, 1.0),
 		"breath": _time * 2.2 + u.id * 1.7,
+		"time": _time,
 	}
 
 
 func _paint_unit(c: CanvasItem, u: Unit) -> void:
 	var g: Vector2 = _display_pos[u.id]
 	var pose := _pose(u)
+	if u.vehicle:
+		c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, g + TerrainPainter.LIGHT * 0.3, 0.55, false), Color(0, 0, 0, 0.3))
+		if u == selected:
+			c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.65), Color.WHITE, 2.5)
+		if mode == Mode.SHOOT and _target_odds.has(u.id):
+			c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.68), Color("ff4040"), 2.5)
+		VehiclePainter.draw(c, _proj, g, u, pose)
+		return
 	if pose["death"] > 0.0:
 		var facing: Vector2 = pose["facing"]
 		c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, g - facing * 0.3, 0.05 + 0.25 * pose["death"], false), Color(0.33, 0.03, 0.03, 0.7))
@@ -1438,13 +1478,17 @@ func _draw_markers() -> void:
 	for u in battle.units:
 		if not _display_pos.has(u.id) or _display_hp[u.id] <= 0 or not _is_drawn(u):
 			continue
-		var top := _proj.project(_display_pos[u.id], 1.15) + Vector2(0, -14)
+		var top := _proj.project(_display_pos[u.id], 1.1 if u.vehicle else 1.15) + Vector2(0, -14)
 		if not view.has_point(top):
 			continue
-		var pip_w := 26.0 / u.max_hp
 		draw_rect(Rect2(top + Vector2(-14, -1), Vector2(28, 9)), Color(0, 0, 0, 0.65))
-		for i in u.max_hp:
-			draw_rect(Rect2(top + Vector2(-13 + i * pip_w, 0), Vector2(pip_w - 1, 3)), Color("6bff8a") if i < _display_hp[u.id] else Color("3a3a3a"))
+		if u.max_hp > 10:
+			draw_rect(Rect2(top + Vector2(-13, 0), Vector2(26, 3)), Color("3a3a3a"))
+			draw_rect(Rect2(top + Vector2(-13, 0), Vector2(26.0 * _display_hp[u.id] / u.max_hp, 3)), Color("6bff8a"))
+		else:
+			var pip_w := 26.0 / u.max_hp
+			for i in u.max_hp:
+				draw_rect(Rect2(top + Vector2(-13 + i * pip_w, 0), Vector2(pip_w - 1, 3)), Color("6bff8a") if i < _display_hp[u.id] else Color("3a3a3a"))
 		var suppression: int = _display_suppression[u.id]
 		if suppression > 0:
 			var bar_color := Color("ff5544") if suppression >= Unit.PINNED_AT else (Color("ffa040") if suppression >= Unit.SUPPRESSED_AT else Color("c8b060"))
@@ -1460,7 +1504,7 @@ func _draw_markers() -> void:
 		elif suppression >= Unit.SUPPRESSED_AT:
 			tags.append("SUPPRESSED")
 		if u.is_wounded():
-			tags.append("WOUNDED")
+			tags.append("DAMAGED" if u.vehicle else "WOUNDED")
 		if u.overwatch:
 			tags.append("OVERWATCH")
 		elif u.deployed:

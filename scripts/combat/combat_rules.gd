@@ -59,6 +59,27 @@ const MORTAR_DAMAGE_MAX := 5
 const MORTAR_SCATTER := 0.08
 const MEDKIT_HEAL := 4
 
+# --- Tanks ---
+## Damage each armour side stops from anti-tank hits.
+const VEHICLE_ARMOR := {"front": 3, "side": 1, "rear": 0}
+const LARGE_TARGET_BONUS := 10
+## Explosions lose this much damage against tanks.
+const EXPLOSION_VS_ARMOR := 3
+## A tank shell's blast hurts everyone else near where it lands.
+const SPLASH_DAMAGE_MIN := 2
+const SPLASH_DAMAGE_MAX := 3
+
+
+## Which armour faces an attacker standing on `from`: the front within 60° of the tank's facing, the rear likewise.
+static func armor_side(target: Unit, from: Vector2i) -> String:
+	var toward := Vector2(from - target.pos).normalized()
+	var alignment := toward.dot(Vector2(target.facing).normalized())
+	if alignment > 0.5:
+		return "front"
+	if alignment < -0.5:
+		return "rear"
+	return "side"
+
 
 ## Hit, graze and crit chances (0-100) plus the itemised modifiers behind the hit chance.
 static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction := false) -> Dictionary:
@@ -88,7 +109,10 @@ static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction :=
 			modifiers.append(["Hunkered", -bonus])
 			hit -= bonus
 
-	if map.get_terrain(target.pos) == TacticalMap.Terrain.WHEAT and distance > WHEAT_CONCEALMENT_RANGE:
+	if target.vehicle:
+		modifiers.append(["Large target", LARGE_TARGET_BONUS])
+		hit += LARGE_TARGET_BONUS
+	elif map.get_terrain(target.pos) == TacticalMap.Terrain.WHEAT and distance > WHEAT_CONCEALMENT_RANGE:
 		modifiers.append(["In the wheat", -WHEAT_CONCEALMENT])
 		hit -= WHEAT_CONCEALMENT
 

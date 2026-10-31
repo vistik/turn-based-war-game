@@ -211,6 +211,8 @@ static func draw_object(c: CanvasItem, proj: ViewProjection, map: TacticalMap, p
 	var center := Vector2(p) + Vector2(0.5, 0.5)
 	var tint := 0.45 if dark else 0.0
 	match map.get_object_kind(p):
+		"wreck":
+			pass  # The knocked-out tank itself is drawn by the view.
 		"rock":
 			_draw_rock(c, proj, p, center, ROCK[0].lerp(ROCK[1], noise(p, 3)).darkened(tint), alpha)
 		"tree":

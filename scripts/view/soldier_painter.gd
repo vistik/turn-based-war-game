@@ -41,6 +41,8 @@ static func draw(c: CanvasItem, proj: ViewProjection, g: Vector2, unit: Unit, po
 ## Screen position of the weapon's muzzle, for flashes and tracers.
 static func muzzle(proj: ViewProjection, g: Vector2, unit: Unit, pose: Dictionary) -> Vector2:
 	var chest := 0.84 * _crouch(pose)
+	if unit.weapon.kind == "at":
+		return _to_screen(proj, g, pose["facing"], Vector3(0.32, 0.08, chest + 0.05))
 	return _to_screen(proj, g, pose["facing"], Vector3(_gun_length(unit), 0.06, chest - 0.07))
 
 
@@ -69,6 +71,11 @@ static func _model(unit: Unit, pose: Dictionary) -> Array:
 	var width := 5.5 if unit.weapon.kind == "mg" else (4.5 if unit.weapon.kind == "smg" else 3.5)
 	var grip := Vector3(0.0, 0.06, chest - 0.1)
 	var muzzle := Vector3(length, 0.06, chest - 0.07)
+	if unit.weapon.kind == "at":
+		# A rocket launcher rests on the shoulder.
+		grip = Vector3(-0.2, 0.08, chest + 0.03)
+		muzzle = Vector3(0.32, 0.08, chest + 0.05)
+		width = 6.5
 
 	var parts := [
 		# Legs and boots.
@@ -83,8 +90,8 @@ static func _model(unit: Unit, pose: Dictionary) -> Array:
 		[Vector3(0, 0, hip + 0.02), Vector3(0, 0, hip + 0.02), 10.0, faction["webbing"]],
 		[Vector3(0.06, 0, head - 0.01), Vector3(0.06, 0, head - 0.01), 6.0, SKIN],
 		# Weapon: wooden stock, metal barrel. Arms hold it at the grip and fore-end.
-		[grip, grip.lerp(muzzle, 0.4), width, STOCK if unit.weapon.kind != "smg" else GUN],
-		[grip.lerp(muzzle, 0.4), muzzle, width - 1.0, GUN],
+		[grip, grip.lerp(muzzle, 0.4), width, STOCK if unit.weapon.kind in ["rifle", "carbine", "sniper", "mg"] else jacket.darkened(0.3)],
+		[grip.lerp(muzzle, 0.4), muzzle, width - 1.0, GUN if unit.weapon.kind != "at" else jacket.darkened(0.3)],
 		[Vector3(0, 0.11, chest - 0.02), Vector3(0.08, 0.07, chest - 0.11), 4.5, jacket],
 		[Vector3(0, -0.11, chest - 0.02), grip.lerp(muzzle, 0.6) + Vector3(0, -0.01, 0), 4.5, jacket],
 	]
@@ -116,7 +123,7 @@ static func _model(unit: Unit, pose: Dictionary) -> Array:
 			parts.append([Vector3(0.065, 0, head + 0.065), Vector3(0.065, 0, head + 0.065), 2.5, RED_CROSS])
 		"Mortar":
 			parts.append([Vector3(-0.12, 0.06, hip + 0.02), Vector3(-0.17, -0.06, chest + 0.28), 6.0, GUN.lightened(0.15)])
-		"Rifleman", "Sniper", "MG":
+		"Rifleman", "Sniper", "MG", "AT":
 			parts.append([Vector3(-0.09, 0, hip + 0.12), Vector3(-0.09, 0, chest - 0.03), 9.0, uniform.darkened(0.15)])
 	if pose["wounded"]:
 		parts.append([Vector3(0, -0.12, chest - 0.06), Vector3(0, -0.12, chest - 0.06), 5.0, WHITE])
@@ -124,7 +131,7 @@ static func _model(unit: Unit, pose: Dictionary) -> Array:
 
 
 static func _gun_length(unit: Unit) -> float:
-	return {"rifle": 0.46, "carbine": 0.38, "smg": 0.3, "mg": 0.52, "sniper": 0.5}.get(unit.weapon.kind, 0.44)
+	return {"rifle": 0.46, "carbine": 0.38, "smg": 0.3, "mg": 0.52, "sniper": 0.5, "at": 0.32}.get(unit.weapon.kind, 0.44)
 
 
 ## Rotates a standing point toward lying on the back as death goes 0 -> 1.

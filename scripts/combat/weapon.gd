@@ -15,6 +15,10 @@ var suppression: int
 var range_mods: PackedInt32Array
 ## Machine guns must be set up before firing, and suppress everyone around the target.
 var needs_setup := false
+## Can damage tanks. Everything else bounces off their armour.
+var anti_tank := false
+## Tank guns fire high explosive: a hit or near miss also blasts everything within this radius.
+var blast_radius := 0.0
 
 
 func _init(p_name: String, p_kind: String, p_damage: Vector2i, p_crit_chance: int, p_crit_damage: int, p_clip_size: int, p_suppression: int, p_range_mods: Array, p_needs_setup := false) -> void:
@@ -46,6 +50,10 @@ static func for_role(role: String, faction: int) -> Weapon:
 			return sniper(allied)
 		"Medic", "Mortar":
 			return carbine(allied)
+		"AT":
+			return rocket(allied)
+		"Tank":
+			return tank_gun(allied)
 	return rifle(allied)
 
 
@@ -80,3 +88,17 @@ static func carbine(allied: bool) -> Weapon:
 	if allied:
 		return Weapon.new("M1 Carbine", "carbine", Vector2i(2, 4), 8, 2, 6, 12, mods)
 	return Weapon.new("Gewehr 33/40", "carbine", Vector2i(2, 4), 8, 2, 5, 12, mods)
+
+
+## One shot, then reload. Strong up close, poor at range.
+static func rocket(allied: bool) -> Weapon:
+	var weapon := Weapon.new("Bazooka" if allied else "Panzerschreck", "at", Vector2i(6, 9), 0, 0, 1, 30, [0, 20, 15, 10, 5, 0, -5, -10, -20, -30, -40])
+	weapon.anti_tank = true
+	return weapon
+
+
+static func tank_gun(allied: bool) -> Weapon:
+	var weapon := Weapon.new("75mm M3" if allied else "7.5cm KwK 40", "tank", Vector2i(4, 6), 10, 2, 12, 60, [0, 0, 5, 5, 5, 5, 5, 5, 5, 5, 5, 0, 0, -5, -5, -10])
+	weapon.anti_tank = true
+	weapon.blast_radius = 1.0
+	return weapon

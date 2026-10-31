@@ -18,6 +18,7 @@ var round_number := 1
 var turn_index := 0
 ## -1 while the battle is running, else the winning team or DRAW.
 var winner := -1
+var started := false
 var rng := RandomNumberGenerator.new()
 
 ## Each: {"name": String, "center": Vector2 (grid), "radius": float, "owner": int (-1 = nobody)}.
@@ -43,6 +44,10 @@ func _init(p_map: TacticalMap, p_units: Array[Unit], p_seed := 0) -> void:
 
 
 func start() -> Array:
+	started = true
+	for u in alive_units():
+		if u.vehicle:
+			map.set_vehicle(u.pos, true)
 	return _begin_turn(current_team)
 
 
@@ -86,7 +91,7 @@ func reachable(u: Unit) -> Dictionary:
 	for other in alive_units():
 		if other != u:
 			blocked[other.pos] = true
-	return Pathfinder.search(map, u.pos, u.current_mobility() * mini(u.actions, Unit.ACTIONS_PER_TURN), blocked)
+	return Pathfinder.search(map, u.pos, u.current_mobility() * mini(u.actions, Unit.ACTIONS_PER_TURN), blocked, u.vehicle)
 
 
 ## Actions used by a move of the given path cost: one for a normal move, two for a dash.
@@ -228,6 +233,8 @@ func can_hunker(u: Unit) -> String:
 	var err := can_act(u)
 	if err != "":
 		return err
+	if u.vehicle:
+		return "Tanks can't hunker down"
 	if not map.has_cover(u.pos):
 		return "Needs cover to hunker down"
 	return ""
@@ -302,6 +309,8 @@ func can_use_medkit(u: Unit, target: Unit) -> String:
 		return "No medkits left"
 	if target == null or not target.is_alive() or target.team != u.team:
 		return "Can only treat allies"
+	if target.vehicle:
+		return "A medic can't fix a tank"
 	if absi(target.pos.x - u.pos.x) > 1 or absi(target.pos.y - u.pos.y) > 1:
 		return "Must be adjacent"
 	if target.hp >= target.max_hp and not target.is_wounded():
@@ -328,7 +337,11 @@ func move(u: Unit, dest: Vector2i) -> Array:
 	var events := []
 	var segment: Array[Vector2i] = [u.pos]
 	for step in Pathfinder.path_to(reach, dest):
+		var previous := u.pos
 		u.pos = step
+		u.facing = step - previous
+		if u.vehicle:
+			_drive(previous, step)
 		segment.append(step)
 		for watcher in _overwatchers_seeing(u):
 			if segment.size() > 1:
@@ -514,8 +527,52 @@ func _arrive_reinforcements(team: int) -> Array:
 			u.pos = _free_tile_near(u.pos)
 			units.append(u)
 			ids.append(u.id)
+			if u.vehicle:
+				map.set_vehicle(u.pos, true)
 		events.append({"type": "reinforcements", "team": team, "units": ids})
 	return events
+
+
+# --- Saving ---
+
+func to_dict() -> Dictionary:
+	var waves := []
+	for wave in reinforcements:
+		waves.append({"round": wave["round"], "team": wave["team"], "units": wave["units"].map(func(u: Unit) -> Dictionary: return u.to_dict())})
+	return {
+		"map": map.to_dict(),
+		"units": units.map(func(u: Unit) -> Dictionary: return u.to_dict()),
+		"current_team": current_team, "round_number": round_number, "turn_index": turn_index,
+		"winner": winner, "started": started, "rng_seed": rng.seed, "rng_state": rng.state,
+		"objectives": objectives.duplicate(true), "victory_points": victory_points.duplicate(),
+		"vp_to_win": vp_to_win, "max_rounds": max_rounds,
+		"reinforcements": waves, "strikes": strikes.duplicate(true),
+	}
+
+
+static func from_dict(data: Dictionary) -> Battle:
+	var loaded_units: Array[Unit] = []
+	for u: Dictionary in data["units"]:
+		loaded_units.append(Unit.from_dict(u))
+	var battle := Battle.new(TacticalMap.from_dict(data["map"]), loaded_units)
+	battle.current_team = data["current_team"]
+	battle.round_number = data["round_number"]
+	battle.turn_index = data["turn_index"]
+	battle.winner = data["winner"]
+	battle.started = data["started"]
+	battle.rng.seed = data["rng_seed"]
+	battle.rng.state = data["rng_state"]
+	battle.objectives.assign(data["objectives"].duplicate(true))
+	battle.victory_points = data["victory_points"].duplicate()
+	battle.vp_to_win = data["vp_to_win"]
+	battle.max_rounds = data["max_rounds"]
+	for wave: Dictionary in data["reinforcements"]:
+		var wave_units: Array[Unit] = []
+		for u: Dictionary in wave["units"]:
+			wave_units.append(Unit.from_dict(u))
+		battle.reinforcements.append({"round": wave["round"], "team": wave["team"], "units": wave_units})
+	battle.strikes.assign(data["strikes"].duplicate(true))
+	return battle
 
 
 func _free_tile_near(p: Vector2i) -> Vector2i:
@@ -542,16 +599,41 @@ func _land_strike(strike: Dictionary) -> Array:
 	return events
 
 
-func _explode(source: Unit, center: Vector2i, radius: float, damage_min: int, damage_max: int, shred: int) -> Array:
+## Damages everyone in the radius (tanks barely), suppresses everyone near it and destroys cover.
+## `spared` (the direct-hit target of a tank shell) takes no blast damage on top of the hit.
+func _explode(source: Unit, center: Vector2i, radius: float, damage_min: int, damage_max: int, shred: int, spared: Unit = null) -> Array:
 	var destroyed := map.destroy_cover(center, radius)
 	var events: Array = [{"type": "explosion", "unit": source.id, "center": center, "radius": radius, "destroyed": destroyed}]
 	for victim in alive_units():
+		if victim == spared:
+			continue
 		var distance := Vector2(victim.pos).distance_to(Vector2(center))
 		if distance <= radius:
-			events.append_array(_damage(victim, rng.randi_range(damage_min, damage_max), shred))
+			var damage := rng.randi_range(damage_min, damage_max)
+			if victim.vehicle:
+				damage = maxi(0, damage - CombatRules.EXPLOSION_VS_ARMOR)
+			if damage > 0:
+				events.append_array(_damage(victim, damage, shred, source))
 		if victim.is_alive() and distance <= radius + 1.0:
 			events.append_array(_suppress(victim, CombatRules.EXPLOSION_SUPPRESSION))
 	return events
+
+
+## A random tile next to p, for shells that miss.
+func _near(p: Vector2i) -> Vector2i:
+	var d: Vector2i = TacticalMap.DIRS8[rng.randi_range(0, 7)]
+	return (p + d).clamp(Vector2i.ZERO, Vector2i(map.width - 1, map.height - 1))
+
+
+## A tank moving from a to b flattens what's in its way.
+func _drive(a: Vector2i, b: Vector2i) -> void:
+	map.set_vehicle(a, false)
+	map.set_vehicle(b, true)
+	if map.get_object(b) == Cover.HALF:
+		map.set_object(b, Cover.NONE)
+		map.set_terrain(b, TacticalMap.Terrain.RUBBLE)
+	if (a.x == b.x or a.y == b.y) and map.get_edge(a, b) != Cover.NONE:
+		map.set_edge(a, b, Cover.NONE)
 
 
 func _make_smoke(source: Unit, center: Vector2i, radius: float) -> Array:
@@ -590,13 +672,26 @@ func _fire(shooter: Unit, target: Unit, reaction: bool) -> Array:
 		"type": "shot", "shooter": shooter.id, "target": target.id,
 		"result": result, "chance": odds["hit"], "reaction": reaction,
 	}]
+	var weapon := shooter.weapon
 	if result != "miss":
-		var damage := rng.randi_range(shooter.weapon.damage_min, shooter.weapon.damage_max)
+		var damage := rng.randi_range(weapon.damage_min, weapon.damage_max)
 		if result == "crit":
-			damage += shooter.weapon.crit_damage
+			damage += weapon.crit_damage
 		elif result == "graze":
 			damage = maxi(1, floori(damage / 2.0))
-		events.append_array(_damage(target, damage, 0))
+		if target.vehicle and not weapon.anti_tank:
+			events.append({"type": "status", "unit": target.id, "text": "Bounced off the armour"})
+		else:
+			if target.vehicle:
+				var side := CombatRules.armor_side(target, shooter.pos)
+				events[0]["armor"] = side
+				damage = maxi(0, damage - CombatRules.VEHICLE_ARMOR[side])
+			events.append_array(_damage(target, damage, 0, shooter))
+	if weapon.blast_radius > 0.0:
+		# High explosive: bursts on the target, or close by on a miss.
+		var hit := result != "miss"
+		var center := target.pos if hit else _near(target.pos)
+		events.append_array(_explode(shooter, center, weapon.blast_radius, CombatRules.SPLASH_DAMAGE_MIN, CombatRules.SPLASH_DAMAGE_MAX, 0, target if hit else null))
 	if target.is_alive():
 		var suppression := shooter.weapon.suppression + (CombatRules.HIT_SUPPRESSION_BONUS if result != "miss" else 0)
 		events.append_array(_suppress(target, suppression))
@@ -608,8 +703,8 @@ func _fire(shooter: Unit, target: Unit, reaction: bool) -> Array:
 
 
 ## Shred strips armor before the damage lands; remaining armor absorbs damage point for point.
-## Survivors are wounded, which slows them for their next turns.
-func _damage(target: Unit, amount: int, shred: int) -> Array:
+## Survivors are wounded, which slows them for their next turns. A destroyed tank leaves a burning wreck.
+func _damage(target: Unit, amount: int, shred: int, attacker: Unit = null) -> Array:
 	target.armor = maxi(0, target.armor - shred)
 	var absorbed := mini(target.armor, amount)
 	var dealt := amount - absorbed
@@ -621,13 +716,20 @@ func _damage(target: Unit, amount: int, shred: int) -> Array:
 		target.overwatch = false
 		target.hunkered = false
 		target.actions = 0
-		events.append({"type": "death", "unit": target.id})
+		if attacker != null and attacker.team != target.team:
+			attacker.kills += 1
+		if target.vehicle:
+			map.set_vehicle(target.pos, false)
+			map.set_object(target.pos, Cover.FULL, "wreck")
+		events.append({"type": "death", "unit": target.id, "vehicle": target.vehicle})
 		events.append_array(_shake_morale(target))
 	return events
 
 
 ## Changes a unit's suppression; being pinned cancels overwatch. Emits the new level and state.
 func _suppress(u: Unit, amount: int) -> Array:
+	if u.vehicle:
+		return []
 	var was := u.suppression
 	u.suppression = clampi(u.suppression + amount, 0, 100)
 	if u.suppression == was:
@@ -644,7 +746,7 @@ func _shake_morale(dead: Unit) -> Array:
 	for ally in alive_units(dead.team):
 		if dead.role == "Officer":
 			events.append_array(_suppress(ally, CombatRules.OFFICER_DEATH_SUPPRESSION))
-		if Vector2(ally.pos).distance_to(Vector2(dead.pos)) > CombatRules.PANIC_RADIUS or ally.is_pinned():
+		if ally.vehicle or Vector2(ally.pos).distance_to(Vector2(dead.pos)) > CombatRules.PANIC_RADIUS or ally.is_pinned():
 			continue
 		var chance := CombatRules.PANIC_CHANCE
 		if officer_near(ally):

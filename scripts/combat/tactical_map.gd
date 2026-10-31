@@ -18,6 +18,10 @@ const DIAGONAL_FACTOR := 1.5
 ## Extra cost for climbing over a half-height wall, and for pushing through a hedgerow.
 const VAULT_COST := 1.0
 const HEDGE_COST := 3.0
+## Extra cost for a tank flattening a crate, sandbags, a fence or a low wall.
+const CRUSH_COST := 1.0
+## Low obstacles and hedges a tank can drive through (and destroys on the way).
+const CRUSHABLE_EDGES := ["fence", "stone", "hedge"]
 
 var width: int
 var height: int
@@ -33,6 +37,8 @@ var _edges := {}
 var _edge_kinds := {}
 ## Tile -> battle turn index at which the smoke there clears.
 var _smoke := {}
+## Tiles with a tank on them: they give half cover to soldiers beside them.
+var _vehicles := {}
 
 
 func _init(p_width: int, p_height: int) -> void:
@@ -143,6 +149,18 @@ func clear_smoke(turn_index: int) -> Array[Vector2i]:
 	return cleared
 
 
+func set_vehicle(p: Vector2i, present: bool) -> void:
+	if present:
+		_vehicles[p] = true
+	else:
+		_vehicles.erase(p)
+	revision += 1
+
+
+func has_vehicle(p: Vector2i) -> bool:
+	return _vehicles.has(p)
+
+
 func is_passable(p: Vector2i) -> bool:
 	return in_bounds(p) and get_object(p) == Cover.NONE
 
@@ -170,9 +188,37 @@ func step_cost(a: Vector2i, b: Vector2i) -> float:
 	return cost
 
 
-## Cover a unit standing on p gets on the side facing direction dir. A crater covers every side.
+## Path cost of a tank driving from a to b. Tanks crush low obstacles, fences and walls, and push
+## through hedges, but can't pass trees, rocks, buildings or anything full height.
+func vehicle_step_cost(a: Vector2i, b: Vector2i) -> float:
+	if not in_bounds(b) or get_object(b) == Cover.FULL:
+		return INF
+	var cost: float = TERRAIN_COST[get_terrain(b)]
+	if get_object(b) == Cover.HALF:
+		cost += CRUSH_COST
+	if a.x != b.x and a.y != b.y:
+		var side_x := Vector2i(b.x, a.y)
+		var side_y := Vector2i(a.x, b.y)
+		if get_object(side_x) == Cover.FULL or get_object(side_y) == Cover.FULL:
+			return INF
+		for pair in [[a, side_x], [side_x, b], [a, side_y], [side_y, b]]:
+			if get_edge(pair[0], pair[1]) != Cover.NONE:
+				return INF
+		return cost * DIAGONAL_FACTOR
+	if get_edge(a, b) != Cover.NONE:
+		var kind := get_edge_kind(a, b)
+		if not CRUSHABLE_EDGES.has(kind):
+			return INF
+		cost += HEDGE_COST + CRUSH_COST if kind == "hedge" else CRUSH_COST
+	return cost
+
+
+## Cover a unit standing on p gets on the side facing direction dir.
+## A crater covers every side; a tank alongside counts as half cover.
 func cover_toward(p: Vector2i, dir: Vector2i) -> int:
 	var cover := maxi(get_edge(p, p + dir), get_object(p + dir))
+	if _vehicles.has(p + dir):
+		cover = maxi(cover, Cover.HALF)
 	if get_terrain(p) == Terrain.CRATER:
 		cover = maxi(cover, Cover.HALF)
 	return cover
@@ -239,6 +285,26 @@ func destroy_cover(center: Vector2i, radius: float) -> int:
 	revision += 1
 	layout_revision += 1
 	return destroyed
+
+
+func to_dict() -> Dictionary:
+	return {
+		"width": width, "height": height, "terrain": _terrain.duplicate(), "objects": _objects.duplicate(),
+		"object_kinds": _object_kinds.duplicate(), "edges": _edges.duplicate(), "edge_kinds": _edge_kinds.duplicate(),
+		"smoke": _smoke.duplicate(), "vehicles": _vehicles.duplicate(),
+	}
+
+
+static func from_dict(data: Dictionary) -> TacticalMap:
+	var map := TacticalMap.new(data["width"], data["height"])
+	map._terrain = data["terrain"].duplicate()
+	map._objects = data["objects"].duplicate()
+	map._object_kinds = data["object_kinds"].duplicate()
+	map._edges = data["edges"].duplicate()
+	map._edge_kinds = data["edge_kinds"].duplicate()
+	map._smoke = data["smoke"].duplicate()
+	map._vehicles = data["vehicles"].duplicate()
+	return map
 
 
 func _index(p: Vector2i) -> int:

@@ -76,6 +76,12 @@ func _headline(u: Unit, plan: Dictionary, seen: Array[Unit]) -> String:
 			return "%s %s to %s" % [verb, u.name, spot if spot != "" else "(%d, %d)" % [tile.x, tile.y]]
 		"shoot":
 			return "%s: shoot %s" % [u.name, target.name]
+		"aimed_shot":
+			return "%s: aimed shot at %s" % [u.name, target.name]
+		"suppress":
+			return "%s: suppressive fire on %s" % [u.name, target.name]
+		"stance":
+			return "%s: %s" % [u.name, ["stand up", "crouch", "go prone"][plan["stance"]]]
 		"medkit":
 			return "%s: treat %s" % [u.name, "himself" if target == u else target.name]
 		"grenade":
@@ -95,8 +101,8 @@ func _reasons(u: Unit, plan: Dictionary, seen: Array[Unit]) -> Array[String]:
 	match plan["kind"]:
 		"move":
 			reasons = _move_reasons(u, plan["tile"], seen)
-		"shoot":
-			var odds := battle.shot_odds(u, target)
+		"shoot", "aimed_shot":
+			var odds := battle.shot_odds(u, target, false, plan["kind"] == "aimed_shot")
 			reasons.append("%d%% hit" % odds["hit"])
 			if target.vehicle:
 				reasons.append("hits its %s armour" % CombatRules.armor_side(target, u.pos))
@@ -109,6 +115,18 @@ func _reasons(u: Unit, plan: Dictionary, seen: Array[Unit]) -> Array[String]:
 				reasons.append("%d%% kill chance" % roundi(outcome[1] * 100.0))
 			if target.overwatch:
 				reasons.append("breaks his overwatch")
+		"suppress":
+			reasons.append("no damage, but keeps %s suppressed through their turn" % target.name)
+			if target.overwatch:
+				reasons.append("breaks his overwatch")
+		"stance":
+			var stance: int = plan["stance"]
+			if stance == Unit.Stance.STAND:
+				reasons.append("full speed again")
+			else:
+				reasons.append("harder to hit, moves cost x%s" % str(Unit.STANCE_MOVE_COST[stance]))
+				if u.is_pinned():
+					reasons.append("pinned down")
 		"overwatch":
 			var near := 0
 			for e in seen:

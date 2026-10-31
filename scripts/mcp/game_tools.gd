@@ -25,6 +25,7 @@ const LEGEND := {
 const COMMAND_HELP := "Commands: {\"cmd\": \"move\", \"unit\": id, \"tile\": [x, y]} | {\"cmd\": \"shoot\", \"unit\": id, \"target\": enemy id} | " \
 		+ "{\"cmd\": \"overwatch\"|\"hunker\"|\"reload\"|\"set_up\"|\"rally\", \"unit\": id} | {\"cmd\": \"grenade\"|\"smoke\", \"unit\": id, \"tile\": [x, y]} | " \
 		+ "{\"cmd\": \"mortar\", \"unit\": id, \"tile\": [x, y], \"kind\": \"he\"|\"smoke\"} | {\"cmd\": \"medkit\", \"unit\": id, \"target\": ally id} | " \
+		+ "{\"cmd\": \"aimed_shot\"|\"suppress\", \"unit\": id, \"target\": enemy id} | {\"cmd\": \"stance\", \"unit\": id, \"stance\": 0 stand, 1 crouch, 2 prone} | " \
 		+ "{\"cmd\": \"pivot\", \"unit\": tank id, \"tile\": heading such as [1, 0] or [1, -1]} | {\"cmd\": \"end_turn\"}"
 
 var battle: Battle
@@ -65,8 +66,9 @@ func tool_list() -> Array:
 	var command_arg := {
 		"type": "object", "description": COMMAND_HELP,
 		"properties": {
-			"cmd": {"type": "string", "enum": ["move", "shoot", "overwatch", "hunker", "reload", "set_up", "rally", "grenade", "smoke", "mortar", "medkit", "pivot", "end_turn"]},
+			"cmd": {"type": "string", "enum": ["move", "shoot", "aimed_shot", "suppress", "stance", "overwatch", "hunker", "reload", "set_up", "rally", "grenade", "smoke", "mortar", "medkit", "pivot", "end_turn"]},
 			"unit": {"type": "integer"}, "target": {"type": "integer"}, "tile": tile_arg, "kind": {"type": "string", "enum": ["he", "smoke"]},
+			"stance": {"type": "integer", "enum": [0, 1, 2], "description": "0 stand, 1 crouch, 2 prone"},
 		},
 		"required": ["cmd"],
 	}
@@ -328,6 +330,10 @@ func unit_options(id: int, all_tiles := false) -> Dictionary:
 		actions["mortar"] = battle.can_act(u) if u.actions >= Unit.ACTIONS_PER_TURN else "The mortar can't fire after moving"
 	if u.vehicle:
 		actions["pivot"] = battle.can_act(u)
+	else:
+		actions["stance"] = battle.can_act(u)
+		actions["aimed_shot"] = actions["shoot"] if u.actions >= Unit.ACTIONS_PER_TURN or actions["shoot"] != "" else "Needs both actions"
+		actions["suppress"] = actions["shoot"]
 	var allowed := []
 	var blocked := {}
 	for action: String in actions:
@@ -493,6 +499,8 @@ func command_from_json(value: Variant) -> Dictionary:
 		command["tile"] = tile
 	if value.has("kind"):
 		command["kind"] = str(value["kind"])
+	if value.has("stance"):
+		command["stance"] = int(value["stance"])
 	return command
 
 
@@ -526,10 +534,14 @@ func validate(command: Dictionary) -> String:
 	match cmd:
 		"move":
 			return battle.can_move(u, tile)
-		"shoot":
+		"shoot", "aimed_shot", "suppress":
 			if target == null or target.team == side or not target.is_alive() or not battle.team_sees(side, target):
 				return "Unknown target: not an enemy in sight"
-			return battle.can_shoot(u, target)
+			if cmd == "aimed_shot":
+				return battle.can_aimed_shot(u, target)
+			return battle.can_suppress(u, target) if cmd == "suppress" else battle.can_shoot(u, target)
+		"stance":
+			return battle.can_change_stance(u, command.get("stance", -1)) if command.has("stance") else "stance needs 0 (stand), 1 (crouch) or 2 (prone)"
 		"overwatch":
 			return battle.can_overwatch(u)
 		"hunker":
@@ -565,6 +577,8 @@ func describe(command: Dictionary) -> String:
 		text += " " + target.name
 	if command.get("tile") is Vector2i:
 		text += " (%d, %d)" % [command["tile"].x, command["tile"].y]
+	if cmd == "stance" and command.get("stance", -1) in [0, 1, 2]:
+		text = "%s: %s" % [u.name, ["stand up", "crouch", "go prone"][command["stance"]]]
 	return text
 
 

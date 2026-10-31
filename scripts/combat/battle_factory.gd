@@ -5,6 +5,8 @@ extends RefCounted
 ## A layout is {"map": TacticalMap, "objectives": Array, "spawns": Array[Vector2i] (Allied, west),
 ## "reinforcement_spawns": Array[Vector2i]}; German positions are the mirror image.
 ## A roster entry is a role name, or {"role", "name", "rank", "record_id"} for campaign soldiers.
+## Scenarios add "pos" (an exact start tile) and "facing" to entries, and "spawns" (exact tiles, not
+## mirrored) to reinforcement waves.
 
 const SURNAMES := [
 	["Adams", "Baker", "Collins", "Dawson", "Ellis", "Fisher", "Garcia", "Hughes", "Kowalski", "Lewis",
@@ -24,8 +26,13 @@ static func create(layout: Dictionary, rosters: Array, seed := 0, options := {})
 	for team in 2:
 		var roster: Array = rosters[team]
 		for i in roster.size():
-			var spawn: Vector2i = layout["spawns"][i % layout["spawns"].size()]
-			var pos := _free_tile(map, _side(map, spawn, team), taken)
+			var pos: Vector2i
+			if roster[i] is Dictionary and roster[i].has("pos"):
+				pos = roster[i]["pos"]
+				taken[pos] = true
+			else:
+				var spawn: Vector2i = layout["spawns"][i % layout["spawns"].size()]
+				pos = _free_tile(map, _side(map, spawn, team), taken)
 			units.append(_make_unit(units.size(), roster[i], team, pos, names))
 	var battle := Battle.new(map, units, seed)
 	for objective: Dictionary in layout["objectives"]:
@@ -38,9 +45,9 @@ static func create(layout: Dictionary, rosters: Array, seed := 0, options := {})
 	for wave: Dictionary in options.get("reinforcements", []):
 		var team: int = wave["team"]
 		var wave_units: Array[Unit] = []
-		var spawns: Array = layout["reinforcement_spawns"]
+		var spawns: Array = wave.get("spawns", layout["reinforcement_spawns"])
 		for i in wave["roster"].size():
-			var pos := _side(map, spawns[i % spawns.size()], team)
+			var pos: Vector2i = spawns[i % spawns.size()] if wave.has("spawns") else _side(map, spawns[i % spawns.size()], team)
 			wave_units.append(_make_unit(next_id, wave["roster"][i], team, pos, names))
 			next_id += 1
 		battle.reinforcements.append({"round": wave["round"], "team": team, "units": wave_units})
@@ -53,6 +60,8 @@ static func _make_unit(id: int, entry: Variant, team: int, pos: Vector2i, names:
 	var unit_name: String = spec.get("name", names.next(role, team))
 	var u := Unit.create(id, unit_name, role, team, pos, spec.get("rank", 0))
 	u.record_id = spec.get("record_id", -1)
+	if spec.has("facing"):
+		u.facing = spec["facing"]
 	return u
 
 

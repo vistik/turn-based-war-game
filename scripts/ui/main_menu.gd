@@ -19,6 +19,8 @@ const SKIRMISH_MODES := [["Play vs AI", false, true], ["Hotseat", false, false],
 
 var _page: Control
 var _map_choice: OptionButton
+## Scenario files listed after SKIRMISH_MAPS in the map choice.
+var _scenario_paths: Array[String] = []
 var _recruit_choice: OptionButton
 var _address: LineEdit
 var _port: LineEdit
@@ -77,6 +79,10 @@ func _show_main() -> void:
 	_map_choice = OptionButton.new()
 	for map_spec: Array in SKIRMISH_MAPS:
 		_map_choice.add_item(map_spec[0])
+	_scenario_paths.clear()
+	for entry in Scenario.list_files():
+		_map_choice.add_item("Scenario: %s" % entry["title"])
+		_scenario_paths.append(entry["path"])
 	_map_choice.custom_minimum_size = Vector2(0, 40)
 	box.add_child(_map_choice)
 	var modes := HBoxContainer.new()
@@ -85,6 +91,7 @@ func _show_main() -> void:
 	for i in SKIRMISH_MODES.size():
 		var button := _button(modes, SKIRMISH_MODES[i][0], _start_skirmish.bind(i))
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_button(box, "Map and scenario editor", func() -> void: get_tree().change_scene_to_file("res://scenes/editor.tscn"))
 
 	_section(box, "Online")
 	_text(box, "Play another computer directly, no server needed. The host picks the map above and plays the Allies. Both games check after every order that they still agree.", MUTED, 14, true)
@@ -137,7 +144,13 @@ func _new_campaign() -> void:
 
 
 func _skirmish_setup() -> Dictionary:
-	var spec: Array = SKIRMISH_MAPS[_map_choice.selected]
+	var index := _map_choice.selected - SKIRMISH_MAPS.size()
+	if index >= 0:
+		var scenario := Scenario.load_file(_scenario_paths[index])
+		if scenario != null:
+			return {"map": "scenario", "scenario": scenario.to_data(), "seed": randi() % 1000000000 + 1}
+		push_warning(Scenario.last_error)
+	var spec: Array = SKIRMISH_MAPS[maxi(0, _map_choice.selected) if index < 0 else 0]
 	return {"map": spec[1], "size": spec[2], "seed": randi() % 1000000000 + 1}
 
 
@@ -162,7 +175,7 @@ func _host() -> void:
 	var addresses := Array(Net.local_addresses()).map(func(a: String) -> String: return "%s:%d" % [a, port])
 	_show_net_page("Waiting for the other player",
 			"%s\n\nThey choose Join game and type:\n%s\n\nOn the same network that just works. Over the internet, forward UDP port %d on your router to this computer, or both use a VPN such as Tailscale or ZeroTier." % [
-			SKIRMISH_MAPS[_map_choice.selected][0], "\n".join(addresses) if not addresses.is_empty() else "this computer's address", port], "Cancel")
+			_map_choice.get_item_text(_map_choice.selected), "\n".join(addresses) if not addresses.is_empty() else "this computer's address", port], "Cancel")
 
 
 func _join() -> void:

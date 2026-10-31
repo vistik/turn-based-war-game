@@ -33,11 +33,16 @@ static func start_battle(p_battle: Battle, p_ai_teams: Array, title: String) -> 
 	battle_title = title
 
 
-## A skirmish from a setup {"map": "village" or "random", "size": side length, "seed": int}: the same setup
+## A skirmish from a setup {"map": "village" or "random", "size": side length, "seed": int}, or
+## {"map": "scenario", "scenario": Scenario.to_data(), "seed": int}: the same setup
 ## always builds the same battle, which is how both online players start identical games.
 ## Bigger maps bring bigger forces, need more points to win and allow more rounds. Returns [battle, title].
 static func build_skirmish(setup: Dictionary) -> Array:
 	var seed: int = setup["seed"]
+	if setup["map"] == "scenario":
+		# A scenario file's data travels in the setup, so an online opponent needs no copy of the file.
+		var scenario := Scenario.from_data(setup["scenario"])
+		return [scenario.build_battle(seed), scenario.title]
 	if setup["map"] == "village":
 		return [NormandyScenario.build(seed), "Normandy village"]
 	var size: int = setup["size"]

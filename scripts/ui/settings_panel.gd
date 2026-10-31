@@ -27,6 +27,16 @@ func _ready() -> void:
 	_toggle("Confirm end turn", "Ask before ending the turn while some units can still act.", "confirm_end_turn")
 	_heading("Display")
 	_toggle("Fullscreen", "Play in fullscreen instead of a window.", "fullscreen")
+	_heading("AI helper")
+	AdvisorSettings.load_settings()
+	_advisor_toggle("Agent link", "Let an AI agent (Claude Code, Claude Desktop) connect to battles over MCP, on this computer only. See docs/MCP.md.",
+			"mcp_enabled")
+	_advisor_toggle("Agent may play my moves", "Otherwise the agent can only suggest moves for you to make. Never in online games.",
+			"agent_may_act")
+	_advisor_toggle("Help in online games", "Allow the H suggestion and the agent's read-only tools against a human opponent.",
+			"help_online")
+	_advisor_toggle("Keep the agent token", "Reuse the same token every time, so the agent doesn't need setting up again.",
+			"keep_token")
 
 
 func _set_value(key: String, value: Variant) -> void:
@@ -79,6 +89,26 @@ func _toggle(title: String, hint: String, key: String) -> void:
 	var check := CheckButton.new()
 	check.button_pressed = GameSettings.to_dict()[key]
 	check.toggled.connect(func(on: bool) -> void: _set_value(key, on))
+	_row(title, hint, check)
+
+
+## Settings for move suggestions and the agent link, which live in AdvisorSettings.
+func _advisor_toggle(title: String, hint: String, key: String) -> void:
+	var check := CheckButton.new()
+	check.button_pressed = {"mcp_enabled": AdvisorSettings.mcp_enabled, "agent_may_act": AdvisorSettings.agent_may_act,
+			"help_online": AdvisorSettings.help_online, "keep_token": AdvisorSettings.keep_token}[key]
+	check.toggled.connect(func(on: bool) -> void:
+		match key:
+			"mcp_enabled":
+				AdvisorSettings.mcp_enabled = on
+			"agent_may_act":
+				AdvisorSettings.agent_may_act = on
+			"help_online":
+				AdvisorSettings.help_online = on
+			"keep_token":
+				AdvisorSettings.keep_token = on
+		AdvisorSettings.save_settings()
+		changed.emit())
 	_row(title, hint, check)
 
 

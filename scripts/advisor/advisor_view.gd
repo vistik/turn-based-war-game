@@ -100,7 +100,8 @@ func show_proposal(suggestion: Dictionary) -> void:
 	if u != null:
 		view._select(u, true)
 		match suggestion["kind"]:
-			"shoot":
+			"shoot", "aimed_shot", "suppress":
+				view._shot_cmd = suggestion["kind"]
 				view._set_mode(view.Mode.SHOOT)
 			"grenade":
 				view._set_mode(view.Mode.GRENADE)
@@ -400,13 +401,21 @@ func _draw() -> void:
 			else:
 				label = "MOVE HERE"
 			label_at = at
-		"shoot", "medkit":
+		"shoot", "aimed_shot", "suppress", "medkit":
 			if target != null:
 				var at: Vector2 = view._display_pos[target.id]
 				draw_line(proj.project(from, 0.6), proj.project(at, 0.6), Color(color, 0.8), 2.5)
 				draw_polyline(TerrainPainter.ground_circle(proj, at, 0.55), color, 3.0)
-				label = "%d%%" % battle.shot_odds(u, target)["hit"] if command["cmd"] == "shoot" else "TREAT"
+				match command["cmd"]:
+					"medkit":
+						label = "TREAT"
+					"suppress":
+						label = "SUPPRESS"
+					_:
+						label = "%d%%" % battle.shot_odds(u, target, false, command["cmd"] == "aimed_shot")["hit"]
 				label_at = at
+		"stance":
+			label = ["STAND UP", "CROUCH", "GO PRONE"][command.get("stance", 0)]
 		"grenade", "smoke", "mortar":
 			var tile: Vector2i = command["tile"]
 			var radius := CombatRules.GRENADE_RADIUS if command["cmd"] == "grenade" else (CombatRules.SMOKE_RADIUS if command["cmd"] == "smoke" else CombatRules.MORTAR_RADIUS)

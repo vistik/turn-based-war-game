@@ -28,7 +28,7 @@ signal turn_agreed(turn_index: int, checksum: String)
 
 const DEFAULT_PORT := 24944
 ## Bumped whenever the rules or the protocol change, so different versions refuse to play each other.
-const PROTOCOL := 3
+const PROTOCOL := 4
 
 ## True while connected to an opponent.
 var active := false

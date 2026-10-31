@@ -66,6 +66,148 @@ func test_normandy_map_is_symmetric_and_connected() -> void:
 			check(reach.has(tile), "%s can walk to the %s" % [u.name, objective["name"]])
 
 
+# --- Scenario files ---
+
+## A small scenario using every feature of the format.
+func make_scenario() -> Scenario:
+	var s := Scenario.create(12, 10)
+	s.title = "Test ground"
+	s.briefing = "Hold the barn.\nNo retreat."
+	s.vp_to_win = 7
+	s.max_rounds = 9
+	s.mirrored = false
+	s.map.set_terrain(Vector2i(2, 3), TacticalMap.Terrain.WHEAT)
+	s.map.set_terrain(Vector2i(5, 5), TacticalMap.Terrain.ROAD)
+	s.map.set_terrain(Vector2i(6, 1), TacticalMap.Terrain.INDOOR)
+	s.map.set_object(Vector2i(4, 4), Cover.FULL, "tree")
+	s.map.set_object(Vector2i(7, 2), Cover.HALF, "sandbags")
+	s.map.set_object(Vector2i(8, 8), Cover.FULL, "crate")
+	s.map.set_edge(Vector2i(3, 3), Vector2i(4, 3), Cover.FULL, "hedge")
+	s.map.set_edge(Vector2i(6, 1), Vector2i(6, 0), Cover.HALF, "window")
+	s.map.set_edge(Vector2i(9, 9), Vector2i(8, 9), Cover.HALF, "fence")
+	s.objectives.append({"name": "Barn", "center": Vector2(6, 4.5), "radius": 2.0})
+	s.units.append(Scenario.unit_entry(0, "Officer", Vector2i(1, 4), Vector2i(1, 0), "Lt. Test", 2))
+	s.units.append(Scenario.unit_entry(0, "Tank", Vector2i(1, 7), Vector2i(1, -1)))
+	s.units.append(Scenario.unit_entry(1, "MG", Vector2i(10, 4), Vector2i(0, 1)))
+	var spawns: Array[Vector2i] = [Vector2i(11, 0), Vector2i(11, 9)]
+	s.reinforcements.append({"round": 3, "team": 1, "roster": ["Rifleman", {"role": "Sniper", "name": "Hans", "rank": 1}], "spawns": spawns})
+	return s
+
+
+func same_map(a: TacticalMap, b: TacticalMap) -> bool:
+	if a.width != b.width or a.height != b.height or a.get_edges().size() != b.get_edges().size():
+		return false
+	for y in a.height:
+		for x in a.width:
+			var p := Vector2i(x, y)
+			if a.get_terrain(p) != b.get_terrain(p) or a.get_object(p) != b.get_object(p) or a.get_object_kind(p) != b.get_object_kind(p):
+				return false
+	for key: Vector3i in a.get_edges():
+		var pair := TacticalMap.edge_tiles(key)
+		if b.get_edge(pair[0], pair[1]) != a.get_edges()[key] or b.get_edge_kind(pair[0], pair[1]) != a.edge_kind(key):
+			return false
+	return true
+
+
+## Units as comparable rows: [id, name, role, team, pos, facing, rank], then reinforcements.
+func unit_rows(battle: Battle) -> Array:
+	var rows := []
+	for u in battle.units:
+		rows.append([u.id, u.name, u.role, u.team, u.pos, u.facing, u.rank])
+	for wave in battle.reinforcements:
+		for u: Unit in wave["units"]:
+			rows.append([wave["round"], u.id, u.name, u.role, u.team, u.pos, u.rank])
+	return rows
+
+
+func test_scenario_round_trip() -> void:
+	var s := make_scenario()
+	var json := JSON.new()
+	check_eq(json.parse(s.to_json()), OK, "scenario JSON parses")
+	var loaded := Scenario.from_data(json.data)
+	check(loaded != null, "scenario loads: %s" % Scenario.last_error)
+	if loaded == null:
+		return
+	check_eq(loaded.to_json(), s.to_json(), "saving the loaded scenario gives the same file")
+	check(same_map(loaded.map, s.map), "same map after a round trip")
+	check_eq(loaded.objectives, s.objectives, "same objectives")
+	var battle := loaded.build_battle(5)
+	check_eq(unit_rows(battle), unit_rows(s.build_battle(5)), "same units")
+	check_eq(battle.get_unit(0).name, "Lt. Test", "named units keep their name")
+	check_eq(battle.get_unit(0).rank, 2, "and rank")
+	check_eq(battle.get_unit(1).facing, Vector2i(1, -1), "tanks keep a diagonal facing")
+	check_eq(battle.get_unit(2).pos, Vector2i(10, 4), "units start on their exact tile")
+	check_eq(battle.reinforcements[0]["units"][1].name, "Hans", "reinforcements keep names")
+	check_eq(battle.reinforcements[0]["units"][0].pos, Vector2i(11, 0), "reinforcements use the wave's spawn tiles")
+	check_eq([battle.vp_to_win, battle.max_rounds], [7, 9], "rules carry over")
+	check_eq(battle.map.get_object(Vector2i(8, 8)), Cover.FULL, "an unusual cover level for a kind is kept")
+	check_eq(unit_rows(s.build_battle(5)), unit_rows(s.build_battle(5)), "the same seed builds the same battle")
+
+	# Export from a battle, then build it again: the same battle.
+	var original: Battle = GameSession.build_skirmish({"map": "random", "size": 44, "seed": 3})[0]
+	var exported := Scenario.from_battle(original, "Random 3")
+	var rebuilt := Scenario.from_data(exported.to_data()).build_battle(3)
+	check(same_map(rebuilt.map, original.map), "exported map matches the battle's")
+	check_eq(unit_rows(rebuilt), unit_rows(original), "exported units match the battle's")
+	check_eq(rebuilt.objectives, original.objectives, "exported objectives match")
+	check(exported.mirrored, "a generated map is recognised as mirrored")
+	check(exported.validate().is_empty(), "an exported generated map is valid: %s" % exported.validate())
+
+	# Swapping the sides twice gives back the original.
+	var twice := s.swapped().swapped()
+	twice.title = s.title
+	check_eq(twice.to_json(), s.to_json(), "swapping sides twice changes nothing")
+	var swapped := s.swapped()
+	check_eq(swapped.units[0]["team"], 0, "the German force now plays for the Allies")
+	check_eq(swapped.units[0]["pos"], Vector2i(1, 4), "from the other side of the map")
+
+	# Building half a map and mirroring it.
+	var half := Scenario.create(10, 8)
+	half.map.set_object(Vector2i(2, 2), Cover.FULL, "rock")
+	half.map.set_edge(Vector2i(3, 5), Vector2i(4, 5), Cover.HALF, "stone")
+	half.map.set_edge(Vector2i(4, 1), Vector2i(5, 1), Cover.FULL, "wall")
+	half.map.set_object(Vector2i(8, 7), Cover.HALF, "crate")
+	half.objectives.append({"name": "Mill", "center": Vector2(5, 4), "radius": 2.0})
+	half.objectives.append({"name": "Copse", "center": Vector2(2, 6), "radius": 1.5})
+	half.units.append(Scenario.unit_entry(0, "Rifleman", Vector2i(1, 3)))
+	half.units.append(Scenario.unit_entry(1, "SMG", Vector2i(8, 3)))
+	check(not half.is_symmetric(), "a half-built map isn't symmetric")
+	half.mirror_west_to_east()
+	check(half.is_symmetric(), "mirroring the west half makes it symmetric")
+	check_eq(half.map.get_object(Vector2i(7, 2)), Cover.FULL, "objects are mirrored")
+	check_eq(half.map.get_object(Vector2i(8, 7)), Cover.NONE, "the east half is replaced")
+	check_eq(half.map.get_edge(Vector2i(5, 5), Vector2i(6, 5)), Cover.HALF, "walls are mirrored")
+	check_eq(half.map.get_edge(Vector2i(4, 1), Vector2i(5, 1)), Cover.FULL, "a wall on the centre line stays")
+	check_eq(half.objectives.size(), 3, "objectives off the centre line are mirrored")
+	check_eq(half.units.size(), 2, "the Allied units are mirrored for Germany")
+	check_eq(half.units[1]["pos"], Vector2i(8, 3), "onto the mirror tile")
+	check_eq(half.units[1]["facing"], Vector2i(-1, 0), "facing west")
+	check(Scenario.from_data({"map": {"width": 2}}) == null, "a bad file is refused")
+
+
+func test_village_scenario_builds_the_village() -> void:
+	var scenario := Scenario.load_file("res://scenarios/village.json")
+	check(scenario != null, "bundled village scenario loads: %s" % Scenario.last_error)
+	if scenario == null:
+		return
+	check(scenario.validate().is_empty(), "village scenario is valid: %s" % scenario.validate())
+	check(scenario.is_symmetric(), "village scenario is mirrored")
+	var battle := scenario.build_battle(7)
+	var village := NormandyScenario.build(7)
+	check(same_map(battle.map, village.map), "same map as the hand-built village")
+	check_eq(unit_rows(battle), unit_rows(village), "same soldiers in the same places")
+	check_eq(battle.objectives, village.objectives, "same objectives")
+	check_eq([battle.vp_to_win, battle.max_rounds], [village.vp_to_win, village.max_rounds], "same rules")
+	check(Scenario.list_files().any(func(f: Dictionary) -> bool: return f["path"] == "res://scenarios/village.json"), "village is listed")
+	# A short AI vs AI game on it.
+	battle.max_rounds = 3
+	var result := BalanceSim.play(battle, 7)
+	check(result["winner"] != -1, "AI vs AI on the village scenario finishes")
+	check_eq(result["survivors"][0] + result["survivors"][1], battle.alive_units().size(), "survivors counted")
+	check_eq(BalanceSim.summarize([result, result])["games"], 2, "summary counts games")
+	var ci := BalanceSim.wilson(5, 10)
+	check(ci[0] < 0.5 and ci[1] > 0.5 and ci[0] > 0.2, "confidence interval around 50%")
+
 # --- Movement and terrain ---
 
 func test_path_costs() -> void:
@@ -944,3 +1086,206 @@ func test_settings_ignore_bad_values() -> void:
 	check_eq(GameSettings.follow_opponent, false, "good values are kept")
 	DirAccess.remove_absolute(TEST_SETTINGS)
 	GameSettings.reset()
+
+
+# --- Stances, aimed shots and suppressive fire ---
+
+func has_modifier(odds: Dictionary, label: String) -> bool:
+	for m: Array in odds["modifiers"]:
+		if m[0] == label:
+			return true
+	return false
+
+
+func test_stances_cost_an_action_and_slow_movement() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(0, 0)], ["Tank", 0, Vector2i(0, 10)], ["Rifleman", 1, Vector2i(15, 15)]])
+	var u := battle.units[0]
+	check(battle.can_change_stance(u, Unit.Stance.STAND) != "", "already standing")
+	check(battle.can_change_stance(u, 3) != "", "not a stance")
+	check(battle.can_change_stance(battle.units[1], Unit.Stance.CROUCH) != "", "tanks have no stances")
+	check(battle.can_change_stance(battle.units[2], Unit.Stance.CROUCH) != "", "not on the other side's turn")
+	var events := battle.change_stance(u, Unit.Stance.CROUCH)
+	check_eq(events_of(events, "stance").size(), 1, "stance event")
+	check_eq(u.actions, 1, "crouching costs an action")
+	check_eq(u.current_mobility(), u.mobility / Unit.STANCE_MOVE_COST[Unit.Stance.CROUCH], "crouched moves cost x1.5")
+	check(battle.reachable(u).has(Vector2i(4, 0)) and not battle.reachable(u).has(Vector2i(5, 0)), "crouched: 4 tiles on one action")
+	battle.change_stance(u, Unit.Stance.PRONE)
+	check_eq(u.actions, 0, "going prone costs an action")
+	u.actions = 2
+	check(battle.reachable(u).has(Vector2i(4, 0)) and not battle.reachable(u).has(Vector2i(5, 0)), "crawling: 4 tiles on both actions")
+	check_eq(u.current_sight(), u.sight - Unit.STANCE_SIGHT[Unit.Stance.PRONE], "prone soldiers see less far")
+	u.wounded_turns = 2
+	u.suppression = Unit.SUPPRESSED_AT
+	check_eq(u.current_mobility(), Unit.MIN_CRAWL, "a slowed soldier can still crawl a tile")
+	u.suppression = Unit.PINNED_AT
+	check_eq(u.current_mobility(), 0.0, "pinned soldiers can't crawl either")
+	u.stance = Unit.Stance.STAND
+	check_eq(battle.can_change_stance(u, Unit.Stance.PRONE), "", "pinned soldiers can still get down")
+
+
+func test_stance_modifiers_in_hit_chance() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(0, 5)], ["Rifleman", 1, Vector2i(8, 5)]])
+	var shooter := battle.units[0]
+	var target := battle.units[1]
+	var base: int = battle.shot_odds(shooter, target)["hit"]
+	target.stance = Unit.Stance.CROUCH
+	var odds := battle.shot_odds(shooter, target)
+	check_eq(odds["hit"], base - CombatRules.CROUCH_DEFENSE, "crouched targets are harder to hit")
+	check(has_modifier(odds, "Crouched"), "shown as its own line")
+	battle.map.set_object(Vector2i(7, 5), Cover.HALF)
+	check_eq(battle.shot_odds(shooter, target)["hit"], base - 20 - CombatRules.CROUCH_HALF_COVER_DEFENSE, "crouching behind half cover counts more")
+	target.stance = Unit.Stance.PRONE
+	odds = battle.shot_odds(shooter, target)
+	check_eq(odds["hit"], base - 20 - CombatRules.PRONE_DEFENSE - CombatRules.PRONE_LOW_COVER_DEFENSE, "prone behind low cover")
+	check(has_modifier(odds, "Prone behind low cover"), "prone line")
+	shooter.pos = Vector2i(8, 0)
+	target.stance = Unit.Stance.STAND
+	var flanked: int = battle.shot_odds(shooter, target)["hit"]
+	target.stance = Unit.Stance.PRONE
+	check_eq(battle.shot_odds(shooter, target)["hit"], flanked + CombatRules.PRONE_FLANKED_PENALTY, "prone and flanked: easier to hit")
+	battle.map.set_object(Vector2i(7, 5), Cover.NONE)
+	check_eq(battle.shot_odds(shooter, target)["hit"], flanked - CombatRules.PRONE_DEFENSE, "prone in the open at range")
+	var reaction_prone: int = battle.shot_odds(shooter, target, true)["hit"]
+	target.stance = Unit.Stance.STAND
+	check(reaction_prone < battle.shot_odds(shooter, target, true)["hit"], "crawling is safer under overwatch")
+	shooter.pos = Vector2i(6, 5)
+	var close: int = battle.shot_odds(shooter, target)["hit"]
+	target.stance = Unit.Stance.PRONE
+	check_eq(battle.shot_odds(shooter, target)["hit"], mini(100, close + CombatRules.PRONE_CLOSE_PENALTY), "prone up close: easy to hit")
+	target.stance = Unit.Stance.STAND
+	shooter.pos = Vector2i(0, 5)
+	shooter.stance = Unit.Stance.CROUCH
+	check_eq(battle.shot_odds(shooter, target)["hit"], base + CombatRules.CROUCH_AIM, "crouched shooters aim steadier")
+	shooter.stance = Unit.Stance.PRONE
+	check_eq(battle.shot_odds(shooter, target)["hit"], base + CombatRules.PRONE_AIM, "and prone ones")
+	var mg := Unit.create(9, "MG", "MG", 0, Vector2i(0, 5))
+	var mg_base: int = battle.shot_odds(mg, target)["hit"]
+	mg.stance = Unit.Stance.PRONE
+	mg.deployed = true
+	check_eq(battle.shot_odds(mg, target)["hit"], mg_base + CombatRules.PRONE_MG_AIM, "a machine gun on its bipod, lying down")
+
+
+func test_prone_soldiers_cannot_throw_or_fire_rockets() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(2, 2)], ["Officer", 0, Vector2i(2, 4)], ["AT", 0, Vector2i(2, 6)],
+			["Mortar", 0, Vector2i(2, 8)], ["Rifleman", 1, Vector2i(9, 2)]])
+	for u in battle.alive_units(0):
+		u.stance = Unit.Stance.PRONE
+	check(battle.can_throw_grenade(battle.units[0], Vector2i(6, 2)) != "", "no grenades lying down")
+	check(battle.can_throw_smoke(battle.units[1], Vector2i(6, 4)) != "", "no smoke lying down")
+	check(battle.can_fire(battle.units[2]) != "", "no rockets lying down")
+	check(battle.can_fire_mortar(battle.units[3], Vector2i(9, 2), "he") != "", "no mortar lying down")
+	check_eq(battle.can_shoot(battle.units[0], battle.units[4]), "", "rifles fire fine")
+	battle.units[0].stance = Unit.Stance.CROUCH
+	check_eq(battle.can_throw_grenade(battle.units[0], Vector2i(6, 2)), "", "crouched soldiers can throw")
+
+
+func test_prone_in_the_wheat_hides_until_it_fires() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(0, 5)], ["Rifleman", 1, Vector2i(8, 5)], ["Rifleman", 1, Vector2i(15, 15)]])
+	var viewer := battle.units[0]
+	var hidden := battle.units[1]
+	battle.map.set_terrain(hidden.pos, TacticalMap.Terrain.WHEAT)
+	check(battle.can_see(viewer, hidden), "standing in the wheat: seen")
+	hidden.stance = Unit.Stance.PRONE
+	check(not battle.can_see(viewer, hidden) and not battle.team_sees(0, hidden), "lying in the wheat: hidden at range")
+	viewer.pos = Vector2i(5, 5)
+	check(battle.can_see(viewer, hidden), "but not up close")
+	viewer.pos = Vector2i(0, 5)
+	hidden.fired = true
+	check(battle.can_see(viewer, hidden), "the muzzle flash gives him away")
+	battle.end_turn()
+	check(not hidden.fired, "until his next turn")
+	check(not battle.can_see(viewer, hidden), "hidden again")
+
+
+func test_prone_soldiers_recover_faster() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(5, 5)], ["Rifleman", 1, Vector2i(15, 15)]])
+	var u := battle.units[0]
+	u.suppression = 90
+	u.stance = Unit.Stance.PRONE
+	battle.end_turn()
+	battle.end_turn()
+	check_eq(u.suppression, 90 - CombatRules.SUPPRESSION_RECOVERY - CombatRules.PRONE_RECOVERY_BONUS, "lying flat helps")
+
+
+func test_aimed_shot_takes_both_actions() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(0, 5)], ["Rifleman", 1, Vector2i(8, 5)]])
+	var u := battle.units[0]
+	var target := battle.units[1]
+	target.hp = 100
+	var normal: int = battle.shot_odds(u, target)["hit"]
+	var odds := battle.shot_odds(u, target, false, true)
+	check_eq(odds["hit"], normal + CombatRules.AIMED_SHOT_BONUS, "aimed shots hit more often")
+	check(has_modifier(odds, "Aimed shot"), "shown as its own line")
+	u.actions = 1
+	check(battle.can_aimed_shot(u, target) != "", "needs both actions")
+	check(battle.execute({"cmd": "aimed_shot", "unit": u.id, "target": target.id}).is_empty(), "rejected as data too")
+	u.actions = 2
+	var events := battle.execute({"cmd": "aimed_shot", "unit": u.id, "target": target.id})
+	var shots := events_of(events, "shot")
+	check_eq(shots.size(), 1, "one shot")
+	check(shots[0].get("aimed", false), "marked as aimed")
+	check_eq(shots[0]["chance"], normal + CombatRules.AIMED_SHOT_BONUS, "rolled at the aimed chance")
+	check_eq(u.actions, 0, "ends the turn")
+	check(u.fired, "the shooter has fired")
+
+
+func test_suppressive_fire_pins_without_damage() -> void:
+	var battle := make_battle([["MG", 0, Vector2i(0, 5)], ["AT", 0, Vector2i(0, 9)], ["Rifleman", 1, Vector2i(8, 5)],
+			["Rifleman", 1, Vector2i(8, 6)], ["Tank", 1, Vector2i(12, 12)]])
+	var mg := battle.units[0]
+	var target := battle.units[2]
+	check(battle.can_suppress(mg, target) != "", "the MG must be set up")
+	mg.deployed = true
+	check(battle.can_suppress(mg, battle.units[4]) != "", "tanks ignore suppression")
+	check(battle.can_suppress(battle.units[1], target) != "", "rockets can't suppress")
+	mg.ammo = 1
+	check(battle.can_suppress(mg, target) != "", "needs two rounds")
+	mg.ammo = mg.weapon.clip_size
+	var events := battle.execute({"cmd": "suppress", "unit": mg.id, "target": target.id})
+	check(not events.is_empty(), "suppressive fire as data")
+	check(events_of(events, "damage").is_empty() and target.hp == target.max_hp, "no damage")
+	var amount := roundi(mg.weapon.suppression * CombatRules.SUPPRESSIVE_FIRE_FACTOR)
+	check_eq(target.suppression, amount, "heavy suppression on the target")
+	check_eq(battle.units[3].suppression, mg.weapon.suppression, "and on the man beside him")
+	check_eq(mg.ammo, mg.weapon.clip_size - CombatRules.SUPPRESSIVE_FIRE_AMMO, "burns rounds")
+	check_eq(mg.actions, 0, "ends the turn")
+	battle.end_turn()
+	check_eq(target.suppression, amount, "no recovery at the start of their next turn")
+	check(not target.under_fire, "only for one turn")
+	battle.end_turn()
+	battle.end_turn()
+	check_eq(target.suppression, amount - CombatRules.SUPPRESSION_RECOVERY, "then it wears off as usual")
+
+
+func test_stances_replay_and_save() -> void:
+	var a := make_battle([["Rifleman", 0, Vector2i(0, 5)], ["Rifleman", 1, Vector2i(8, 5)]])
+	var b := make_battle([["Rifleman", 0, Vector2i(0, 5)], ["Rifleman", 1, Vector2i(8, 5)]])
+	var command := {"cmd": "stance", "unit": 0, "stance": Unit.Stance.PRONE}
+	check(not a.execute(command).is_empty(), "stance change as data")
+	check(a.checksum() != b.checksum(), "the stance is part of the checksum")
+	b.execute(command)
+	check_eq(a.checksum(), b.checksum(), "same commands, same state")
+	check(a.execute({"cmd": "stance", "unit": 0, "stance": 7}).is_empty(), "bad stances are rejected")
+	a.units[1].under_fire = true
+	a.units[1].fired = true
+	var copy := Battle.from_dict(a.to_dict())
+	check_eq(copy.units[0].stance, Unit.Stance.PRONE, "stance saved")
+	check(copy.units[1].under_fire and copy.units[1].fired, "fire state saved")
+	check_eq(copy.checksum(), a.checksum(), "identical after loading")
+	var old := a.units[0].to_dict()
+	old.erase("stance")
+	old.erase("fired")
+	old.erase("under_fire")
+	check_eq(Unit.from_dict(old).stance, Unit.Stance.STAND, "saves from before stances load standing")
+
+
+func test_ai_uses_stances() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(3, 10)], ["Rifleman", 1, Vector2i(12, 8)], ["Rifleman", 1, Vector2i(12, 12)],
+			["MG", 1, Vector2i(13, 10)]], Vector2i(20, 20))
+	battle.units[0].suppression = 80
+	var command := TacticalAI.new(battle, 0).decide()
+	check(command["cmd"] == "stance" and command["stance"] == Unit.Stance.PRONE, "pinned in the open, it gets down (%s)" % command)
+	battle = make_battle([["Rifleman", 0, Vector2i(3, 10)], ["Rifleman", 1, Vector2i(19, 19)]], Vector2i(20, 20))
+	battle.units[0].stance = Unit.Stance.PRONE
+	command = TacticalAI.new(battle, 0).decide()
+	check(command["cmd"] == "stance" and command["stance"] == Unit.Stance.STAND, "with nobody in sight, it gets up to move on (%s)" % command)

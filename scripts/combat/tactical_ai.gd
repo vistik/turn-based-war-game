@@ -48,6 +48,16 @@ const OVERWATCH_VALUE := 10.0
 const RELOAD_EMPTY_VALUE := 30.0
 const MEDKIT_VALUE_PER_HP := 8.0
 const RALLY_VALUE := 0.4
+## What being crouched / prone is worth against, for the slower movement it means from now on.
+const STANCE_MOBILITY_COST := [0.0, 2.0, 12.0]
+## A stance's effect on incoming fire lasts beyond the next enemy turn, so it counts this many times over.
+const STANCE_PERSISTENCE := 2.0
+## Pinning an enemy (or just suppressing one) through their next turn with suppressive fire, and the rounds it burns.
+const PIN_VALUE := 20.0
+const SUPPRESS_STATE_VALUE := 6.0
+const SUPPRESSIVE_AMMO_COST := 4.0
+## Prone mortar and anti-tank teams can't use their weapon.
+const PRONE_WEAPON_PENALTY := 12.0
 ## Rounds without seeing an enemy before the AI is fully impatient and pushes forward.
 const PATIENCE_ROUNDS := 3.0
 
@@ -149,6 +159,10 @@ func _best_plan(u: Unit, seen: Array[Unit]) -> Dictionary:
 		for e in seen:
 			if battle.can_see(u, e):
 				plans.append(_plan(u, "shoot", stay + _shot_value(u, here, e), e))
+				if battle.can_aimed_shot(u, e) == "":
+					plans.append(_plan(u, "aimed_shot", stay + _shot_value(u, here, e, true), e))
+				if battle.can_suppress(u, e) == "":
+					plans.append(_plan(u, "suppress", stay + _suppress_value(u, e, seen), e))
 		if not u.is_pinned():
 			plans.append(_plan(u, "overwatch", stay + _overwatch_value(u, here, seen)))
 	if battle.can_set_up(u) == "":
@@ -197,6 +211,9 @@ func _best_plan(u: Unit, seen: Array[Unit]) -> Dictionary:
 				plans.append(_plan(u, "pivot", _position_score(u, here, seen) - 2.0, null, dir))
 		u.facing = facing
 
+	if not u.vehicle:
+		plans.append_array(_stance_plans(u, seen))
+
 	var reach := battle.reachable(u)
 	for tile: Vector2i in reach:
 		if tile == here or reach[tile]["cost"] > u.current_mobility() + 0.001:
@@ -222,12 +239,65 @@ func _plan(u: Unit, kind: String, value: float, target: Unit = null, tile := Vec
 	return {"unit": u, "kind": kind, "value": value, "target": target, "tile": tile}
 
 
+## Changing stance on the spot (then the best thing to do there with the action left), and for a crouched or
+## prone soldier, standing up to move further than it could crawl.
+func _stance_plans(u: Unit, seen: Array[Unit]) -> Array[Dictionary]:
+	var plans: Array[Dictionary] = []
+	var here := u.pos
+	var current := u.stance
+	var mobility_weight := 0.5 if u.is_pinned() else 1.0
+	var stay := _position_score(u, here, seen)
+	for stance: int in [Unit.Stance.STAND, Unit.Stance.CROUCH, Unit.Stance.PRONE]:
+		if battle.can_change_stance(u, stance) != "":
+			continue
+		u.stance = stance as Unit.Stance
+		u.actions -= 1
+		# A stance keeps paying off (or costing) for as long as the soldier holds the spot.
+		var value: float = stay + (_position_score(u, here, seen) - stay) * STANCE_PERSISTENCE \
+				- (STANCE_MOBILITY_COST[stance] - STANCE_MOBILITY_COST[current]) * mobility_weight
+		if u.actions > 0:
+			value += _stay_followup_value(u, seen)
+		if stance == Unit.Stance.PRONE:
+			value += mini(u.suppression, CombatRules.PRONE_RECOVERY_BONUS) * SUPPRESSION_VALUE * 2.0
+			if u.role in ["Mortar", "AT"]:
+				value -= PRONE_WEAPON_PENALTY
+		if stance == Unit.Stance.STAND and u.actions > 0 and not u.is_pinned():
+			# Up, then a full-speed move with the action left.
+			var reach := battle.reachable(u)
+			for tile: Vector2i in reach:
+				if tile != here:
+					value = maxf(value, _position_score(u, tile, seen) + STANCE_MOBILITY_COST[current])
+		u.actions += 1
+		u.stance = current
+		var plan := _plan(u, "stance", value)
+		plan["stance"] = stance
+		plans.append(plan)
+	return plans
+
+
+## Best use of an action left over when staying on the spot: shoot, overwatch, set up or reload.
+func _stay_followup_value(u: Unit, seen: Array[Unit]) -> float:
+	if u.ammo == 0:
+		return RELOAD_EMPTY_VALUE
+	if battle.can_set_up(u) == "":
+		return OVERWATCH_VALUE * 0.6
+	if battle.can_fire(u) != "":
+		return 0.0
+	var best := _overwatch_value(u, u.pos, seen)
+	for e in seen:
+		if battle.can_see(u, e):
+			best = maxf(best, _shot_value(u, u.pos, e))
+	return best
+
+
 func _command(plan: Dictionary) -> Dictionary:
 	var command := {"cmd": plan["kind"], "unit": plan["unit"].id}
 	if plan["target"] != null:
 		command["target"] = plan["target"].id
 	if plan["kind"] in ["move", "pivot", "grenade", "mortar"]:
 		command["tile"] = plan["tile"]
+	if plan["kind"] == "stance":
+		command["stance"] = plan["stance"]
 	if plan["kind"] == "mortar":
 		command["kind"] = "he"
 	return command
@@ -295,6 +365,10 @@ func _danger(u: Unit, tile: Vector2i, seen: Array[Unit]) -> Array[float]:
 		var weight: float = threat[2]
 		if not _can_see(from, tile, e.sight):
 			continue
+		if u.stance == Unit.Stance.PRONE and not u.fired and battle.map.get_terrain(tile) == TacticalMap.Terrain.WHEAT \
+				and Vector2(from).distance_to(Vector2(tile)) > CombatRules.WHEAT_CONCEALMENT_RANGE:
+			# Lying in the wheat, out of their sight.
+			continue
 		var outcome := _expected_damage(e, from, u, tile)
 		danger += (outcome[0] * 10.0 + outcome[1] * KILL_BONUS * 0.5) * weight
 		var cover := battle.map.cover_against(tile, from)
@@ -320,8 +394,8 @@ func _followup_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 	return best
 
 
-func _shot_value(u: Unit, from: Vector2i, target: Unit) -> float:
-	var outcome := _expected_damage(u, from, target, target.pos)
+func _shot_value(u: Unit, from: Vector2i, target: Unit, aimed := false) -> float:
+	var outcome := _expected_damage(u, from, target, target.pos, aimed)
 	var value := outcome[0] * 10.0 + outcome[1] * KILL_BONUS + (5.0 if target.overwatch else 0.0)
 	if CombatRules.misses_stray(u.weapon):
 		value -= _stray_cost(u, from, target)
@@ -367,6 +441,28 @@ func _stray_cost(u: Unit, from: Vector2i, target: Unit) -> float:
 		elif battle.team_sees(team, victim):
 			cost -= harm * chance * STRAY_ENEMY_VALUE
 	return cost
+
+
+## Suppressive fire: what the suppression it leaves on the target and its neighbours through their next turn is worth.
+func _suppress_value(u: Unit, target: Unit, seen: Array[Unit]) -> float:
+	var value := _suppression_gain(target, roundi(u.weapon.suppression * CombatRules.SUPPRESSIVE_FIRE_FACTOR)) - SUPPRESSIVE_AMMO_COST
+	for other in battle.alive_units(target.team):
+		if other != target and not other.vehicle and seen.has(other) \
+				and Vector2(other.pos).distance_to(Vector2(target.pos)) <= CombatRules.SUPPRESSIVE_FIRE_RADIUS:
+			value += _suppression_gain(other, u.weapon.suppression)
+	return value
+
+
+func _suppression_gain(e: Unit, amount: int) -> float:
+	var level := mini(100, e.suppression + amount)
+	var value := (level - e.suppression) * SUPPRESSION_VALUE
+	# Without suppressive fire they would have recovered this much by their turn.
+	var otherwise := maxi(0, e.suppression - CombatRules.SUPPRESSION_RECOVERY)
+	if level >= Unit.PINNED_AT and otherwise < Unit.PINNED_AT:
+		value += PIN_VALUE + (5.0 if e.overwatch else 0.0)
+	elif level >= Unit.SUPPRESSED_AT and otherwise < Unit.SUPPRESSED_AT:
+		value += SUPPRESS_STATE_VALUE
+	return value
 
 
 func _overwatch_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
@@ -518,11 +614,11 @@ func _can_see(from: Vector2i, to: Vector2i, sight: float) -> bool:
 
 
 ## [expected damage, kill probability] of shooter (standing on from) firing at target (standing on at).
-func _expected_damage(shooter: Unit, from: Vector2i, target: Unit, at: Vector2i) -> Array[float]:
+func _expected_damage(shooter: Unit, from: Vector2i, target: Unit, at: Vector2i, aimed := false) -> Array[float]:
 	var saved := [shooter.pos, target.pos]
 	shooter.pos = from
 	target.pos = at
-	var odds := battle.shot_odds(shooter, target)
+	var odds := battle.shot_odds(shooter, target, false, aimed)
 	shooter.pos = saved[0]
 	target.pos = saved[1]
 

@@ -3,8 +3,9 @@ extends RefCounted
 ## Procedural soldiers: a small 3D model of capsules and balls in the unit's own frame
 ## (forward, right, up), projected with the view so soldiers turn and rotate with the camera.
 ##
-## Pose keys: facing (Vector2, grid), walk (0..1), phase (walk cycle, radians), crouch (bool), pinned (bool),
-## deployed (bool), wounded (bool), death (0 standing .. 1 lying), flash (0..1 hit flash), breath (radians).
+## Pose keys: facing (Vector2, grid), walk (0..1), phase (walk cycle, radians), crouch (bool), prone (bool),
+## pinned (bool), deployed (bool), wounded (bool), death (0 standing .. 1 lying), flash (0..1 hit flash),
+## breath (radians). A prone soldier is the standing model laid face down along his facing, rifle forward.
 
 const SKIN := Color("d3a37b")
 const GUN := Color("2a2d31")
@@ -13,6 +14,11 @@ const BOOTS := Color("231f1b")
 const OUTLINE := Color(0.06, 0.06, 0.07)
 const WHITE := Color("e6e4dc")
 const RED_CROSS := Color("c8302a")
+## Optional fifth entry of a model part: how it is laid down for the prone pose. Body parts are laid down
+## whole, held parts (the weapon) are placed directly, arms are laid down at the shoulder and keep the hand.
+const BODY := 0
+const HELD := 1
+const ARM := 2
 ## Allies (olive drab, M1 helmet) and Germany (field grey, Stahlhelm).
 const FACTIONS := [
 	{"uniform": Color("575d34"), "jacket": Color("6c7043"), "helmet": Color("4c5430"), "webbing": Color("8b7f57"), "stahlhelm": false},
@@ -25,6 +31,8 @@ static func draw(c: CanvasItem, proj: ViewProjection, g: Vector2, unit: Unit, po
 	var death: float = pose["death"]
 	var flash: float = pose["flash"]
 	var drawn := []
+	if pose.get("prone", false):
+		death = 0.0
 	for part: Array in _model(unit, pose):
 		var a := _fall(part[0], death)
 		var b := _fall(part[1], death)
@@ -40,6 +48,8 @@ static func draw(c: CanvasItem, proj: ViewProjection, g: Vector2, unit: Unit, po
 
 ## Screen position of the weapon's muzzle, for flashes and tracers.
 static func muzzle(proj: ViewProjection, g: Vector2, unit: Unit, pose: Dictionary) -> Vector2:
+	if pose.get("prone", false):
+		return _to_screen(proj, g, pose["facing"], _prone_weapon(unit)[1])
 	var chest := 0.84 * _crouch(pose)
 	if unit.weapon.kind == "at":
 		return _to_screen(proj, g, pose["facing"], Vector3(0.32, 0.08, chest + 0.05))
@@ -47,6 +57,8 @@ static func muzzle(proj: ViewProjection, g: Vector2, unit: Unit, pose: Dictionar
 
 
 static func _crouch(pose: Dictionary) -> float:
+	if pose.get("prone", false):
+		return 1.0
 	if pose["pinned"]:
 		return 0.6
 	return 0.72 if pose["crouch"] or pose["deployed"] else 1.0
@@ -56,7 +68,8 @@ static func _crouch(pose: Dictionary) -> float:
 static func _model(unit: Unit, pose: Dictionary) -> Array:
 	var faction: Dictionary = FACTIONS[unit.team]
 	var k := _crouch(pose)
-	var walk: float = pose["walk"]
+	var prone: bool = pose.get("prone", false)
+	var walk: float = pose["walk"] * (0.4 if prone else 1.0)
 	var phase: float = pose["phase"]
 	var s := sin(phase) * 0.11 * walk
 	var bob := absf(cos(phase)) * 0.02 * walk + sin(pose["breath"]) * 0.006
@@ -76,6 +89,10 @@ static func _model(unit: Unit, pose: Dictionary) -> Array:
 		grip = Vector3(-0.2, 0.08, chest + 0.03)
 		muzzle = Vector3(0.32, 0.08, chest + 0.05)
 		width = 6.5
+	if prone:
+		var held := _prone_weapon(unit)
+		grip = held[0]
+		muzzle = held[1]
 
 	var parts := [
 		# Legs and boots.
@@ -90,10 +107,10 @@ static func _model(unit: Unit, pose: Dictionary) -> Array:
 		[Vector3(0, 0, hip + 0.02), Vector3(0, 0, hip + 0.02), 10.0, faction["webbing"]],
 		[Vector3(0.06, 0, head - 0.01), Vector3(0.06, 0, head - 0.01), 6.0, SKIN],
 		# Weapon: wooden stock, metal barrel. Arms hold it at the grip and fore-end.
-		[grip, grip.lerp(muzzle, 0.4), width, STOCK if unit.weapon.kind in ["rifle", "carbine", "sniper", "mg"] else jacket.darkened(0.3)],
-		[grip.lerp(muzzle, 0.4), muzzle, width - 1.0, GUN if unit.weapon.kind != "at" else jacket.darkened(0.3)],
-		[Vector3(0, 0.11, chest - 0.02), Vector3(0.08, 0.07, chest - 0.11), 4.5, jacket],
-		[Vector3(0, -0.11, chest - 0.02), grip.lerp(muzzle, 0.6) + Vector3(0, -0.01, 0), 4.5, jacket],
+		[grip, grip.lerp(muzzle, 0.4), width, STOCK if unit.weapon.kind in ["rifle", "carbine", "sniper", "mg"] else jacket.darkened(0.3), HELD],
+		[grip.lerp(muzzle, 0.4), muzzle, width - 1.0, GUN if unit.weapon.kind != "at" else jacket.darkened(0.3), HELD],
+		[Vector3(0, 0.11, chest - 0.02), grip + Vector3(0, 0.01, -0.01) if prone else Vector3(0.08, 0.07, chest - 0.11), 4.5, jacket, ARM],
+		[Vector3(0, -0.11, chest - 0.02), grip.lerp(muzzle, 0.6) + Vector3(0, -0.01, 0), 4.5, jacket, ARM],
 	]
 	# Helmets: the American M1 has a round brim, the German Stahlhelm a flared skirt at the back.
 	if faction["stahlhelm"]:
@@ -104,14 +121,16 @@ static func _model(unit: Unit, pose: Dictionary) -> Array:
 
 	match unit.weapon.kind:
 		"smg":
-			parts.append([grip.lerp(muzzle, 0.5), grip.lerp(muzzle, 0.5) + Vector3(0, 0, -0.12), 3.0, GUN])
+			parts.append([grip.lerp(muzzle, 0.5), grip.lerp(muzzle, 0.5) + Vector3(0, 0, -0.06 if prone else -0.12), 3.0, GUN, HELD])
 		"sniper":
-			parts.append([grip.lerp(muzzle, 0.35) + Vector3(0, 0, 0.05), grip.lerp(muzzle, 0.6) + Vector3(0, 0, 0.05), 3.5, GUN])
+			parts.append([grip.lerp(muzzle, 0.35) + Vector3(0, 0, 0.05), grip.lerp(muzzle, 0.6) + Vector3(0, 0, 0.05), 3.5, GUN, HELD])
 		"mg":
-			parts.append([grip.lerp(muzzle, 0.45), grip.lerp(muzzle, 0.45) + Vector3(0, 0.04, -0.06), 4.0, GUN])
+			parts.append([grip.lerp(muzzle, 0.45), grip.lerp(muzzle, 0.45) + Vector3(0, 0.04, -0.06), 4.0, GUN, HELD])
 			if pose["deployed"]:
+				var bipod := grip.lerp(muzzle, 0.85)
 				for side in [-0.06, 0.06]:
-					parts.append([grip.lerp(muzzle, 0.85), Vector3(length * 0.95, 0.06 + side, 0.02), 2.0, GUN])
+					var foot := Vector3(bipod.x + 0.03, 0.06 + side, 0.0) if prone else Vector3(length * 0.95, 0.06 + side, 0.02)
+					parts.append([bipod, foot, 2.0, GUN, HELD])
 	match unit.role:
 		"Officer":
 			for side in [-0.025, 0.025]:
@@ -127,7 +146,28 @@ static func _model(unit: Unit, pose: Dictionary) -> Array:
 			parts.append([Vector3(-0.09, 0, hip + 0.12), Vector3(-0.09, 0, chest - 0.03), 9.0, uniform.darkened(0.15)])
 	if pose["wounded"]:
 		parts.append([Vector3(0, -0.12, chest - 0.06), Vector3(0, -0.12, chest - 0.06), 5.0, WHITE])
+	if prone:
+		for part: Array in parts:
+			var kind: int = part[4] if part.size() > 4 else BODY
+			if kind != HELD:
+				part[0] = _prone(part[0])
+			if kind == BODY:
+				part[1] = _prone(part[1])
 	return parts
+
+
+## Lays a point of the standing model face down along the facing: height becomes forward (head first),
+## the back (-forward) becomes up. The head is lifted a little to look along the sights.
+static func _prone(v: Vector3) -> Vector3:
+	return Vector3(v.z * 0.8 - 0.42, v.y * 1.15, 0.07 - v.x * 0.6 + maxf(0.0, v.z - 0.85) * 0.4)
+
+
+## [grip, muzzle] of the weapon held by a prone soldier, in the prone model's space.
+static func _prone_weapon(unit: Unit) -> Array:
+	if unit.weapon.kind == "at":
+		return [Vector3(-0.02, 0.08, 0.17), Vector3(0.5, 0.08, 0.19)]
+	var grip := Vector3(0.2, 0.06, 0.1)
+	return [grip, grip + Vector3(_gun_length(unit), 0, 0.02)]
 
 
 static func _gun_length(unit: Unit) -> float:

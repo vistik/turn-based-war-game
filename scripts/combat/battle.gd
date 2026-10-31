@@ -3,7 +3,7 @@ extends RefCounted
 ## The combat engine. Owns all battle state and applies the rules.
 ## Commands validate, change state and return event dictionaries for the view to play back.
 ## Event types: move, pivot, shot, throw, damage, death, explosion, smoke, smoke_clear, mortar_fire, strike,
-## suppression, status, heal, objective, score, reinforcements, turn, game_over.
+## suppression, status, heal, objective, score, reinforcements, turn, game_over, stance.
 ## A "shot" that went astray carries "stray" (the tile it ended up on) and, if it hit someone, "stray_unit".
 ##
 ## Every command can also be given as data through execute(), which is how AI moves, saved replays
@@ -106,8 +106,16 @@ func actions_for_cost(u: Unit, cost: float) -> int:
 	return 1 if cost <= u.current_mobility() + 0.001 else 2
 
 
+## A soldier lying in the wheat can't be seen beyond the wheat's concealment range, unless he has fired.
 func can_see(viewer: Unit, target: Unit) -> bool:
-	return LineOfSight.can_see(map, viewer.pos, target.pos, viewer.sight)
+	if is_hidden_from(viewer.pos, target):
+		return false
+	return LineOfSight.can_see(map, viewer.pos, target.pos, viewer.current_sight())
+
+
+func is_hidden_from(from: Vector2i, target: Unit) -> bool:
+	return target.stance == Unit.Stance.PRONE and not target.fired and map.get_terrain(target.pos) == TacticalMap.Terrain.WHEAT \
+			and Vector2(from).distance_to(Vector2(target.pos)) > CombatRules.WHEAT_CONCEALMENT_RANGE
 
 
 func visible_enemies(u: Unit) -> Array[Unit]:
@@ -131,7 +139,7 @@ func team_sees(team: int, target: Unit) -> bool:
 func team_visible_tiles(team: int) -> Dictionary:
 	var result := {}
 	for u in alive_units(team):
-		result.merge(visible_from(u.pos, u.sight))
+		result.merge(visible_from(u.pos, u.current_sight()))
 	return result
 
 
@@ -152,8 +160,8 @@ func visible_from(pos: Vector2i, sight: float) -> Dictionary:
 	return _vision[key]
 
 
-func shot_odds(shooter: Unit, target: Unit, reaction := false) -> Dictionary:
-	return CombatRules.shot_odds(map, shooter, target, reaction)
+func shot_odds(shooter: Unit, target: Unit, reaction := false, aimed := false) -> Dictionary:
+	return CombatRules.shot_odds(map, shooter, target, reaction, aimed)
 
 
 func officer_near(u: Unit) -> bool:
@@ -316,6 +324,50 @@ func can_fire(u: Unit) -> String:
 		return "Out of ammo, reload first"
 	if u.weapon.needs_setup and not u.deployed:
 		return "Set up the machine gun first"
+	if u.weapon.kind == "at" and u.stance == Unit.Stance.PRONE:
+		return "Can't fire a rocket lying down"
+	return ""
+
+
+## Both actions for a better shot.
+func can_aimed_shot(u: Unit, target: Unit) -> String:
+	var err := can_shoot(u, target)
+	if err != "":
+		return err
+	if u.actions < Unit.ACTIONS_PER_TURN:
+		return "An aimed shot needs both actions"
+	return ""
+
+
+## Suppressive fire: no damage, heavy suppression on the target and anyone next to it.
+func can_suppress(u: Unit, target: Unit) -> String:
+	var err := can_fire(u)
+	if err != "":
+		return err
+	if u.vehicle or u.weapon.anti_tank:
+		return "This weapon can't lay down suppressive fire"
+	if u.ammo < CombatRules.SUPPRESSIVE_FIRE_AMMO:
+		return "Needs %d rounds, reload first" % CombatRules.SUPPRESSIVE_FIRE_AMMO
+	if target == null or not target.is_alive() or target.team == u.team:
+		return "Not a valid target"
+	if target.vehicle:
+		return "Tanks ignore suppression"
+	if not can_see(u, target):
+		return "No line of sight"
+	return ""
+
+
+## Standing, crouching and going prone each cost an action. Tanks have no stances.
+func can_change_stance(u: Unit, stance: int) -> String:
+	var err := can_act(u)
+	if err != "":
+		return err
+	if u.vehicle:
+		return "Tanks don't change stance"
+	if stance < Unit.Stance.STAND or stance > Unit.Stance.PRONE:
+		return "Not a stance"
+	if stance == u.stance:
+		return "Already %s" % Unit.STANCE_NAMES[stance].to_lower()
 	return ""
 
 
@@ -391,6 +443,8 @@ func can_throw_grenade(u: Unit, tile: Vector2i) -> String:
 		return err
 	if u.grenades <= 0:
 		return "No grenades left"
+	if u.stance == Unit.Stance.PRONE:
+		return "Can't throw lying down"
 	return _check_throw(u, tile, CombatRules.GRENADE_RANGE)
 
 
@@ -400,6 +454,8 @@ func can_throw_smoke(u: Unit, tile: Vector2i) -> String:
 		return err
 	if u.smoke_grenades <= 0:
 		return "No smoke grenades left"
+	if u.stance == Unit.Stance.PRONE:
+		return "Can't throw lying down"
 	return _check_throw(u, tile, CombatRules.SMOKE_RANGE)
 
 
@@ -413,6 +469,8 @@ func can_fire_mortar(u: Unit, tile: Vector2i, kind: String) -> String:
 		return "No %s rounds left" % ("high explosive" if kind == "he" else "smoke")
 	if u.actions < Unit.ACTIONS_PER_TURN:
 		return "The mortar can't fire after moving"
+	if u.stance == Unit.Stance.PRONE:
+		return "Can't work the mortar lying down"
 	if not map.in_bounds(tile):
 		return "Out of bounds"
 	var distance := Vector2(u.pos).distance_to(Vector2(tile))
@@ -500,6 +558,47 @@ func shoot(u: Unit, target: Unit) -> Array:
 		return []
 	u.actions = 0
 	var events := _fire(u, target, false)
+	events.append_array(_after_action())
+	return events
+
+
+## Takes both actions for +AIMED_SHOT_BONUS aim.
+func aimed_shot(u: Unit, target: Unit) -> Array:
+	if can_aimed_shot(u, target) != "":
+		return []
+	u.actions = 0
+	var events := _fire(u, target, false, true)
+	events[0]["aimed"] = true
+	events.append_array(_after_action())
+	return events
+
+
+## Ends the turn. No damage roll: the target and its allies close by are suppressed instead, and
+## don't recover from it at the start of their next turn.
+func suppressive_fire(u: Unit, target: Unit) -> Array:
+	if can_suppress(u, target) != "":
+		return []
+	u.actions = 0
+	u.ammo -= CombatRules.SUPPRESSIVE_FIRE_AMMO
+	u.fired = true
+	var events: Array = [{"type": "shot", "shooter": u.id, "target": target.id, "result": "suppressing", "chance": 100, "reaction": false}]
+	target.under_fire = true
+	events.append_array(_suppress(target, roundi(u.weapon.suppression * CombatRules.SUPPRESSIVE_FIRE_FACTOR)))
+	for ally in alive_units(target.team):
+		if ally != target and not ally.vehicle and Vector2(ally.pos).distance_to(Vector2(target.pos)) <= CombatRules.SUPPRESSIVE_FIRE_RADIUS:
+			ally.under_fire = true
+			events.append_array(_suppress(ally, u.weapon.suppression))
+	events.append_array(_after_action())
+	return events
+
+
+## Stand, crouch or go prone, for one action. Moving keeps the stance, at its speed.
+func change_stance(u: Unit, stance: int) -> Array:
+	if can_change_stance(u, stance) != "":
+		return []
+	u.actions -= 1
+	var events: Array = [{"type": "stance", "unit": u.id, "stance": stance, "previous": u.stance}]
+	u.stance = stance as Unit.Stance
 	events.append_array(_after_action())
 	return events
 
@@ -631,6 +730,12 @@ func execute(command: Dictionary) -> Array:
 			return pivot(u, tile)
 		"shoot":
 			return shoot(u, target) if target != null else []
+		"aimed_shot":
+			return aimed_shot(u, target) if target != null else []
+		"suppress":
+			return suppressive_fire(u, target) if target != null else []
+		"stance":
+			return change_stance(u, int(command.get("stance", -1)))
 		"overwatch":
 			return overwatch(u)
 		"set_up":
@@ -693,10 +798,15 @@ func _begin_turn(team: int) -> Array:
 		u.actions = Unit.ACTIONS_PER_TURN
 		u.overwatch = false
 		u.hunkered = false
-		if u.suppression > 0:
+		u.fired = false
+		if u.under_fire:
+			u.under_fire = false
+		elif u.suppression > 0:
 			var recovery := CombatRules.SUPPRESSION_RECOVERY
 			if map.has_cover(u.pos):
 				recovery += CombatRules.COVER_RECOVERY_BONUS
+			if u.stance == Unit.Stance.PRONE:
+				recovery += CombatRules.PRONE_RECOVERY_BONUS
 			if officer_near(u):
 				recovery += CombatRules.OFFICER_RECOVERY_BONUS
 			events.append_array(_suppress(u, -recovery))
@@ -938,9 +1048,10 @@ func _overwatchers_seeing(u: Unit) -> Array[Unit]:
 	return result
 
 
-func _fire(shooter: Unit, target: Unit, reaction: bool) -> Array:
-	var odds := shot_odds(shooter, target, reaction)
+func _fire(shooter: Unit, target: Unit, reaction: bool, aimed := false) -> Array:
+	var odds := shot_odds(shooter, target, reaction, aimed)
 	shooter.ammo -= 1
+	shooter.fired = true
 	if reaction:
 		shooter.overwatch = false
 	var roll := rng.randi_range(0, 99)

@@ -10,15 +10,18 @@ another computer, or watch AI vs AI.
 |---|---|
 | Grid | Square, 8-way movement, diagonals cost 1.5, no cutting corners past walls/objects |
 | View | Isometric by default (V toggles top-down), rotate in quarter turns (Q/E), pan/zoom camera. Props in front of soldiers or the cursor fade out |
-| Actions | 2 per turn. Move (1) / dash (2). Shoot, overwatch, hunker, grenade and mortar end the turn. Reload, set up MG, rally, smoke, medkit and turning a tank cost 1 |
+| Actions | 2 per turn. Move (1) / dash (2). Shoot, aimed shot (needs both), suppressive fire, overwatch, hunker, grenade and mortar end the turn. Reload, set up MG, rally, smoke, medkit, changing stance and turning a tank cost 1 |
 | Movement | Mobility = path-cost budget per action. Roads 0.75, rough ground/rubble 2, wheat/craters 1.5, vaulting a low wall +1, pushing through a hedgerow +3 |
+| Stances | Stand, crouch or prone (C / Z), 1 action to change, kept until changed; moving keeps the stance. Tanks have none. **Crouched**: −10 to be hit (−20 behind half cover), +5 aim, moves cost ×1.5, sight −1. **Prone**: −20 to be hit at range (−30 behind half cover), +5 aim (+15 for a set-up MG), +10 suppression recovery, and hidden from anyone more than 4 tiles away while lying in wheat, until it fires (revealed until its next turn). But moves cost ×3 (crawl, at least 1 tile per action), sight −2, +15 to be hit within 2.5 tiles and +10 when flanked (a shooter from a side its cover doesn't face), and it can't throw grenades or smoke, fire a bazooka/Panzerschreck or work the mortar. Pinned soldiers can still change stance. Stance modifiers also apply to reaction shots, so crawling is the way past overwatch |
+| Aimed shot | X: both actions, +15 aim, ends the turn |
+| Suppressive fire | B: no damage roll. The target gets 1.5× the weapon's suppression and its allies within 1.5 tiles the full amount, and none of them recover suppression at the start of their next turn. Uses 2 rounds and ends the turn; not for tanks or rocket launchers, and tanks can't be targeted. An MG 42 pins a fresh target through their whole turn (83); a rifle only suppresses |
 | Cover | Half (−20) or full (−40), directional, from objects on neighbouring tiles or walls/hedges on tile edges. Shell craters give half cover on every side |
 | Flanking | No cover from the shooter's angle gives the shooter +40 crit |
 | Line of sight | Full cover and smoke block, half cover doesn't. Units beside full cover step out to the side. Wheat hides targets at range (−10 beyond 4 tiles) |
-| Hit chance | aim + weapon range table − cover (×2 hunkered) − suppression penalty − concealment, clamped 0–100. Shown exactly |
+| Hit chance | aim + weapon range table (+ aimed shot, + shooter's stance) − cover (×2 hunkered) − target's stance − suppression penalty − concealment, clamped 0–100. Shown exactly, line by line |
 | Results | Hit, crit, graze (10% band above the hit chance, half damage), miss |
 | Wounds | Surviving a hit slows the unit by 3 mobility for its next two turns. Medkits heal and treat wounds |
-| Suppression | Every shot adds the weapon's suppression to its target (hits add +15). MGs also suppress the target's neighbours; explosions suppress everyone near the blast. Suppressed (30+): −15 aim, −2 mobility. Pinned (70+): can't move or overwatch, −30 aim, and a move into reaction fire can stop short. Recovers 35 per turn, more in cover or near the officer |
+| Suppression | Every shot adds the weapon's suppression to its target (hits add +15). MGs also suppress the target's neighbours; explosions suppress everyone near the blast. Suppressed (30+): −15 aim, −2 mobility. Pinned (70+): can't move or overwatch, −30 aim, and a move into reaction fire can stop short. Recovers 35 per turn, more in cover, prone or near the officer, none the turn after suppressive fire |
 | Morale | A death may panic allies within 5 tiles (30% to be pinned, less near the officer). Losing the officer suppresses the whole squad. Officers can Rally (−50 suppression around them) |
 | Machine guns | Must be set up (1 action) before shooting or overwatch; moving packs them away |
 | Mortar | Only fires if it hasn't moved this turn. Range 5–22, needs any friendly soldier to see the target tile. The shell lands at the start of the firing side's next turn, scattered up to 8% of the range, on a marked area both sides can see. HE (3–5 damage, destroys cover, leaves a crater) or smoke |
@@ -37,9 +40,11 @@ another computer, or watch AI vs AI.
 | Online saves | The host makes a game id with the setup. Whoever verifies a command that changed the turn (or ended the battle) tells the other side its checksum matched (`Net.turn_agreed` on both), and both save the battle to their online slot with the game id, their side, the title, the opponent's address and the checksum; a finished game clears it. Leaving or losing the connection keeps it; the turn in progress is replayed. To continue, either player hosts "Continue online game" (each keeps their side) and the host's save is played on: it sends its saved battle, the joiner compares it with its own save (same game id and checksum go straight on; no save adopts the host's; a different, older or newer save asks first), loads it, and sends back the checksum of what it loaded. Only when that matches the host's does the host say go; otherwise both get "out of sync" and keep their saves. `Net.PROTOCOL` 2 |
 | Campaign | Five missions (`Campaign.MISSIONS`) with one persistent squad of up to 8 deployed (12 on the roster). XP = 1 per mission survived + 1 per kill; Cpl. at 3, Sgt. at 7 (+5 aim, +1 HP per rank). Badly wounded (half HP or less) soldiers sit out the next mission; the dead stay dead. Supplies: +3 for a win, +1 for a loss; a replacement costs 1. A lost mission is retried |
 | Turns | Each side moves all its units, in any order. The turn ends automatically when nobody can act |
-| AI | Utility AI per side (`TacticalAI`). Plays fair: knows only what its side sees plus last-seen positions. Scores every unit's plans (shoot, grenade, mortar, MG set-up, rally, medkit, reload, overwatch, hunker, turn tank, move then follow up) by expected damage, kill chance, suppression, incoming danger (including marked mortar zones), cover, objectives, role range and approach. Grenades are valued over everywhere they may land; MG, rocket and tank shots lose value for every friend a miss could hit (3x the expected harm, more if likelier than 12%). Cover counts most when it faces the known enemies (or where they're expected), and ending a move in the open is penalised. Tanks judge spots with the hull facing the way it will end up, to keep the front armour toward the threat. Grows impatient after quiet rounds, and pushes for objectives harder the further behind on points it is. `decide()` returns the chosen command as data |
+| AI | Utility AI per side (`TacticalAI`). Plays fair: knows only what its side sees plus last-seen positions. Scores every unit's plans (shoot, aimed shot, suppressive fire, grenade, mortar, MG set-up, rally, medkit, reload, overwatch, hunker, stance change then follow up, turn tank, move then follow up) by expected damage, kill chance, suppression, incoming danger (including marked mortar zones), cover, objectives, role range and approach. Cover counts most when it faces the known enemies (or where they're expected), and ending a move in the open is penalised. Tanks judge spots with the hull facing the way it will end up, to keep the front armour toward the threat. Grenades are valued over everywhere they may land; MG, rocket and tank shots lose value for every friend a miss could hit (3x the expected harm, more if likelier than 12%). Stances: a stance's change in danger counts double (it lasts while the soldier holds the spot) against a cost for the slower movement (crouch 2, prone 12, halved when pinned); a crouched or prone soldier weighs standing up against the best full-speed move it opens, and the AI knows it is hidden lying in wheat. So it gets down when pinned in the open, crouches where several enemies can see it, and stands to move on. Suppressive fire is valued by the suppression left through the enemy's next turn, with a bonus for pinning or suppressing them, so it is used on targets that are hard to hit. Grows impatient after quiet rounds, and pushes for objectives harder the further behind on points it is. `decide()` returns the chosen command as data |
 | Suggestions | H (Shift+H: selected soldier) asks `AdvisorAI`, the tactical AI working for the player with its own memory and only the team's sight, for a move; it is highlighted with its reasons and the player carries it out. Off in online games unless allowed |
 | Agent link (MCP) | Opt-in MCP server (Streamable HTTP, JSON replies) on 127.0.0.1 while a battle is open, with a per-run bearer token. Tools: get_state (fog respected), get_unit_options, preview, suggest_move, propose_move (shows a proposal the player can accept), execute_command (only if the player allows it, never online). See docs/MCP.md |
+| Scenarios | JSON files (`Scenario`, format in `scripts/combat/scenario.gd`): the map as terrain rows plus object and wall lists, units on exact tiles with facing, name and rank, objectives, reinforcement waves with spawn tiles, points to win, round limit, title, briefing and whether edits mirror. Bundled in `res://scenarios/` (the village), saved by the editor to `user://scenarios/`, listed in the skirmish map choice. Online, the scenario's data travels in the setup |
+| Map editor | `scenes/editor.tscn`, from the main menu. Paints ground, objects, walls/hedges/fences on tile sides, units, objectives and reinforcement spawns on the battle's isometric view, with mirroring (edit one half, the other follows, or copy west onto east), undo, save/load, play (vs AI, hotseat, watch) and a quick AI-vs-AI balance test |
 | RNG | Seeded `RandomNumberGenerator` per battle, so battles are reproducible and testable |
 | Settings | `GameSettings` (static, saved to `user://settings.cfg`): instant movement, follow opponent moves with the camera, playback speed for your own and for opponent turns (+/- in battle saves it), camera pan speed, show hit chances, confirm ending the turn early, fullscreen. From the main menu or the Settings button in battle. Presentation only: the engine never reads them |
 
@@ -58,6 +63,9 @@ get identical ground.
   - `MapBuilder` (mirrored map construction), `NormandyScenario` (the hand-made 48x48 village), `MapGenerator` (random maps).
   - `BattleFactory`: a battle from a map layout and two rosters, with objectives and reinforcement waves.
   - `TacticalAI`: issues the same commands a player does, one per `act()` call.
+  - `Scenario`: hand-made battles as JSON; builds a Battle through `BattleFactory`, exports one from a battle or layout, mirrors and swaps sides.
+- `scripts/tools/balance_sim.gd` (`BalanceSim`): AI vs AI games on worker threads and their statistics, for `tools/balance.gd` and the editor.
+- `scripts/ui/map_editor.gd`: the map and scenario editor.
 - `scripts/campaign/campaign.gd`: missions, the persistent roster, after-action results, recruiting.
 - `scripts/net/net_session.gd` (autoload `Net`): hosting, joining, sending setup and commands, desync reports. `scripts/net/remote_player.gd`: the controller for the online opponent's side, which applies and verifies their commands and announces agreed turn changes.
 - `scripts/game_settings.gd`: player settings. `scripts/ui/settings_panel.gd` builds the controls, used by the main menu's Settings page and the in-battle `scripts/ui/settings_popup.gd`.
@@ -73,6 +81,9 @@ get identical ground.
 Godot --headless --path . -s tests/run_tests.gd
 Godot --headless --path . -s tests/advisor_tests.gd
 Godot --headless --path . -s tests/simulate.gd -- 30 1 64   # games [first seed] [map size, 0 = village]
+# Balance: win rates with 95% intervals, endings, survivors, kills per role, objective control; --help for all options
+Godot --headless --path . -s tools/balance.gd -- --scenario res://scenarios/village.json --games 50 --seed 1
+Godot --headless --path . -s tools/balance.gd -- --map random --size 64 --games 20 --swap --csv out.csv --json out.json
 # Online: two games, AI on both sides, checking they stay identical (add "tamper" to the joiner to test desync detection)
 Godot --headless --path . -s tests/net_match.gd -- host 25000 64 &
 Godot --headless --path . -s tests/net_match.gd -- join 25000
@@ -83,8 +94,8 @@ GODOT=Godot tests/net_resume.sh 26000 44
 ## Next candidates
 
 - Height levels: church tower, upper floors, high-ground aim bonus
-- Prone stance, digging in, barbed wire and mines
+- Digging in, sprinting, barbed wire and mines
 - AI: smoke use, path choice around overwatch, difficulty levels; run its thinking off the main thread
-- Map editor, more mission types (defend, escort, raid), campaign branching
+- More mission types (defend, escort, raid), campaign branching
 - Windows and Linux builds
 - Online: campaign co-op, lobby/relay for players behind NAT, keep more than one saved online game

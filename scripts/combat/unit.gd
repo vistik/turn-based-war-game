@@ -14,11 +14,21 @@ const MIN_MOBILITY := 2.0
 const RANK_NAMES := ["Pvt.", "Cpl.", "Sgt."]
 ## Each rank above private adds this much aim and one hit point.
 const RANK_AIM := 5
+## Stances. Crouched and prone soldiers are harder to hit but move slower; tanks always count as standing.
+enum Stance { STAND, CROUCH, PRONE }
+const STANCE_NAMES := ["Standing", "Crouched", "Prone"]
+## Path cost is multiplied by this in each stance (crouched walking, crawling).
+const STANCE_MOVE_COST := [1.0, 1.5, 3.0]
+## Sight lost in each stance: the lower the eyes, the less they see over grass and walls.
+const STANCE_SIGHT := [0.0, 1.0, 2.0]
+## A crawling soldier always gets at least this far per action.
+const MIN_CRAWL := 1.0
 ## Fields written to save files.
 const SAVED_FIELDS := [
 	"id", "name", "role", "team", "pos", "max_hp", "hp", "armor", "aim", "defense", "mobility", "sight", "ammo",
 	"grenades", "smoke_grenades", "medkits", "mortar_rounds", "mortar_smoke", "actions", "overwatch", "hunkered",
-	"deployed", "suppression", "wounded_turns", "vehicle", "facing", "kills", "rank", "record_id",
+	"deployed", "suppression", "wounded_turns", "vehicle", "facing", "kills", "rank", "record_id", "stance", "fired",
+	"under_fire",
 ]
 
 var id: int
@@ -56,6 +66,12 @@ var kills := 0
 var rank := 0
 ## The campaign soldier this unit represents, or -1.
 var record_id := -1
+## Standing, crouched or prone (Stance). Kept until the soldier changes it, which costs an action.
+var stance := Stance.STAND
+## Fired since the start of its own last turn. The muzzle flash gives away a soldier hidden in the wheat.
+var fired := false
+## Caught by suppressive fire: keeps its head down and doesn't recover suppression at the start of its next turn.
+var under_fire := false
 
 
 func is_alive() -> bool:
@@ -74,7 +90,7 @@ func is_wounded() -> bool:
 	return wounded_turns > 0
 
 
-## Mobility after wounds and suppression. Pinned units can't move at all.
+## Mobility after wounds, suppression and stance. Pinned units can't move at all.
 func current_mobility() -> float:
 	if is_pinned():
 		return 0.0
@@ -83,7 +99,15 @@ func current_mobility() -> float:
 		result -= WOUND_MOBILITY_PENALTY
 	if is_suppressed():
 		result -= SUPPRESSED_MOBILITY_PENALTY
-	return maxf(MIN_MOBILITY, result)
+	result = maxf(MIN_MOBILITY, result)
+	if stance != Stance.STAND:
+		result = maxf(MIN_CRAWL, result / STANCE_MOVE_COST[stance])
+	return result
+
+
+## Sight range in the current stance.
+func current_sight() -> float:
+	return sight - STANCE_SIGHT[stance]
 
 
 func to_dict() -> Dictionary:
@@ -96,7 +120,9 @@ func to_dict() -> Dictionary:
 static func from_dict(data: Dictionary) -> Unit:
 	var u := Unit.create(data["id"], data["name"], data["role"], data["team"], data["pos"])
 	for field: String in SAVED_FIELDS:
-		u.set(field, data[field])
+		# Saves from before a field existed keep its default.
+		if data.has(field):
+			u.set(field, data[field])
 	return u
 
 

@@ -81,6 +81,32 @@ const ROCKET_BLAST_RADIUS := 0.5
 const MG_STRAY_LINE := 0.75
 const MG_STRAY_CHANCE := 20
 
+# --- Stances, aimed shots and suppressive fire ---
+## Crouching makes a soldier a little harder to hit, and a lot harder behind half cover (the low wall hides him).
+const CROUCH_DEFENSE := 10
+const CROUCH_HALF_COVER_DEFENSE := 20
+## Prone soldiers are small targets at range, smaller still behind low cover, but easy to hit up close
+## or from a side their cover doesn't face (they lie side-on to the shooter).
+const PRONE_DEFENSE := 20
+const PRONE_LOW_COVER_DEFENSE := 10
+const PRONE_CLOSE_RANGE := 2.5
+const PRONE_CLOSE_PENALTY := 15
+const PRONE_FLANKED_PENALTY := 10
+## Steadier aim crouched or prone; a machine gun set up on its bipod lying down steadier still.
+const CROUCH_AIM := 5
+const PRONE_AIM := 5
+const PRONE_MG_AIM := 15
+## Lying flat helps a soldier get over being shot at.
+const PRONE_RECOVERY_BONUS := 10
+## An aimed shot takes both actions.
+const AIMED_SHOT_BONUS := 15
+## Suppressive fire: no damage, but this times the weapon's suppression on the target and the full amount
+## on the target's allies close by, none of whom recover suppression at the start of their next turn.
+## Burns this many rounds.
+const SUPPRESSIVE_FIRE_FACTOR := 1.5
+const SUPPRESSIVE_FIRE_RADIUS := 1.5
+const SUPPRESSIVE_FIRE_AMMO := 2
+
 # --- Tanks ---
 ## Damage each armour side stops from anti-tank hits.
 const VEHICLE_ARMOR := {"front": 3, "side": 1, "rear": 0}
@@ -120,7 +146,8 @@ static func misses_stray(weapon: Weapon) -> bool:
 
 
 ## Hit, graze and crit chances (0-100) plus the itemised modifiers behind the hit chance.
-static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction := false) -> Dictionary:
+## `aimed`: an aimed shot (both actions) for extra aim.
+static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction := false, aimed := false) -> Dictionary:
 	var distance := Vector2(shooter.pos).distance_to(Vector2(target.pos))
 	var modifiers := [["Aim", shooter.aim]]
 	var hit := shooter.aim
@@ -137,6 +164,18 @@ static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction :=
 		modifiers.append(["Suppressed", -SUPPRESSED_AIM_PENALTY])
 		hit -= SUPPRESSED_AIM_PENALTY
 
+	if aimed:
+		modifiers.append(["Aimed shot", AIMED_SHOT_BONUS])
+		hit += AIMED_SHOT_BONUS
+	var steady := 0
+	if shooter.stance == Unit.Stance.CROUCH:
+		steady = CROUCH_AIM
+	elif shooter.stance == Unit.Stance.PRONE:
+		steady = PRONE_MG_AIM if shooter.deployed else PRONE_AIM
+	if steady != 0:
+		modifiers.append(["%s, steady aim" % Unit.STANCE_NAMES[shooter.stance], steady])
+		hit += steady
+
 	var cover := Cover.NONE if reaction else map.cover_against(target.pos, shooter.pos)
 	if cover != Cover.NONE:
 		var defense: int = COVER_DEFENSE[cover]
@@ -146,6 +185,11 @@ static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction :=
 			var bonus := defense * (HUNKER_MULTIPLIER - 1)
 			modifiers.append(["Hunkered", -bonus])
 			hit -= bonus
+
+	if not target.vehicle and target.stance != Unit.Stance.STAND:
+		var stance_mod := _stance_defense(map, target, cover, distance, reaction)
+		modifiers.append(stance_mod)
+		hit += stance_mod[1]
 
 	if target.vehicle:
 		modifiers.append(["Large target", LARGE_TARGET_BONUS])
@@ -175,3 +219,18 @@ static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction :=
 		"distance": distance,
 		"modifiers": modifiers,
 	}
+
+
+## The [label, hit modifier] a crouched or prone target gives a shot.
+static func _stance_defense(map: TacticalMap, target: Unit, cover: int, distance: float, reaction: bool) -> Array:
+	if target.stance == Unit.Stance.CROUCH:
+		if cover == Cover.HALF:
+			return ["Crouched behind cover", -CROUCH_HALF_COVER_DEFENSE]
+		return ["Crouched", -CROUCH_DEFENSE]
+	if distance <= PRONE_CLOSE_RANGE:
+		return ["Prone, close range", PRONE_CLOSE_PENALTY]
+	if not reaction and cover == Cover.NONE and map.has_cover(target.pos):
+		return ["Prone, flanked", PRONE_FLANKED_PENALTY]
+	if cover == Cover.HALF:
+		return ["Prone behind low cover", -(PRONE_DEFENSE + PRONE_LOW_COVER_DEFENSE)]
+	return ["Prone", -PRONE_DEFENSE]

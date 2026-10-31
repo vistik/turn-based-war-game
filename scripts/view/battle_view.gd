@@ -13,7 +13,7 @@ const DrawLayer := preload("res://scripts/view/draw_layer.gd")
 const PANEL_WIDTH := 280.0
 const TOP_BAR_HEIGHT := 50.0
 ## Controls listed by the "?" button in the top bar.
-const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nTab next unit   Enter end turn\n1-0, T: actions (see buttons)\nWASD / arrows / middle drag: pan\nWheel: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\n+ / -: playback speed"
+const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nTab next unit   Enter end turn\n1-0, T, C, Z, X, B: actions (see buttons)\nH: suggest a move (Shift+H: this soldier)\nWASD / arrows / middle drag: pan\nWheel: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\n+ / -: playback speed"
 ## UI accent colours: Allied green and German field grey.
 const TEAM_COLORS := [Color("9cc45a"), Color("b8c0c8")]
 const NEUTRAL_COLOR := Color("e8e2cf")
@@ -22,14 +22,18 @@ const DASH_COLOR := Color("f5c542")
 const KEY_ACTIONS := {
 	KEY_1: "shoot", KEY_2: "overwatch", KEY_3: "hunker", KEY_4: "reload", KEY_5: "grenade",
 	KEY_6: "smoke", KEY_7: "set_up", KEY_8: "rally", KEY_9: "medkit", KEY_0: "mortar", KEY_T: "pivot",
+	KEY_C: "crouch", KEY_Z: "prone", KEY_X: "aimed", KEY_B: "suppress",
 	KEY_TAB: "next", KEY_ENTER: "end", KEY_KP_ENTER: "end",
 }
 const ACTION_BUTTONS := [
 	["shoot", "1 Shoot"], ["overwatch", "2 Overwatch"], ["hunker", "3 Hunker"], ["reload", "4 Reload"],
 	["grenade", "5 Grenade"], ["smoke", "6 Smoke"], ["set_up", "7 Set up MG"], ["rally", "8 Rally"],
-	["medkit", "9 Medkit"], ["mortar", "0 Mortar"], ["pivot", "T Turn tank"], ["next", "Tab Next unit"], ["end", "Enter End turn"],
+	["medkit", "9 Medkit"], ["mortar", "0 Mortar"], ["pivot", "T Turn tank"],
+	["crouch", "C Crouch"], ["prone", "Z Prone"], ["aimed", "X Aimed shot"], ["suppress", "B Suppress"],
+	["next", "Tab Next"], ["end", "Enter End turn"],
 ]
-const SHOT_LABELS := {"miss": "MISS", "graze": "GRAZE", "hit": "HIT", "crit": "CRITICAL"}
+const SHOT_LABELS := {"miss": "MISS", "graze": "GRAZE", "hit": "HIT", "crit": "CRITICAL", "suppressing": "SUPPRESSING FIRE"}
+const STANCE_COLOR := "8fd3ff"
 const ROLE_TAGS := {"Officer": "Lt", "Rifleman": "Rfl", "Medic": "Med", "SMG": "SMG", "MG": "MG", "Sniper": "Snp", "Mortar": "Mtr", "AT": "AT", "Tank": "Tank"}
 ## Playback speeds; 0 means instant.
 const SPEEDS := [1.0, 2.0, 4.0, 0.0]
@@ -75,6 +79,8 @@ var _smoke_nodes := {}
 var _dragging := false
 var _speed_index := 0
 var _mortar_kind := "he"
+## In shooting mode: the command a click on a target gives (shoot, aimed_shot or suppress).
+var _shot_cmd := "shoot"
 var _time := 0.0
 var _turn_started := false
 var _reach := {}
@@ -334,8 +340,8 @@ func _on_click(tile: Vector2i) -> void:
 			elif selected != null and u == null and battle.can_move(selected, tile) == "":
 				_command({"cmd": "move", "unit": selected.id, "tile": tile})
 		Mode.SHOOT:
-			if u != null and battle.can_shoot(selected, u) == "":
-				_command({"cmd": "shoot", "unit": selected.id, "target": u.id})
+			if u != null and _can_fire_at(u) == "":
+				_command({"cmd": _shot_cmd, "unit": selected.id, "target": u.id})
 			elif own:
 				_select(u)
 		Mode.GRENADE:
@@ -399,12 +405,24 @@ func _on_action(action: String) -> void:
 		return
 	var err := ""
 	match action:
-		"shoot":
+		"shoot", "aimed", "suppress":
 			err = battle.can_fire(selected)
+			if err == "" and action == "aimed" and selected.actions < Unit.ACTIONS_PER_TURN:
+				err = "An aimed shot needs both actions"
+			if err == "" and action == "suppress" and (selected.vehicle or selected.weapon.anti_tank):
+				err = "This weapon can't lay down suppressive fire"
+			if err == "" and action == "suppress" and selected.ammo < CombatRules.SUPPRESSIVE_FIRE_AMMO:
+				err = "Needs %d rounds, reload first" % CombatRules.SUPPRESSIVE_FIRE_AMMO
 			if err == "" and battle.visible_enemies(selected).is_empty():
 				err = "No enemies in line of sight"
 			if err == "":
+				_shot_cmd = {"shoot": "shoot", "aimed": "aimed_shot", "suppress": "suppress"}[action]
 				_set_mode(Mode.SHOOT)
+		"crouch", "prone":
+			var stance := _stance_for(action)
+			err = battle.can_change_stance(selected, stance)
+			if err == "":
+				_command({"cmd": "stance", "unit": selected.id, "stance": stance})
 		"overwatch":
 			err = battle.can_overwatch(selected)
 			if err == "":
@@ -534,6 +552,22 @@ func _is_human_turn() -> bool:
 ## The heading (one of Pathfinder.HEADINGS) from the selected tank toward a tile.
 func _pivot_dir(tile: Vector2i) -> Vector2i:
 	return Pathfinder.HEADINGS[Pathfinder.heading_index(tile - selected.pos)] if tile != selected.pos else selected.facing
+
+
+## The stance the crouch or prone button switches to: down into it, or back up when already in it.
+func _stance_for(action: String) -> int:
+	var stance := Unit.Stance.CROUCH if action == "crouch" else Unit.Stance.PRONE
+	return Unit.Stance.STAND if selected.stance == stance else stance
+
+
+## Whether the selected soldier can fire at a unit in the current shooting mode.
+func _can_fire_at(target: Unit) -> String:
+	match _shot_cmd:
+		"aimed_shot":
+			return battle.can_aimed_shot(selected, target)
+		"suppress":
+			return battle.can_suppress(selected, target)
+	return battle.can_shoot(selected, target)
 
 
 ## Applies one of the local player's commands, and sends it to the opponent when playing online.
@@ -720,6 +754,12 @@ func _play_event(e: Dictionary) -> void:
 			await _play_shot(e)
 		"throw":
 			await _play_throw(e)
+		"stance":
+			var u := battle.get_unit(e["unit"])
+			var text: String = ["Stands up", "Crouches", "Goes prone"][e["stance"]]
+			_float(_display_pos[u.id], text, Color(STANCE_COLOR))
+			_log_line("%s %s." % [u.name, text.to_lower()])
+			await _wait(0.25)
 		"damage":
 			var u := battle.get_unit(e["unit"])
 			_display_hp[u.id] = e["hp"]
@@ -880,7 +920,8 @@ func _play_shot(e: Dictionary) -> void:
 		await _wait(0.15)
 	var from := SoldierPainter.muzzle(_proj, _display_pos[shooter.id], shooter, _pose(shooter))
 	var to := _proj.project(_display_pos[target.id], 0.7)
-	var hit: bool = e["result"] != "miss"
+	var suppressing: bool = e["result"] == "suppressing"
+	var hit: bool = e["result"] != "miss" and not suppressing
 	if e.has("stray_unit"):
 		to = _proj.project(_display_pos[e["stray_unit"]], 0.7)
 	elif e.has("stray"):
@@ -888,6 +929,8 @@ func _play_shot(e: Dictionary) -> void:
 	elif not hit:
 		to = _proj.project(_display_pos[target.id] + Vector2.from_angle(randf() * TAU) * 0.7, 0.3)
 	var bursts := 3 if shooter.weapon.kind in ["mg", "smg"] else 1
+	if suppressing:
+		bursts += 2
 	for i in bursts:
 		_effects.append({"kind": "muzzle", "at": from, "age": 0.0, "life": 0.1})
 		_effects.append({"kind": "tracer", "from": from, "to": to + Vector2(randf_range(-4, 4), randf_range(-4, 4)) * i, "age": 0.0, "life": 0.25})
@@ -896,9 +939,11 @@ func _play_shot(e: Dictionary) -> void:
 	_effects.append({"kind": "sparks" if hit or e.has("stray_unit") else "puff", "at": to, "age": 0.0, "life": 0.4})
 	await _wait(0.15)
 	var label: String = SHOT_LABELS[e["result"]]
-	_float(_display_pos[target.id], "%s (%d%%)" % [label, e["chance"]], Color.WHITE if e["result"] != "crit" else Color("ffb84d"))
+	var chance := "" if suppressing else " (%d%%)" % e["chance"]
+	_float(_display_pos[target.id], label + chance, Color.WHITE if e["result"] != "crit" else Color("ffb84d"))
 	var armour := " on its %s armour" % e["armor"] if e.has("armor") else ""
-	_log_line("%s%s shoots at %s: %s (%d%%)%s" % ["Overwatch: " if e["reaction"] else "", shooter.name, target.name, label, e["chance"], armour])
+	var kind := "Overwatch: " if e["reaction"] else ("Aimed shot: " if e.get("aimed", false) else "")
+	_log_line("%s%s shoots at %s: %s%s%s" % [kind, shooter.name, target.name, label, chance, armour])
 	if e.has("stray_unit"):
 		var victim := battle.get_unit(e["stray_unit"])
 		var friendly := victim.team == shooter.team
@@ -1028,7 +1073,11 @@ func _refresh() -> void:
 	_target_odds.clear()
 	if can_act and mode == Mode.SHOOT:
 		for e in battle.visible_enemies(selected):
-			_target_odds[e.id] = battle.shot_odds(selected, e)["hit"]
+			if _shot_cmd == "suppress":
+				if battle.can_suppress(selected, e) == "":
+					_target_odds[e.id] = roundi(selected.weapon.suppression * CombatRules.SUPPRESSIVE_FIRE_FACTOR)
+			else:
+				_target_odds[e.id] = battle.shot_odds(selected, e, false, _shot_cmd == "aimed_shot")["hit"]
 	_flankers = _compute_flankers()
 	_update_panel()
 	_update_target_info()
@@ -1073,6 +1122,8 @@ func _update_panel() -> void:
 		"set_up": s != null and s.weapon.needs_setup, "rally": s != null and s.role == "Officer",
 		"medkit": s != null and s.medkits > 0, "mortar": s != null and s.role == "Mortar",
 		"pivot": s != null and s.vehicle, "hunker": s == null or not s.vehicle,
+		"crouch": s == null or not s.vehicle, "prone": s == null or not s.vehicle,
+		"suppress": s == null or not (s.vehicle or s.weapon.anti_tank),
 	}
 	for action: String in visible:
 		_buttons[action].visible = visible[action]
@@ -1087,6 +1138,12 @@ func _update_panel() -> void:
 	if s != null and s.role == "Mortar":
 		_buttons["mortar"].disabled = s.actions < Unit.ACTIONS_PER_TURN
 		_buttons["mortar"].text = "0 Mortar: %s" % ("smoke" if mode == Mode.MORTAR and _mortar_kind == "smoke" else "HE")
+	for action in ["crouch", "prone"]:
+		_buttons[action].disabled = s == null or s.vehicle or battle.can_change_stance(s, _stance_for(action)) != ""
+	_buttons["crouch"].text = "C Stand up" if s != null and s.stance == Unit.Stance.CROUCH else "C Crouch"
+	_buttons["prone"].text = "Z Stand up" if s != null and s.stance == Unit.Stance.PRONE else "Z Prone"
+	_buttons["aimed"].disabled = s == null or battle.can_fire(s) != "" or s.actions < Unit.ACTIONS_PER_TURN
+	_buttons["suppress"].disabled = s == null or battle.can_fire(s) != "" or s.ammo < CombatRules.SUPPRESSIVE_FIRE_AMMO
 	_buttons["next"].disabled = s == null or _next_ready_unit(s) == null
 	_buttons["end"].disabled = battle.winner != -1 or not _is_human_turn()
 
@@ -1115,8 +1172,14 @@ func _describe_unit(u: Unit) -> String:
 		status.append("[color=#ffd34d]Overwatch[/color]")
 	if u.hunkered:
 		status.append("[color=#8fd3ff]Hunkered[/color]")
+	if u.stance != Unit.Stance.STAND:
+		status.append("[color=#%s]%s (moves cost x%s)[/color]" % [STANCE_COLOR, Unit.STANCE_NAMES[u.stance], str(Unit.STANCE_MOVE_COST[u.stance])])
 	lines.append("   ".join(status))
 	match mode:
+		Mode.SHOOT when _shot_cmd == "aimed_shot":
+			lines.append("[color=#ff9b8a]Aimed shot (both actions, +%d aim): click a target. Right click cancels.[/color]" % CombatRules.AIMED_SHOT_BONUS)
+		Mode.SHOOT when _shot_cmd == "suppress":
+			lines.append("[color=#ffb84d]Suppressive fire (%d rounds, no damage): click a target. Right click cancels.[/color]" % CombatRules.SUPPRESSIVE_FIRE_AMMO)
 		Mode.SHOOT:
 			lines.append("[color=#ff9b8a]Shooting: click a target. Right click cancels.[/color]")
 		Mode.GRENADE:
@@ -1140,7 +1203,10 @@ func _update_target_info() -> void:
 		match mode:
 			Mode.MOVE, Mode.SHOOT:
 				if target != null and target.team != selected.team and _seen_units.has(target.id) and battle.can_see(selected, target):
-					text = _describe_odds(selected, target)
+					if mode == Mode.SHOOT and _shot_cmd == "suppress":
+						text = _describe_suppression(selected, target)
+					else:
+						text = _describe_odds(selected, target)
 			Mode.GRENADE:
 				text = "[b]Frag grenade[/b]  range %d, radius %.1f\n%d-%d damage, ignores cover, destroys it.\nHits friends too." % [
 					CombatRules.GRENADE_RANGE, CombatRules.GRENADE_RADIUS, CombatRules.GRENADE_DAMAGE_MIN, CombatRules.GRENADE_DAMAGE_MAX]
@@ -1169,8 +1235,18 @@ func _error_line(err: String) -> String:
 	return "" if err == "" else "\n[color=#ff6b6b]%s[/color]" % err
 
 
+func _describe_suppression(shooter: Unit, target: Unit) -> String:
+	var lines := PackedStringArray()
+	lines.append("[b]Suppressive fire on %s[/b] (%s)  suppression %d" % [target.name, target.role, target.suppression])
+	lines.append("[color=#ffb84d]+%d suppression[/color], +%d to anyone within %.1f tiles of them" % [
+		roundi(shooter.weapon.suppression * CombatRules.SUPPRESSIVE_FIRE_FACTOR), shooter.weapon.suppression, CombatRules.SUPPRESSIVE_FIRE_RADIUS])
+	lines.append("No damage, but they don't recover from it at the start of their next turn.")
+	lines.append("Uses %d rounds and ends the turn." % CombatRules.SUPPRESSIVE_FIRE_AMMO)
+	return "\n".join(lines) + _error_line(battle.can_suppress(shooter, target))
+
+
 func _describe_odds(shooter: Unit, target: Unit) -> String:
-	var odds := battle.shot_odds(shooter, target)
+	var odds := battle.shot_odds(shooter, target, false, mode == Mode.SHOOT and _shot_cmd == "aimed_shot")
 	var lines := PackedStringArray()
 	lines.append("[b]Target: %s[/b] (%s)  HP %d/%d" % [target.name, target.role, target.hp, target.max_hp])
 	if GameSettings.show_hit_chance:
@@ -1203,6 +1279,8 @@ func _describe_odds(shooter: Unit, target: Unit) -> String:
 				names.append("%s%s %d%%" % [u.name, friendly, maxi(1, roundi(risk["chance"] * miss))])
 		if not names.is_empty():
 			lines.append("[color=#ff6b6b]Misses may hit: %s[/color]" % ", ".join(names))
+	if target.stance != Unit.Stance.STAND:
+		lines.append("[color=#%s]%s[/color]" % [STANCE_COLOR, Unit.STANCE_NAMES[target.stance]])
 	return "\n".join(lines)
 
 
@@ -1816,7 +1894,8 @@ func _pose(u: Unit) -> Dictionary:
 		"facing": _facing[u.id],
 		"walk": 1.0 if _walking.has(u.id) else 0.0,
 		"phase": _time * 14.0 + u.id,
-		"crouch": u.hunkered and alive,
+		"crouch": (u.hunkered or u.stance == Unit.Stance.CROUCH) and alive,
+		"prone": u.stance == Unit.Stance.PRONE and not u.vehicle,
 		"pinned": _display_suppression[u.id] >= Unit.PINNED_AT and alive,
 		"deployed": u.deployed and alive,
 		"wounded": u.is_wounded() and alive,
@@ -1910,9 +1989,10 @@ func _draw_markers() -> void:
 			var tag_color := Color("ff7060") if suppression >= Unit.SUPPRESSED_AT or u.is_wounded() else Color("ffd34d")
 			draw_string_outline(_font, top + Vector2(-60, -5), " ".join(tags), HORIZONTAL_ALIGNMENT_CENTER, 120, 10, 3, Color(0, 0, 0, 0.7))
 			draw_string(_font, top + Vector2(-60, -5), " ".join(tags), HORIZONTAL_ALIGNMENT_CENTER, 120, 10, tag_color)
-		if mode == Mode.SHOOT and _target_odds.has(u.id) and GameSettings.show_hit_chance:
-			draw_string_outline(_font, top + Vector2(-30, -18), "%d%%" % _target_odds[u.id], HORIZONTAL_ALIGNMENT_CENTER, 60, 15, 4, Color(0, 0, 0, 0.8))
-			draw_string(_font, top + Vector2(-30, -18), "%d%%" % _target_odds[u.id], HORIZONTAL_ALIGNMENT_CENTER, 60, 15, Color.WHITE)
+		if mode == Mode.SHOOT and _target_odds.has(u.id) and (GameSettings.show_hit_chance or _shot_cmd == "suppress"):
+			var odds_text := ("+%d" if _shot_cmd == "suppress" else "%d%%") % _target_odds[u.id]
+			draw_string_outline(_font, top + Vector2(-30, -18), odds_text, HORIZONTAL_ALIGNMENT_CENTER, 60, 15, 4, Color(0, 0, 0, 0.8))
+			draw_string(_font, top + Vector2(-30, -18), odds_text, HORIZONTAL_ALIGNMENT_CENTER, 60, 15, Color.WHITE)
 	if busy or selected == null or not battle.map.in_bounds(hover) or mode != Mode.MOVE or not _reach.has(hover) or hover == selected.pos:
 		return
 	# Cover shields on each side of the move destination, and lines to enemies that would flank it.

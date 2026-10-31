@@ -8,8 +8,11 @@ extends RefCounted
 ## and mirrored. Maps where a spawn can't reach every objective are thrown away and rerolled.
 
 const ATTEMPTS := 10
-## Random tries at placing a field; most of the open ground ends up covered.
+## Random tries at placing a field on a 40x40 map (scaled with area); most of the open ground ends up covered.
 const FIELD_ATTEMPTS := 120
+## Map sizes offered in skirmish, and the side length from which outlying farmsteads appear (one per this many tiles).
+const SIZES := {"Standard": 44, "Large": 64, "Huge": 84}
+const HAMLET_SPACING := 16
 
 
 ## Returns a layout for BattleFactory.create.
@@ -98,11 +101,28 @@ static func _generate(seed: int, size: Vector2i) -> Dictionary:
 		if rng.randf() < 0.55:
 			b.side(Vector2i(x, road + 2), MapBuilder.N, Cover.HALF, "stone")
 
-	# Bocage: rows of hedged fields across the rest of the west half.
+	# Outlying farmsteads on bigger maps: a house in a walled yard, away from the centre features.
+	var area_scale := float(w * h) / 1600.0
+	for i in maxi(0, (w - 40) / HAMLET_SPACING + 1) if w > 48 else 0:
+		for attempt in 30:
+			var house := Rect2i(rng.randi_range(6, maxi(6, mid - 15)), rng.randi_range(2, h - 12), 5, 4)
+			var yard := Rect2i(house.position + Vector2i(-1, 4), Vector2i(7, 5))
+			var plot := house.merge(yard)
+			if plot.end.x > mid - 4 or plot.end.y > h - 1 or _overlaps(reserved, plot.grow(2)):
+				continue
+			b.building(house, [[Vector2i(house.position.x + 2, house.end.y - 1), MapBuilder.S]],
+					[[Vector2i(house.position.x, house.position.y + 1), MapBuilder.W], [Vector2i(house.end.x - 1, house.position.y + 2), MapBuilder.E],
+					[Vector2i(house.position.x + 3, house.position.y), MapBuilder.N]])
+			b.enclose(yard, Cover.HALF, "stone", [[Vector2i(yard.position.x + 3, yard.end.y - 1), MapBuilder.S, Cover.NONE, ""],
+					[Vector2i(yard.position.x, yard.position.y + 2), MapBuilder.W, Cover.NONE, ""]], true, [MapBuilder.N])
+			b.object(Vector2i(yard.position.x + 1, yard.position.y + 3), Cover.HALF, "hay")
+			_reserve(reserved, plot.grow(1))
+			break
+
 	# Bocage: hedged fields packed into the open ground. Fields may share a hedgerow with each other,
 	# but keep a tile clear of roads and buildings.
 	var fields := {}
-	for attempt in FIELD_ATTEMPTS:
+	for attempt in int(FIELD_ATTEMPTS * area_scale):
 		var size_ := Vector2i(rng.randi_range(4, 9), rng.randi_range(4, 8))
 		var corner := Vector2i(rng.randi_range(5, maxi(5, mid - 3 - size_.x)), rng.randi_range(1, h - 2 - size_.y))
 		var rect := Rect2i(corner, size_)
@@ -112,13 +132,13 @@ static func _generate(seed: int, size: Vector2i) -> Dictionary:
 	reserved.merge(fields)
 
 	# Clutter in the open ground between fields.
-	for i in rng.randi_range(4, 7):
+	for i in int(rng.randi_range(4, 7) * area_scale):
 		var p := _open_tile(b, rng, reserved, mid)
 		b.terrain(Rect2i(p, Vector2i.ONE), TacticalMap.Terrain.CRATER)
-	for i in rng.randi_range(2, 4):
+	for i in int(rng.randi_range(2, 4) * area_scale):
 		var p := _open_tile(b, rng, reserved, mid)
 		b.object(p, Cover.FULL, "rock" if rng.randf() < 0.5 else "tree")
-	for i in rng.randi_range(2, 4):
+	for i in int(rng.randi_range(2, 4) * area_scale):
 		var p := _open_tile(b, rng, reserved, mid)
 		b.object(p, Cover.HALF, "sandbags" if rng.randf() < 0.5 else "crate")
 

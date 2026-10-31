@@ -17,13 +17,13 @@ const MOVE_COLOR := Color("4aa3ff")
 const DASH_COLOR := Color("f5c542")
 const KEY_ACTIONS := {
 	KEY_1: "shoot", KEY_2: "overwatch", KEY_3: "hunker", KEY_4: "reload", KEY_5: "grenade",
-	KEY_6: "smoke", KEY_7: "set_up", KEY_8: "rally", KEY_9: "medkit", KEY_0: "mortar",
+	KEY_6: "smoke", KEY_7: "set_up", KEY_8: "rally", KEY_9: "medkit", KEY_0: "mortar", KEY_T: "pivot",
 	KEY_TAB: "next", KEY_ENTER: "end", KEY_KP_ENTER: "end",
 }
 const ACTION_BUTTONS := [
 	["shoot", "1 Shoot"], ["overwatch", "2 Overwatch"], ["hunker", "3 Hunker"], ["reload", "4 Reload"],
 	["grenade", "5 Grenade"], ["smoke", "6 Smoke"], ["set_up", "7 Set up MG"], ["rally", "8 Rally"],
-	["medkit", "9 Medkit"], ["mortar", "0 Mortar"], ["next", "Tab Next unit"], ["end", "Enter End turn"],
+	["medkit", "9 Medkit"], ["mortar", "0 Mortar"], ["pivot", "T Turn tank"], ["next", "Tab Next unit"], ["end", "Enter End turn"],
 ]
 const SHOT_LABELS := {"miss": "MISS", "graze": "GRAZE", "hit": "HIT", "crit": "CRITICAL"}
 const ROLE_TAGS := {"Officer": "Lt", "Rifleman": "Rfl", "Medic": "Med", "SMG": "SMG", "MG": "MG", "Sniper": "Snp", "Mortar": "Mtr", "AT": "AT", "Tank": "Tank"}
@@ -44,7 +44,7 @@ const TOP_Z := 4000
 ## Chunks repainted per frame, to spread the cost of a full repaint.
 const CHUNK_BUDGET := 3
 
-enum Mode { MOVE, SHOOT, GRENADE, SMOKE, MEDKIT, MORTAR }
+enum Mode { MOVE, SHOOT, GRENADE, SMOKE, MEDKIT, MORTAR, PIVOT }
 
 var battle: Battle
 ## Per team: null for a human player, otherwise the TacticalAI playing it.
@@ -93,6 +93,10 @@ var _move_visibility := {}
 var _floaters := []
 var _effects := []
 var _overlay_state := ""
+## While events play back, map changes (crushed or blasted cover) are held back until the moment they happen.
+var _hold_layout := false
+## Playing an online opponent. Stays set after a disconnect, so the battle is never saved.
+var _online := false
 
 var _font: Font
 var _panel: PanelContainer
@@ -137,6 +141,12 @@ func _ready() -> void:
 			var ai := TacticalAI.new(battle, team)
 			ai.load_dict(GameSession.ai_states[team])
 			controllers[team] = ai
+	_online = Net.active
+	if _online:
+		controllers[Net.remote_team()] = RemotePlayer.new(battle, Net.remote_team(), Net)
+		Net.desynced.connect(_on_desync)
+		Net.disconnected.connect(_on_net_disconnected)
+		_buttons["quit"].text = "Leave game"
 	if controllers[0] != null and controllers[1] != null:
 		_speed_index = 1
 	_update_speed_button()
@@ -160,8 +170,10 @@ func _focus_on_team(team: int) -> void:
 	_focus(sum / count if count > 0 else Vector2(battle.map.width, battle.map.height) * 0.5, false)
 
 
-## Autosave: the battle in its current state, plus the AI's memory.
+## Autosave: the battle in its current state, plus the AI's memory. Online battles aren't saved.
 func _save() -> void:
+	if _online:
+		return
 	for team in 2:
 		GameSession.ai_states[team] = controllers[team].to_dict() if controllers[team] != null else {}
 	GameSession.save_game()
@@ -170,6 +182,7 @@ func _save() -> void:
 func _quit_to_menu() -> void:
 	if battle.winner == -1:
 		_save()
+	Net.close()
 	GameSession.battle = null
 	GameSession.show_campaign = GameSession.campaign != null
 	get_tree().change_scene_to_file(GameSession.MENU_SCENE)
@@ -179,14 +192,14 @@ func _add_display_state(u: Unit) -> void:
 	_display_pos[u.id] = _center(u.pos)
 	_display_hp[u.id] = u.hp
 	_display_suppression[u.id] = u.suppression
-	_facing[u.id] = Vector2(1, 0) if u.team == 0 else Vector2(-1, 0)
+	_facing[u.id] = Vector2(u.facing).normalized()
 	_unit_nodes[u.id] = _layer(0, _paint_unit.bind(u))
 
 
 func _process(delta: float) -> void:
 	_time += delta
 	_pan_with_keys(delta)
-	if battle.map.layout_revision != _layout_revision:
+	if battle.map.layout_revision != _layout_revision and not _hold_layout:
 		_layout_revision = battle.map.layout_revision
 		_rebuild_props()
 		_mark_chunks_dirty(true)
@@ -300,28 +313,33 @@ func _on_click(tile: Vector2i) -> void:
 			if own:
 				_select(u)
 			elif selected != null and u == null and battle.can_move(selected, tile) == "":
-				_run(battle.move(selected, tile))
+				_command({"cmd": "move", "unit": selected.id, "tile": tile})
 		Mode.SHOOT:
 			if u != null and battle.can_shoot(selected, u) == "":
-				_run(battle.shoot(selected, u))
+				_command({"cmd": "shoot", "unit": selected.id, "target": u.id})
 			elif own:
 				_select(u)
 		Mode.GRENADE:
 			err = battle.can_throw_grenade(selected, tile)
 			if err == "":
-				_run(battle.throw_grenade(selected, tile))
+				_command({"cmd": "grenade", "unit": selected.id, "tile": tile})
 		Mode.SMOKE:
 			err = battle.can_throw_smoke(selected, tile)
 			if err == "":
-				_run(battle.throw_smoke(selected, tile))
+				_command({"cmd": "smoke", "unit": selected.id, "tile": tile})
 		Mode.MORTAR:
 			err = battle.can_fire_mortar(selected, tile, _mortar_kind)
 			if err == "":
-				_run(battle.fire_mortar(selected, tile, _mortar_kind))
+				_command({"cmd": "mortar", "unit": selected.id, "tile": tile, "kind": _mortar_kind})
 		Mode.MEDKIT:
 			err = battle.can_use_medkit(selected, u)
 			if err == "":
-				_run(battle.use_medkit(selected, u))
+				_command({"cmd": "medkit", "unit": selected.id, "target": u.id})
+		Mode.PIVOT:
+			var dir := _pivot_dir(tile)
+			err = battle.can_pivot(selected, dir) if tile != selected.pos else "Click where the tank should face"
+			if err == "":
+				_command({"cmd": "pivot", "unit": selected.id, "tile": dir})
 	if err != "":
 		_flash(err)
 
@@ -347,7 +365,7 @@ func _on_action(action: String) -> void:
 	if busy or _overlay_state != "" or battle.winner != -1 or not _is_human_turn():
 		return
 	if action == "end":
-		_run(battle.end_turn())
+		_command({"cmd": "end_turn"})
 		return
 	if action == "next":
 		_select(_next_ready_unit(selected), true)
@@ -365,23 +383,23 @@ func _on_action(action: String) -> void:
 		"overwatch":
 			err = battle.can_overwatch(selected)
 			if err == "":
-				_run(battle.overwatch(selected))
+				_command({"cmd": "overwatch", "unit": selected.id})
 		"hunker":
 			err = battle.can_hunker(selected)
 			if err == "":
-				_run(battle.hunker(selected))
+				_command({"cmd": "hunker", "unit": selected.id})
 		"reload":
 			err = battle.can_reload(selected)
 			if err == "":
-				_run(battle.reload(selected))
+				_command({"cmd": "reload", "unit": selected.id})
 		"set_up":
 			err = battle.can_set_up(selected)
 			if err == "":
-				_run(battle.set_up(selected))
+				_command({"cmd": "set_up", "unit": selected.id})
 		"rally":
 			err = battle.can_rally(selected)
 			if err == "":
-				_run(battle.rally(selected))
+				_command({"cmd": "rally", "unit": selected.id})
 		"grenade":
 			err = battle.can_act(selected)
 			if err == "" and selected.grenades <= 0:
@@ -400,6 +418,12 @@ func _on_action(action: String) -> void:
 				err = "No medkits left"
 			if err == "":
 				_set_mode(Mode.MEDKIT)
+		"pivot":
+			err = battle.can_act(selected)
+			if err == "" and not selected.vehicle:
+				err = "Only tanks turn on the spot"
+			if err == "":
+				_set_mode(Mode.PIVOT)
 		"mortar":
 			err = battle.can_act(selected)
 			if err == "" and selected.role != "Mortar":
@@ -421,11 +445,16 @@ func _on_overlay_input(event: InputEvent) -> void:
 
 
 func _dismiss_overlay() -> void:
+	if _overlay_state == "net_ended":
+		_quit_to_menu()
+		return
 	if _overlay_state == "game_over":
+		Net.close()
 		if GameSession.campaign != null:
 			GameSession.campaign.complete_mission(battle)
 		GameSession.battle = null
-		GameSession.save_game()
+		if not _online:
+			GameSession.save_game()
 		GameSession.show_campaign = GameSession.campaign != null
 		get_tree().change_scene_to_file(GameSession.MENU_SCENE)
 		return
@@ -473,6 +502,36 @@ func _next_ready_unit(after: Unit) -> Unit:
 
 func _is_human_turn() -> bool:
 	return controllers[battle.current_team] == null
+
+
+## The heading (one of Pathfinder.HEADINGS) from the selected tank toward a tile.
+func _pivot_dir(tile: Vector2i) -> Vector2i:
+	return Pathfinder.HEADINGS[Pathfinder.heading_index(tile - selected.pos)] if tile != selected.pos else selected.facing
+
+
+## Applies one of the local player's commands, and sends it to the opponent when playing online.
+func _command(command: Dictionary) -> void:
+	var events := battle.execute(command)
+	if events.is_empty():
+		return
+	if _online:
+		Net.send_command(command, battle.checksum())
+	_run(events)
+
+
+func _controller_name(team: int) -> String:
+	if controllers[team] is RemotePlayer:
+		return " (opponent)"
+	return " (AI)" if controllers[team] != null else ""
+
+
+func _on_desync(reason: String) -> void:
+	_show_overlay("net_ended", "The two games are out of sync\n%s\n\nClick or press any key to leave" % reason, Color("ff7a6a"))
+
+
+func _on_net_disconnected() -> void:
+	if battle.winner == -1:
+		_show_overlay("net_ended", "The opponent left the game\n\nClick or press any key to leave", NEUTRAL_COLOR)
 
 
 ## The team whose fog of war is shown: the only human, the current human in hotseat, or -1 to see everything.
@@ -545,8 +604,10 @@ func _run(events: Array) -> void:
 	_reach = {}
 	_move_tiles = {}
 	_overlay_layer.queue_redraw()
+	_hold_layout = SPEEDS[_speed_index] != 0.0
 	for e: Dictionary in events:
 		await _play_event(e)
+	_hold_layout = false
 	_revealed.clear()
 	_move_visibility.clear()
 	busy = false
@@ -569,13 +630,23 @@ func _run(events: Array) -> void:
 		if SPEEDS[_speed_index] != 0.0:
 			await _wait(0.2)
 		if battle.winner == -1 and not _is_human_turn():
-			_run(controllers[battle.current_team].act())
+			var controller: Variant = controllers[battle.current_team]
+			if controller is RemotePlayer:
+				var remote_events: Variant = await controller.next_events()
+				if remote_events != null and is_inside_tree():
+					_run(remote_events)
+			else:
+				_run(controller.act())
 
 
 func _play_event(e: Dictionary) -> void:
 	match e["type"]:
 		"move":
 			await _play_move(e)
+		"pivot":
+			var u := battle.get_unit(e["unit"])
+			await _turn_hull(u.id, Vector2(e["to"]).normalized())
+			_log_line("%s turns." % u.name)
 		"shot":
 			await _play_shot(e)
 		"damage":
@@ -611,6 +682,7 @@ func _play_event(e: Dictionary) -> void:
 				_float(_display_pos[u.id], "Suppressed", Color("ffa040"))
 				await _wait(0.2)
 		"explosion":
+			_hold_layout = false
 			_effects.append({"kind": "explosion", "at": _center(e["center"]), "radius": e["radius"] + 0.5, "age": 0.0, "life": 1.4})
 			_log_line("Explosion: %d pieces of cover destroyed." % e["destroyed"])
 			await _wait(0.6)
@@ -657,7 +729,7 @@ func _play_event(e: Dictionary) -> void:
 				_show_banner("%s reinforcements!" % Battle.TEAM_NAMES[team], TEAM_COLORS[team])
 		"turn":
 			var team: int = e["team"]
-			var who := "%s%s" % [Battle.TEAM_NAMES[team], " (AI)" if controllers[team] != null else ""]
+			var who := "%s%s" % [Battle.TEAM_NAMES[team], _controller_name(team)]
 			_log_line("[b][color=%s]Round %d: %s[/color][/b]" % [TEAM_COLORS[team].to_html(false), e["round"], who])
 			_turn_started = true
 			if controllers[0] == null and controllers[1] == null:
@@ -682,11 +754,18 @@ func _play_move(e: Dictionary) -> void:
 	if controllers[u.team] != null and (not watched or _viewer_sees(path[0]) or _viewer_sees(path[-1])):
 		_focus(_center(path[int(path.size() / 2.0)]))
 	_walking[u.id] = true
+	var facings: Array = e.get("facings", [])
 	for i in range(1, path.size()):
-		_facing[u.id] = Vector2(path[i] - path[i - 1]).normalized()
+		if u.vehicle and i < facings.size():
+			# Tanks turn before they drive on, and back up without turning.
+			await _turn_hull(u.id, Vector2(facings[i]).normalized())
+		else:
+			_facing[u.id] = Vector2(path[i] - path[i - 1]).normalized()
 		if watched:
 			_move_visibility[u.id] = _viewer_sees(path[i])
-		await _tween_unit(u.id, _center(path[i]), 0.16)
+		await _tween_unit(u.id, _center(path[i]), 0.3 if u.vehicle else 0.16)
+		if u.vehicle:
+			_hide_crushed(path[i])
 	_walking.erase(u.id)
 
 
@@ -741,6 +820,30 @@ func _viewer_sees(tile: Vector2i) -> bool:
 		if LineOfSight.can_see(battle.map, u.pos, tile, u.sight):
 			return true
 	return false
+
+
+## Turns a tank's hull to a new facing, taking longer the further it turns.
+func _turn_hull(id: int, to: Vector2) -> void:
+	var from: Vector2 = _facing[id]
+	var angle := from.angle_to(to)
+	var speed: float = SPEEDS[_speed_index]
+	if absf(angle) < 0.01 or speed == 0.0:
+		_facing[id] = to
+		return
+	var tween := create_tween()
+	tween.tween_method(func(t: float) -> void: _facing[id] = from.rotated(angle * t), 0.0, 1.0, absf(angle) / PI * 0.6 / speed)
+	await tween.finished
+	_facing[id] = to
+
+
+## Hides the props a tank has just driven over and destroyed, while the rest of the map change is held back.
+func _hide_crushed(tile: Vector2i) -> void:
+	for node: Node2D in _props_by_tile.get(tile, []):
+		if not is_instance_valid(node):
+			continue
+		var gone: bool = battle.map.get_object(tile) == Cover.NONE if node.has_meta("object") else not battle.map.get_edges().has(node.get_meta("edge"))
+		if gone:
+			node.visible = false
 
 
 func _tween_unit(id: int, to: Vector2, duration: float) -> void:
@@ -823,7 +926,7 @@ func _compute_flankers() -> Array[Unit]:
 
 func _update_panel() -> void:
 	var team := battle.current_team
-	_turn_label.text = "Round %d/%d: %s%s" % [battle.round_number, battle.max_rounds, Battle.TEAM_NAMES[team], " (AI)" if controllers[team] != null else ""]
+	_turn_label.text = "Round %d/%d: %s%s" % [battle.round_number, battle.max_rounds, Battle.TEAM_NAMES[team], _controller_name(team)]
 	_turn_label.add_theme_color_override("font_color", TEAM_COLORS[team])
 	var holders := PackedStringArray()
 	for objective in battle.objectives:
@@ -844,6 +947,7 @@ func _update_panel() -> void:
 		"grenade": s != null and s.grenades > 0, "smoke": s != null and s.smoke_grenades > 0,
 		"set_up": s != null and s.weapon.needs_setup, "rally": s != null and s.role == "Officer",
 		"medkit": s != null and s.medkits > 0, "mortar": s != null and s.role == "Mortar",
+		"pivot": s != null and s.vehicle, "hunker": s == null or not s.vehicle,
 	}
 	for action: String in visible:
 		_buttons[action].visible = visible[action]
@@ -853,7 +957,7 @@ func _update_panel() -> void:
 	_buttons["reload"].disabled = s == null or battle.can_reload(s) != ""
 	_buttons["set_up"].disabled = s == null or battle.can_set_up(s) != ""
 	_buttons["rally"].disabled = s == null or battle.can_rally(s) != ""
-	for action in ["grenade", "smoke", "medkit", "mortar"]:
+	for action in ["grenade", "smoke", "medkit", "mortar", "pivot"]:
 		_buttons[action].disabled = s == null or battle.can_act(s) != ""
 	if s != null and s.role == "Mortar":
 		_buttons["mortar"].disabled = s.actions < Unit.ACTIONS_PER_TURN
@@ -898,6 +1002,8 @@ func _describe_unit(u: Unit) -> String:
 			lines.append("[color=#ffb84d]Mortar (%s): click a spotted tile. Press 0 to switch rounds.[/color]" % ("smoke" if _mortar_kind == "smoke" else "high explosive"))
 		Mode.MEDKIT:
 			lines.append("[color=#6bff8a]Medkit: click yourself or an adjacent ally. Right click cancels.[/color]")
+		Mode.PIVOT:
+			lines.append("[color=#ffd34d]Turn tank: click where the front should face (1 action). Right click cancels.[/color]")
 	return "\n".join(lines)
 
 
@@ -922,6 +1028,11 @@ func _update_target_info() -> void:
 					"smoke" if _mortar_kind == "smoke" else "high explosive", CombatRules.MORTAR_MIN_RANGE, CombatRules.MORTAR_MAX_RANGE,
 					Battle.mortar_scatter(selected.pos, hover)]
 				text += _error_line(battle.can_fire_mortar(selected, hover, _mortar_kind))
+			Mode.PIVOT:
+				text = "[b]Turn on the spot[/b]  1 action\nArmour: front %d, side %d, rear %d.\nOn the move, every 45° turned costs %.0f movement; backing up costs double." % [
+					CombatRules.VEHICLE_ARMOR["front"], CombatRules.VEHICLE_ARMOR["side"], CombatRules.VEHICLE_ARMOR["rear"], Pathfinder.TURN_COST]
+				if hover != selected.pos:
+					text += _error_line(battle.can_pivot(selected, _pivot_dir(hover)))
 	if text == "" and map.in_bounds(hover):
 		text = _describe_tile(hover)
 	_target_info.text = text
@@ -1215,14 +1326,14 @@ func _rebuild_props() -> void:
 			var p := Vector2i(x, y)
 			if map.get_object(p) != Cover.NONE:
 				var tiles: Array[Vector2i] = [p]
-				_add_prop(_paint_object.bind(p), _center(p), tiles)
+				_add_prop(_paint_object.bind(p), _center(p), tiles).set_meta("object", p)
 	for key: Vector3i in map.get_edges():
 		var pair := TacticalMap.edge_tiles(key)
-		_add_prop(_paint_edge.bind(key), (_center(pair[0]) + _center(pair[1])) * 0.5, pair)
+		_add_prop(_paint_edge.bind(key), (_center(pair[0]) + _center(pair[1])) * 0.5, pair).set_meta("edge", key)
 	_update_prop_darkness()
 
 
-func _add_prop(painter: Callable, center: Vector2, tiles: Array[Vector2i]) -> void:
+func _add_prop(painter: Callable, center: Vector2, tiles: Array[Vector2i]) -> Node2D:
 	var node := _layer(_depth_z(center), painter)
 	node.set_meta("center", center)
 	node.set_meta("tiles", tiles)
@@ -1232,6 +1343,7 @@ func _add_prop(painter: Callable, center: Vector2, tiles: Array[Vector2i]) -> vo
 		if not _props_by_tile.has(t):
 			_props_by_tile[t] = []
 		_props_by_tile[t].append(node)
+	return node
 
 
 func _paint_object(c: CanvasItem, p: Vector2i) -> void:
@@ -1378,6 +1490,11 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 					points.append(_proj.project(_center(p)))
 				c.draw_polyline(points, color, 3.0)
 				c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(hover), 0.3), color, 2.5)
+				if selected.vehicle:
+					_draw_heading(c, hover, _reach[hover]["facing"], color)
+		Mode.PIVOT:
+			if hover != selected.pos:
+				_draw_heading(c, selected.pos, _pivot_dir(hover), Color("ffd34d"))
 		Mode.GRENADE, Mode.SMOKE:
 			var grenade := mode == Mode.GRENADE
 			var throw_range := CombatRules.GRENADE_RANGE if grenade else CombatRules.SMOKE_RANGE
@@ -1399,6 +1516,16 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 			for u in battle.alive_units(selected.team):
 				if battle.can_use_medkit(selected, u) == "":
 					c.draw_polyline(TerrainPainter.ground_circle(_proj, _display_pos[u.id], 0.45), Color("6bff8a"), 2.5)
+
+
+## An arrow on the ground showing which way a tank will face on a tile.
+func _draw_heading(c: CanvasItem, tile: Vector2i, dir: Vector2i, color: Color) -> void:
+	var at := _center(tile)
+	var forward := Vector2(dir).normalized()
+	var side := Vector2(-forward.y, forward.x)
+	var tip := _proj.project(at + forward * 0.95)
+	c.draw_line(_proj.project(at + forward * 0.35), tip, color, 3.0)
+	c.draw_colored_polygon(PackedVector2Array([tip, _proj.project(at + forward * 0.7 + side * 0.18), _proj.project(at + forward * 0.7 - side * 0.18)]), color)
 
 
 ## Outlines the boundary of a set of tiles, like XCOM's move range border.

@@ -27,6 +27,36 @@ static func start_battle(p_battle: Battle, p_ai_teams: Array, title: String) -> 
 	battle_title = title
 
 
+## A skirmish from a setup {"map": "village" or "random", "size": side length, "seed": int}: the same setup
+## always builds the same battle, which is how both online players start identical games.
+## Bigger maps bring bigger forces, need more points to win and allow more rounds. Returns [battle, title].
+static func build_skirmish(setup: Dictionary) -> Array:
+	var seed: int = setup["seed"]
+	if setup["map"] == "village":
+		return [NormandyScenario.build(seed), "Normandy village"]
+	var size: int = setup["size"]
+	var roster := NormandyScenario.ROSTER.duplicate()
+	var wave := NormandyScenario.REINFORCEMENTS.duplicate()
+	var rounds := 20
+	var points := 12
+	if size >= 60:
+		roster.append_array(["Rifleman", "Rifleman", "SMG", "AT"])
+		wave.append("Rifleman")
+		rounds = 24
+		points = 16
+	if size >= 80:
+		roster.append_array(["Tank", "MG", "Medic"])
+		wave.append_array(["Tank", "SMG"])
+		rounds = 28
+		points = 20
+	var waves := []
+	for team in Battle.TEAM_COUNT:
+		waves.append({"round": NormandyScenario.REINFORCEMENT_ROUND, "team": team, "roster": wave})
+	var battle := BattleFactory.create(MapGenerator.generate(seed, Vector2i(size, size)), [roster, roster], seed,
+			{"reinforcements": waves, "max_rounds": rounds, "vp_to_win": points})
+	return [battle, "Random %dx%d map #%d" % [size, size, seed % 10000]]
+
+
 static func current_slot() -> String:
 	return "campaign" if campaign != null else "skirmish"
 

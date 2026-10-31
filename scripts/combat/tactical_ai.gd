@@ -1,8 +1,8 @@
 class_name TacticalAI
 extends RefCounted
 ## Utility AI for one team. It plays fair: it only knows what its team can see, plus where it last saw enemies.
-## Every call to act() scores all plans for all units, issues the best one as a single engine command
-## (or ends the turn) and returns the resulting events.
+## Every call to decide() scores all plans for all units and returns the best one as a single engine command
+## (or end_turn); act() also applies it and returns the resulting events.
 ##
 ## Scores are in "expected damage x 10" units so offence, defence, objectives and positioning can be compared.
 
@@ -11,7 +11,11 @@ const KILL_BONUS := 40.0
 const DANGER_WEIGHT := 0.8
 ## Danger from enemies we only remember (not currently seen) counts this much.
 const REMEMBERED_THREAT := 0.5
-const COVER_WEIGHT := 4.0
+## Score per level of cover (half = 1, full = 2) on the best side of a tile, and per level of cover
+## facing where the enemy is (or is expected to come from). Ending a move in the open costs extra.
+const COVER_WEIGHT := 6.0
+const FACING_COVER_WEIGHT := 9.0
+const OPEN_GROUND_PENALTY := 10.0
 ## Score lost per tile of distance from the goal when no enemy is in sight.
 const APPROACH_WEIGHT := 3.0
 ## Score lost per tile away from the role's preferred range to the nearest seen enemy.
@@ -23,6 +27,8 @@ const SUPPRESSION_VALUE := 0.15
 const OBJECTIVE_TAKE := 14.0
 const OBJECTIVE_HOLD := 6.0
 const OBJECTIVE_PULL := 1.0
+## Points behind the enemy at which taking objectives matters twice as much (and so on, up to 3x).
+const URGENCY_POINTS := 2.0
 ## Allies this close together risk sharing a grenade or shell.
 const CROWDING_PENALTY := 4.0
 ## Danger of standing where a mortar shell is about to land.
@@ -52,6 +58,8 @@ var _quiet_rounds := 0
 var _round := -1
 ## 0 = cautious .. 1 = impatient; grows while nothing happens, to break overwatch standoffs.
 var _aggression := 0.0
+## 0 while level or ahead on points, growing as the enemy pulls ahead: objectives then outweigh caution.
+var _urgency := 0.0
 ## Per-act cache of tile-to-tile sight, keyed by Vector4i(from, to).
 var _sight_cache := {}
 
@@ -86,6 +94,18 @@ func load_dict(data: Dictionary) -> void:
 func act() -> Array:
 	if battle.winner != -1 or battle.current_team != team:
 		return []
+	var command := decide()
+	var events := battle.execute(command)
+	if events.is_empty() and command["cmd"] != "end_turn":
+		push_warning("AI command %s was rejected; ending turn" % command)
+		return battle.end_turn()
+	return events
+
+
+## The AI's next command, as data for Battle.execute().
+func decide() -> Dictionary:
+	if battle.winner != -1 or battle.current_team != team:
+		return {"cmd": "end_turn"}
 	_sight_cache.clear()
 	_remember()
 	var seen := _seen_enemies()
@@ -95,6 +115,7 @@ func act() -> Array:
 	if not seen.is_empty():
 		_quiet_rounds = 0
 	_aggression = clampf(_quiet_rounds / PATIENCE_ROUNDS, 0.0, 1.0)
+	_urgency = clampf((battle.victory_points[1 - team] - battle.victory_points[team]) / URGENCY_POINTS, 0.0, 2.0)
 	if _searching and seen.is_empty() and _last_seen.is_empty():
 		_search_goal = _fog_center()
 	var best := {}
@@ -105,12 +126,8 @@ func act() -> Array:
 		if not plan.is_empty() and (best.is_empty() or plan["value"] > best["value"]):
 			best = plan
 	if best.is_empty():
-		return battle.end_turn()
-	var events := _execute(best)
-	if events.is_empty():
-		push_warning("AI plan %s was rejected; ending turn" % best["kind"])
-		return battle.end_turn()
-	return events
+		return {"cmd": "end_turn"}
+	return _command(best)
 
 
 # --- Planning ---
@@ -162,16 +179,29 @@ func _best_plan(u: Unit, seen: Array[Unit]) -> Dictionary:
 	if u.ammo < u.weapon.clip_size:
 		var reload_value := RELOAD_EMPTY_VALUE if u.ammo == 0 else (4.0 if seen.is_empty() else 0.0)
 		plans.append(_plan(u, "reload", stay + reload_value))
-	if map.has_cover(here):
+	if map.has_cover(here) and not u.vehicle:
 		plans.append(_plan(u, "hunker", stay + _danger(u, here, seen)[1]))
+	if u.vehicle:
+		# Turning on the spot to put the front armour toward the threat.
+		var facing := u.facing
+		for dir: Vector2i in Pathfinder.HEADINGS:
+			if battle.can_pivot(u, dir) == "":
+				u.facing = dir
+				plans.append(_plan(u, "pivot", _position_score(u, here, seen) - 2.0, null, dir))
+		u.facing = facing
 
 	var reach := battle.reachable(u)
 	for tile: Vector2i in reach:
 		if tile == here or reach[tile]["cost"] > u.current_mobility() + 0.001:
 			continue
+		var facing := u.facing
+		if u.vehicle:
+			# Judge the spot with the hull facing the way it will end up.
+			u.facing = reach[tile]["facing"]
 		var value := _position_score(u, tile, seen)
 		if u.actions >= 2:
 			value += _followup_value(u, tile, seen)
+		u.facing = facing
 		plans.append(_plan(u, "move", value, null, tile))
 
 	var best := {}
@@ -185,39 +215,40 @@ func _plan(u: Unit, kind: String, value: float, target: Unit = null, tile := Vec
 	return {"unit": u, "kind": kind, "value": value, "target": target, "tile": tile}
 
 
-func _execute(plan: Dictionary) -> Array:
-	var u: Unit = plan["unit"]
-	match plan["kind"]:
-		"shoot":
-			return battle.shoot(u, plan["target"])
-		"grenade":
-			return battle.throw_grenade(u, plan["tile"])
-		"mortar":
-			return battle.fire_mortar(u, plan["tile"], "he")
-		"medkit":
-			return battle.use_medkit(u, plan["target"])
-		"rally":
-			return battle.rally(u)
-		"set_up":
-			return battle.set_up(u)
-		"reload":
-			return battle.reload(u)
-		"overwatch":
-			return battle.overwatch(u)
-		"hunker":
-			return battle.hunker(u)
-		"move":
-			return battle.move(u, plan["tile"])
-	return []
+func _command(plan: Dictionary) -> Dictionary:
+	var command := {"cmd": plan["kind"], "unit": plan["unit"].id}
+	if plan["target"] != null:
+		command["target"] = plan["target"].id
+	if plan["kind"] in ["move", "pivot", "grenade", "mortar"]:
+		command["tile"] = plan["tile"]
+	if plan["kind"] == "mortar":
+		command["kind"] = "he"
+	return command
 
 
 ## How good it is to stand on a tile at the end of an action: cover, danger, objectives, range and approach.
 func _position_score(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 	var map := battle.map
-	var best_cover := Cover.NONE
-	for d: Vector2i in TacticalMap.DIRS4:
-		best_cover = maxi(best_cover, map.cover_toward(tile, d))
-	var score := best_cover * COVER_WEIGHT
+	var score := 0.0
+	if not u.vehicle:
+		var best_cover := Cover.NONE
+		for d: Vector2i in TacticalMap.DIRS4:
+			best_cover = maxi(best_cover, map.cover_toward(tile, d))
+		score += best_cover * COVER_WEIGHT
+		# Cover only helps on the side the shots come from: toward the enemies we know of, else the goal.
+		var threats := _threats(seen)
+		var facing_cover := 0.0
+		if threats.is_empty():
+			facing_cover = map.cover_against(tile, Vector2i(_goal(tile).round()))
+		else:
+			var weights := 0.0
+			for threat: Array in threats:
+				facing_cover += map.cover_against(tile, threat[1]) * threat[2]
+				weights += threat[2]
+			facing_cover /= weights
+		score += facing_cover * FACING_COVER_WEIGHT
+		if best_cover == Cover.NONE:
+			score -= OPEN_GROUND_PENALTY * (1.0 if not seen.is_empty() else 0.5)
 
 	var caution := 2.0 - float(u.hp) / u.max_hp
 	score -= _danger(u, tile, seen)[0] * DANGER_WEIGHT * caution
@@ -227,7 +258,7 @@ func _position_score(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 	for objective in battle.objectives:
 		var distance: float = point.distance_to(objective["center"])
 		if distance <= objective["radius"]:
-			score += OBJECTIVE_HOLD if objective["owner"] == team else OBJECTIVE_TAKE
+			score += OBJECTIVE_HOLD if objective["owner"] == team else OBJECTIVE_TAKE * (1.0 + _urgency)
 		if objective["owner"] != team:
 			nearest_open = minf(nearest_open, distance)
 
@@ -239,7 +270,7 @@ func _position_score(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 			nearest = minf(nearest, Vector2(tile).distance_to(Vector2(e.pos)))
 		score -= absf(nearest - PREFERRED_RANGE.get(u.role, 6.0)) * RANGE_WEIGHT
 		if nearest_open < INF and u.role != "Mortar" and u.role != "Sniper":
-			score -= nearest_open * OBJECTIVE_PULL
+			score -= nearest_open * OBJECTIVE_PULL * (1.0 + 2.0 * _urgency)
 
 	for ally in battle.alive_units(team):
 		if ally != u and Vector2(ally.pos).distance_to(Vector2(tile)) <= CombatRules.GRENADE_RADIUS:

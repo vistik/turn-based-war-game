@@ -2,8 +2,11 @@ class_name Battle
 extends RefCounted
 ## The combat engine. Owns all battle state and applies the rules.
 ## Commands validate, change state and return event dictionaries for the view to play back.
-## Event types: move, shot, damage, death, explosion, smoke, smoke_clear, mortar_fire, strike,
+## Event types: move, pivot, shot, damage, death, explosion, smoke, smoke_clear, mortar_fire, strike,
 ## suppression, status, heal, objective, score, reinforcements, turn, game_over.
+##
+## Every command can also be given as data through execute(), which is how AI moves, saved replays
+## and the online opponent's moves are applied: {"cmd": "move", "unit": id, "tile": Vector2i}, etc.
 
 const TEAM_COUNT := 2
 const TEAM_NAMES := ["Allies", "Germany"]
@@ -91,7 +94,7 @@ func reachable(u: Unit) -> Dictionary:
 	for other in alive_units():
 		if other != u:
 			blocked[other.pos] = true
-	return Pathfinder.search(map, u.pos, u.current_mobility() * mini(u.actions, Unit.ACTIONS_PER_TURN), blocked, u.vehicle)
+	return Pathfinder.search(map, u.pos, u.current_mobility() * mini(u.actions, Unit.ACTIONS_PER_TURN), blocked, u.vehicle, u.facing)
 
 
 ## Actions used by a move of the given path cost: one for a normal move, two for a dash.
@@ -229,6 +232,20 @@ func can_set_up(u: Unit) -> String:
 	return ""
 
 
+## Tanks can turn on the spot to face a direction (one of Pathfinder.HEADINGS) for one action.
+func can_pivot(u: Unit, dir: Vector2i) -> String:
+	var err := can_act(u)
+	if err != "":
+		return err
+	if not u.vehicle:
+		return "Only tanks turn on the spot"
+	if not Pathfinder.HEADINGS.has(dir):
+		return "Not a direction"
+	if dir == u.facing:
+		return "Already facing that way"
+	return ""
+
+
 func can_hunker(u: Unit) -> String:
 	var err := can_act(u)
 	if err != "":
@@ -336,17 +353,24 @@ func move(u: Unit, dest: Vector2i) -> Array:
 	u.deployed = false
 	var events := []
 	var segment: Array[Vector2i] = [u.pos]
-	for step in Pathfinder.path_to(reach, dest):
+	# Tanks: the hull's heading after each step (they turn, and may back up).
+	var facings: Array = reach[dest].get("facings", [])
+	var segment_facings: Array[Vector2i] = [u.facing]
+	var path := Pathfinder.path_to(reach, dest)
+	for i in path.size():
+		var step := path[i]
 		var previous := u.pos
 		u.pos = step
-		u.facing = step - previous
+		u.facing = facings[i] if u.vehicle else step - previous
 		if u.vehicle:
 			_drive(previous, step)
 		segment.append(step)
+		segment_facings.append(u.facing)
 		for watcher in _overwatchers_seeing(u):
 			if segment.size() > 1:
-				events.append({"type": "move", "unit": u.id, "path": segment})
+				events.append({"type": "move", "unit": u.id, "path": segment, "facings": segment_facings})
 				segment = [step]
+				segment_facings = [u.facing]
 			events.append_array(_fire(watcher, u, true))
 			if not u.is_alive() or u.is_pinned():
 				break
@@ -358,7 +382,7 @@ func move(u: Unit, dest: Vector2i) -> Array:
 			events.append({"type": "status", "unit": u.id, "text": "Pinned down!"})
 			break
 	if segment.size() > 1:
-		events.append({"type": "move", "unit": u.id, "path": segment})
+		events.append({"type": "move", "unit": u.id, "path": segment, "facings": segment_facings})
 	events.append_array(_after_action())
 	return events
 
@@ -387,6 +411,16 @@ func set_up(u: Unit) -> Array:
 	u.actions -= 1
 	u.deployed = true
 	return _status(u, "MG set up")
+
+
+func pivot(u: Unit, dir: Vector2i) -> Array:
+	if can_pivot(u, dir) != "":
+		return []
+	u.actions -= 1
+	var events: Array = [{"type": "pivot", "unit": u.id, "from": u.facing, "to": dir}]
+	u.facing = dir
+	events.append_array(_after_action())
+	return events
 
 
 func hunker(u: Unit) -> Array:
@@ -466,6 +500,49 @@ func use_medkit(u: Unit, target: Unit) -> Array:
 	var events: Array = [{"type": "heal", "unit": target.id, "amount": amount, "hp": target.hp}]
 	events.append_array(_after_action())
 	return events
+
+
+## Applies a command given as data. Returns its events, or [] when it isn't allowed.
+func execute(command: Dictionary) -> Array:
+	var cmd: String = command.get("cmd", "")
+	if cmd == "end_turn":
+		return end_turn()
+	var u := get_unit(command.get("unit", -1))
+	if u == null:
+		return []
+	var tile: Vector2i = command.get("tile", Vector2i.ZERO)
+	var target := get_unit(command.get("target", -1))
+	match cmd:
+		"move":
+			return move(u, tile)
+		"pivot":
+			return pivot(u, tile)
+		"shoot":
+			return shoot(u, target) if target != null else []
+		"overwatch":
+			return overwatch(u)
+		"set_up":
+			return set_up(u)
+		"hunker":
+			return hunker(u)
+		"reload":
+			return reload(u)
+		"rally":
+			return rally(u)
+		"grenade":
+			return throw_grenade(u, tile)
+		"smoke":
+			return throw_smoke(u, tile)
+		"mortar":
+			return fire_mortar(u, tile, command.get("kind", "he"))
+		"medkit":
+			return use_medkit(u, target) if target != null else []
+	return []
+
+
+## A fingerprint of the whole battle state. Two games that applied the same commands have the same one.
+func checksum() -> String:
+	return var_to_str(to_dict()).sha256_text()
 
 
 func end_turn() -> Array:
@@ -625,11 +702,11 @@ func _near(p: Vector2i) -> Vector2i:
 	return (p + d).clamp(Vector2i.ZERO, Vector2i(map.width - 1, map.height - 1))
 
 
-## A tank moving from a to b flattens what's in its way.
+## A tank moving from a to b flattens what's in its way: crates, sandbags, trees, fences, walls and hedges.
 func _drive(a: Vector2i, b: Vector2i) -> void:
 	map.set_vehicle(a, false)
 	map.set_vehicle(b, true)
-	if map.get_object(b) == Cover.HALF:
+	if map.get_object(b) != Cover.NONE:
 		map.set_object(b, Cover.NONE)
 		map.set_terrain(b, TacticalMap.Terrain.RUBBLE)
 	if (a.x == b.x or a.y == b.y) and map.get_edge(a, b) != Cover.NONE:

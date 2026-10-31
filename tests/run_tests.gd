@@ -490,9 +490,9 @@ func test_tanks_crush_and_push_through() -> void:
 	for y in map.height:
 		map.set_object(Vector2i(3, y), Cover.HALF, "crate")
 		map.set_edge(Vector2i(3, y), Vector2i(4, y), Cover.FULL, "hedge")
-	map.set_object(Vector2i(6, 6), Cover.FULL, "tree")
+	map.set_object(Vector2i(6, 6), Cover.FULL, "rock")
 	var tank := battle.units[0]
-	check(not battle.reachable(tank).has(Vector2i(6, 6)), "trees stop tanks")
+	check(not battle.reachable(tank).has(Vector2i(6, 6)), "rocks stop tanks")
 	battle.move(tank, Vector2i(5, 5))
 	check_eq(tank.pos, Vector2i(5, 5), "drove through")
 	var crates := 0
@@ -505,6 +505,92 @@ func test_tanks_crush_and_push_through() -> void:
 	check(tank.facing.x > 0, "facing the way it drove")
 	check(map.has_vehicle(Vector2i(5, 5)) and not map.has_vehicle(Vector2i(2, 5)), "tank tile tracked")
 	check_eq(map.cover_toward(Vector2i(4, 5), Vector2i(1, 0)), Cover.HALF, "soldiers can shelter behind a tank")
+
+
+func test_tanks_knock_down_trees() -> void:
+	var battle := make_battle([["Tank", 0, Vector2i(2, 5)], ["Rifleman", 1, Vector2i(15, 15)]])
+	battle.map.set_object(Vector2i(3, 5), Cover.FULL, "tree")
+	battle.move(battle.units[0], Vector2i(4, 5))
+	check_eq(battle.units[0].pos, Vector2i(4, 5), "drove through the tree")
+	check_eq(battle.map.get_object(Vector2i(3, 5)), Cover.NONE, "the tree is gone")
+	var blocked := make_battle([["Rifleman", 0, Vector2i(2, 5)], ["Rifleman", 1, Vector2i(15, 15)]])
+	blocked.map.set_object(Vector2i(3, 5), Cover.FULL, "tree")
+	check(not blocked.reachable(blocked.units[0]).has(Vector2i(3, 5)), "soldiers still can't walk through trees")
+
+
+func test_tanks_pay_to_turn_and_back_up_slowly() -> void:
+	var battle := make_battle([["Tank", 0, Vector2i(8, 8)], ["Rifleman", 1, Vector2i(15, 15)]])
+	var tank := battle.units[0]
+	tank.facing = Vector2i(1, 0)
+	var reach := battle.reachable(tank)
+	check_eq(reach[Vector2i(10, 8)]["cost"], 2.0, "straight ahead costs just the ground")
+	check_eq(reach[Vector2i(8, 10)]["cost"], 4.0, "turning 90 degrees costs 2 more")
+	check_eq(reach[Vector2i(6, 8)]["cost"], 4.0, "backing up two tiles costs double")
+	check_eq(reach[Vector2i(6, 8)]["facing"], Vector2i(1, 0), "backing up keeps the front toward the enemy")
+	var events := battle.move(tank, Vector2i(8, 10))
+	check_eq(tank.facing, Vector2i(0, 1), "faces the way it turned")
+	check_eq(events_of(events, "move")[0]["facings"].size(), events_of(events, "move")[0]["path"].size(), "move events carry the hull's facing per step")
+	check_eq(battle.can_pivot(tank, Vector2i(0, 1)), "Already facing that way", "no turning to the same facing")
+	var actions := tank.actions
+	battle.pivot(tank, Vector2i(-1, -1))
+	check_eq(tank.facing, Vector2i(-1, -1), "pivots on the spot")
+	check_eq(tank.actions, actions - 1, "a pivot costs an action")
+	var soldier := make_battle([["Rifleman", 0, Vector2i(8, 8)], ["Rifleman", 1, Vector2i(15, 15)]])
+	check(soldier.can_pivot(soldier.units[0], Vector2i(0, 1)) != "", "only tanks pivot")
+
+
+func test_commands_as_data_and_checksums() -> void:
+	var a := NormandyScenario.build(77)
+	var b := NormandyScenario.build(77)
+	a.start()
+	b.start()
+	check_eq(a.checksum(), b.checksum(), "same setup, same checksum")
+	var ai := TacticalAI.new(a, 0)
+	for i in 40:
+		if a.winner != -1:
+			break
+		ai.team = a.current_team
+		var command := ai.decide()
+		check(not a.execute(command).is_empty(), "AI command %s is valid" % command.get("cmd"))
+		b.execute(command)
+		if a.checksum() != b.checksum():
+			break
+	check_eq(a.checksum(), b.checksum(), "replaying the same commands keeps both games identical")
+	check(a.execute({"cmd": "move", "unit": 999, "tile": Vector2i(1, 1)}).is_empty(), "unknown units are rejected")
+	var enemy := a.alive_units(1 - a.current_team)[0]
+	check(a.execute({"cmd": "overwatch", "unit": enemy.id}).is_empty(), "the other side's units are rejected")
+	b.rng.randi()
+	check(a.checksum() != b.checksum(), "a different dice state changes the checksum")
+
+
+func test_ai_prefers_cover_facing_the_enemy() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(4, 8)], ["Rifleman", 1, Vector2i(13, 8)]])
+	# Two spots the same distance from the enemy: one behind a wall facing them, one in the open.
+	battle.map.set_edge(Vector2i(7, 6), Vector2i(8, 6), Cover.FULL, "wall")
+	var ai := TacticalAI.new(battle, 0)
+	var seen: Array[Unit] = [battle.units[1]]
+	var covered := ai._position_score(battle.units[0], Vector2i(7, 6), seen)
+	var open := ai._position_score(battle.units[0], Vector2i(7, 10), seen)
+	check(covered > open + 20.0, "cover toward the enemy is worth a lot (%.1f vs %.1f)" % [covered, open])
+	var wrong_side := make_battle([["Rifleman", 0, Vector2i(4, 8)], ["Rifleman", 1, Vector2i(13, 8)]])
+	wrong_side.map.set_edge(Vector2i(7, 6), Vector2i(6, 6), Cover.FULL, "wall")
+	var ai2 := TacticalAI.new(wrong_side, 0)
+	var behind := ai2._position_score(wrong_side.units[0], Vector2i(7, 6), [wrong_side.units[1]] as Array[Unit])
+	check(covered > behind + 10.0, "cover on the far side counts less (%.1f vs %.1f)" % [covered, behind])
+
+
+func test_big_skirmish_maps() -> void:
+	for size in [64, 84]:
+		var built := GameSession.build_skirmish({"map": "random", "size": size, "seed": 4242})
+		var battle: Battle = built[0]
+		check_eq(battle.map.width, size, "map is %d wide" % size)
+		check(battle.units.size() >= (12 if size == 64 else 15) * 2, "bigger forces on %dx%d" % [size, size])
+		var layout := MapGenerator.generate(4242, Vector2i(size, size))
+		check(MapGenerator.is_playable(layout), "%dx%d map is playable" % [size, size])
+		var walls := 0
+		for key: Vector3i in layout["map"].get_edges():
+			walls += 1
+		check(walls > size * 8, "%dx%d map has plenty of hedges and walls (%d)" % [size, size, walls])
 
 
 func test_tank_shell_splashes_and_wrecks_burn() -> void:

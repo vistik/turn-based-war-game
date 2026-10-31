@@ -18,8 +18,9 @@ const DIAGONAL_FACTOR := 1.5
 ## Extra cost for climbing over a half-height wall, and for pushing through a hedgerow.
 const VAULT_COST := 1.0
 const HEDGE_COST := 3.0
-## Extra cost for a tank flattening a crate, sandbags, a fence or a low wall.
+## Extra cost for a tank flattening a crate, sandbags, a fence or a low wall, and for knocking down a tree.
 const CRUSH_COST := 1.0
+const TREE_COST := 2.0
 ## Low obstacles and hedges a tank can drive through (and destroys on the way).
 const CRUSHABLE_EDGES := ["fence", "stone", "hedge"]
 
@@ -188,14 +189,16 @@ func step_cost(a: Vector2i, b: Vector2i) -> float:
 	return cost
 
 
-## Path cost of a tank driving from a to b. Tanks crush low obstacles, fences and walls, and push
-## through hedges, but can't pass trees, rocks, buildings or anything full height.
+## Path cost of a tank driving from a to b. Tanks crush low obstacles, fences and walls, knock down trees
+## and push through hedges, all of which they destroy, but can't pass rocks, wrecks or buildings.
 func vehicle_step_cost(a: Vector2i, b: Vector2i) -> float:
-	if not in_bounds(b) or get_object(b) == Cover.FULL:
+	if not in_bounds(b) or not _tank_can_enter(b):
 		return INF
 	var cost: float = TERRAIN_COST[get_terrain(b)]
 	if get_object(b) == Cover.HALF:
 		cost += CRUSH_COST
+	elif get_object(b) == Cover.FULL:
+		cost += TREE_COST
 	if a.x != b.x and a.y != b.y:
 		var side_x := Vector2i(b.x, a.y)
 		var side_y := Vector2i(a.x, b.y)
@@ -211,6 +214,10 @@ func vehicle_step_cost(a: Vector2i, b: Vector2i) -> float:
 			return INF
 		cost += HEDGE_COST + CRUSH_COST if kind == "hedge" else CRUSH_COST
 	return cost
+
+
+func _tank_can_enter(p: Vector2i) -> bool:
+	return get_object(p) != Cover.FULL or get_object_kind(p) == "tree"
 
 
 ## Cover a unit standing on p gets on the side facing direction dir.

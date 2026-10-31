@@ -193,17 +193,38 @@ static func _fill(least: int, most: int) -> Array:
 func build_battle() -> Battle:
 	var m := current_map()
 	var layout := MapGenerator.generate(m["seed"], Vector2i(m["size"], m["size"]))
+	var deployments: Array = m["orders"]
+	var rosters := deploy(layout, [m["orders"][0]["roster"], m["orders"][1]["roster"]], deployments)
+	var size: int = m["size"]
+	var battle := BattleFactory.create(layout, rosters, m["seed"], {"vp_to_win": 8 + size / 8, "max_rounds": 12 + size / 8})
+	brace(battle, deployments)
+	return battle
+
+
+## Places both rosters as their deployments say ({"flank", "posture"}; {} keeps a side on the map's usual
+## spawns) and builds sandbags in front of defensive deployments. Returns the rosters with positions, for
+## BattleFactory.create on the same layout. Also used by skirmishes.
+static func deploy(layout: Dictionary, rosters: Array, deployments: Array) -> Array:
+	if deployments.all(func(d: Dictionary) -> bool: return d.is_empty()):
+		return rosters
 	var map: TacticalMap = layout["map"]
 	var reachable := Pathfinder.search(map, layout["spawns"][0], 100000.0)
 	var taken := {}
-	var rosters := [[], []]
+	var placed := [[], []]
 	var defensive_tiles := [[], []]
 	for side in 2:
-		var orders: Dictionary = m["orders"][side]
+		var deployment: Dictionary = deployments[side]
+		if deployment.is_empty():
+			placed[side] = rosters[side]
+			continue
+		var orders := {"roster": rosters[side], "flank": deployment["flank"], "posture": deployment["posture"]}
 		var tiles := deployment_tiles(map, side, orders, reachable, taken)
-		for i in orders["roster"].size():
-			rosters[side].append({"role": orders["roster"][i], "pos": tiles[i]})
-		if orders["posture"] == "defensive":
+		for i in rosters[side].size():
+			var entry: Variant = rosters[side][i]
+			var spec: Dictionary = (entry as Dictionary).duplicate() if entry is Dictionary else {"role": entry}
+			spec["pos"] = tiles[i]
+			placed[side].append(spec)
+		if deployment["posture"] == "defensive":
 			defensive_tiles[side] = tiles
 	# Defensive deployments start behind sandbags, facing the enemy.
 	for side in 2:
@@ -212,12 +233,14 @@ func build_battle() -> Battle:
 			var front: Vector2i = tile + forward
 			if map.in_bounds(front) and map.is_passable(front) and not taken.has(front) and map.get_edge(tile, front) == Cover.NONE:
 				map.set_object(front, Cover.HALF, "sandbags")
-	var size: int = m["size"]
-	var battle := BattleFactory.create(layout, rosters, m["seed"], {"vp_to_win": 8 + size / 8, "max_rounds": 12 + size / 8})
+	return placed
+
+
+## Defensive deployments start crouched (tanks excepted).
+static func brace(battle: Battle, deployments: Array) -> void:
 	for u in battle.units:
-		if not u.vehicle and m["orders"][u.team]["posture"] == "defensive":
+		if not u.vehicle and deployments[u.team].get("posture", "") == "defensive":
 			u.stance = Unit.Stance.CROUCH
-	return battle
 
 
 ## Start tiles for a side's units: a band along its own edge, shifted to the chosen flank, nearer the enemy

@@ -4,8 +4,8 @@ extends RefCounted
 ## (forward, right, up), projected with the view so soldiers turn and rotate with the camera.
 ##
 ## Pose keys: facing (Vector2, grid), walk (0..1), phase (walk cycle, radians), crouch (bool), prone (bool),
-## pinned (bool), deployed (bool), wounded (bool), death (0 standing .. 1 lying), flash (0..1 hit flash),
-## breath (radians). A prone soldier is the standing model laid face down along his facing, rifle forward.
+## pinned (bool), deployed (bool), wounded (bool), death (0 standing .. 1 lying), fall_forward (bool, falls
+## face down instead of on the back), flash (0..1 hit flash), breath (radians). A prone soldier is the standing model laid face down along his facing, rifle forward.
 
 const SKIN := Color("d3a37b")
 const GUN := Color("2a2d31")
@@ -34,12 +34,14 @@ static func draw(c: CanvasItem, proj: ViewProjection, g: Vector2, unit: Unit, po
 	var facing: Vector2 = pose["facing"]
 	var death: float = pose["death"]
 	var flash: float = pose["flash"]
+	var forward: bool = pose.get("fall_forward", false)
 	var drawn := []
 	if pose.get("prone", false):
 		death = 0.0
 	for part: Array in _model(unit, pose):
-		var a := _fall(part[0], death)
-		var b := _fall(part[1], death)
+		var held: bool = part.size() > 4 and part[4] == HELD
+		var a := _drop(part[0], death) if held else _fall(part[0], death, forward)
+		var b := _drop(part[1], death) if held else _fall(part[1], death, forward)
 		drawn.append([_depth(proj, g, facing, (a + b) * 0.5), _to_screen(proj, g, facing, a), _to_screen(proj, g, facing, b), part[2], part[3]])
 	drawn.sort_custom(func(x: Array, y: Array) -> bool: return x[0] < y[0])
 	for d: Array in drawn:
@@ -210,12 +212,33 @@ static func _gun_length(unit: Unit) -> float:
 	return {"rifle": 0.46, "carbine": 0.38, "smg": 0.3, "mg": 0.52, "sniper": 0.5, "at": 0.32}.get(unit.weapon.kind, 0.44)
 
 
-## Rotates a standing point toward lying on the back as death goes 0 -> 1.
-static func _fall(v: Vector3, death: float) -> Vector3:
+## A standing point as the soldier dies, death going 0 -> 1: the knees give, then he falls on his back (or
+## face down) gathering speed like a dropped weight, and the body bounces once as it lands.
+static func _fall(v: Vector3, death: float, forward := false) -> Vector3:
 	if death <= 0.0:
 		return v
 	var lying := Vector3(-v.z * 0.9 + v.x * 0.3, v.y, 0.03 + maxf(0.0, v.x) * 0.15)
-	return v.lerp(lying, death * death)
+	if forward:
+		lying = Vector3(v.z * 0.9 - v.x * 0.3, v.y * 1.1, 0.03 + maxf(0.0, -v.x) * 0.15)
+	var buckle := clampf(death / 0.25, 0.0, 1.0)
+	var sagged := Vector3(v.x, v.y, v.z * (1.0 - 0.2 * buckle))
+	var drop := clampf((death - 0.2) / 0.6, 0.0, 1.0)
+	var p := sagged.lerp(lying, drop * drop)
+	if death > 0.8:
+		p.z += sin((death - 0.8) / 0.2 * PI) * 0.035
+	return p
+
+
+## A point of the weapon as the dying soldier lets go: it drops and lands flat beside him.
+static func _drop(v: Vector3, death: float) -> Vector3:
+	if death <= 0.0:
+		return v
+	var landed := Vector3(v.x * 0.7 + 0.05, v.y + 0.3, 0.02)
+	var t := clampf((death - 0.1) / 0.45, 0.0, 1.0)
+	var p := v.lerp(landed, t * t)
+	if t >= 1.0 and death < 0.75:
+		p.z += sin((death - 0.55) / 0.2 * PI) * 0.03
+	return p
 
 
 static func _to_screen(proj: ViewProjection, g: Vector2, facing: Vector2, v: Vector3) -> Vector2:

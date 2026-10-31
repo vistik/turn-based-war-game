@@ -159,6 +159,16 @@ static func throw_scatter(thrower: Unit, from: Vector2i, tile: Vector2i) -> floa
 	return scatter
 
 
+## Whether a hit from `weapon` fired from `from` could do any damage to `target`: small arms bounce off
+## tanks, and an anti-tank weapon must be able to beat the armour facing it, even with a critical hit.
+static func can_hurt(weapon: Weapon, target: Unit, from: Vector2i) -> bool:
+	if not target.vehicle:
+		return true
+	if not weapon.anti_tank:
+		return false
+	return weapon.damage_max + weapon.crit_damage > VEHICLE_ARMOR[armor_side(target, from)]
+
+
 ## Whether a weapon's misses can hit something else: machine guns, rockets and tank guns.
 static func misses_stray(weapon: Weapon) -> bool:
 	return weapon.needs_setup or weapon.anti_tank

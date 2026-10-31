@@ -975,6 +975,125 @@ func test_online_save_continues_identically() -> void:
 	GameSession.battle = null
 
 
+# --- Replays ---
+
+## Plays AI vs AI until the battle ends (or `steps` commands), returning how many commands were executed.
+func play_ai(battle: Battle, steps := 3000) -> int:
+	var ais := [TacticalAI.new(battle, 0), TacticalAI.new(battle, 1)]
+	var count := 0
+	while battle.winner == -1 and count < steps:
+		ais[battle.current_team].act()
+		count += 1
+	return count
+
+
+func test_replay_records_and_plays_back() -> void:
+	var saved_dir := GameSession.save_dir
+	GameSession.save_dir = OS.get_temp_dir().path_join("normandy-replay-test-%d" % OS.get_process_id())
+	var battle: Battle = GameSession.build_skirmish({"map": "random", "size": 44, "seed": 321})[0]
+	battle.max_rounds = 6
+	var replay := Replay.begin(battle, "Replay test", "skirmish", ["AI", "AI"])
+	replay.attach(battle)
+	battle.start()
+	play_ai(battle)
+	check(battle.winner != -1, "the recorded AI battle ends")
+	replay.finish(battle)
+	check(replay.commands.size() > 20, "every command is recorded (%d)" % replay.commands.size())
+	check(not replay.checkpoints.is_empty(), "turn changes are checkpointed")
+	check(replay.result != "", "the result is noted")
+	var recorded := replay.commands.size()
+	battle.execute({"cmd": "move", "unit": -5})
+	check_eq(replay.commands.size(), recorded, "rejected commands aren't recorded")
+	var path := replay.save_file()
+	check(path != "" and FileAccess.file_exists(path), "the replay is saved to the replays folder")
+	check(path.begins_with(GameSession.save_dir), "replays follow --save-dir")
+	var listed := Replay.list()
+	check_eq(listed.size(), 1, "the replay is listed")
+	check_eq(listed[0].get("title"), "Replay test", "the list shows its title")
+	check_eq(listed[0].get("orders"), replay.commands.size(), "the list shows its length")
+	var loaded := Replay.load_file(path)
+	check(loaded != null, "the replay loads")
+	check_eq(loaded.verify(), "", "the loaded replay plays out as recorded")
+	# Played back by hand: the same final state.
+	var copy := loaded.build()
+	check(not copy.started, "the replay starts before the first turn")
+	copy.start()
+	for command in loaded.commands:
+		copy.execute(command)
+	check_eq(copy.checksum(), battle.checksum(), "the replay ends in the same state")
+	check_eq(copy.winner, battle.winner, "the replay ends with the same winner")
+	# A replay that doesn't match is reported.
+	var broken := Replay.load_file(path)
+	broken.commands.remove_at(1)
+	check(broken.verify() != "", "a replay that plays out differently is reported")
+	var tampered := Replay.load_file(path)
+	tampered.snapshot["rng_state"] = int(tampered.snapshot["rng_state"]) + 1
+	check(tampered.verify() != "", "different dice are noticed")
+	# Only the newest are kept.
+	for i in Replay.KEEP + 2:
+		replay.save_file()
+	check_eq(Replay.list().size(), Replay.KEEP, "only the newest %d replays are kept" % Replay.KEEP)
+	Replay.delete_file(Replay.list()[0]["path"])
+	check_eq(Replay.list().size(), Replay.KEEP - 1, "a replay can be deleted")
+	for entry in Replay.list():
+		Replay.delete_file(entry["path"])
+	DirAccess.remove_absolute(Replay.folder())
+	DirAccess.remove_absolute(GameSession.save_dir)
+	GameSession.save_dir = saved_dir
+
+
+func test_saved_battles_keep_their_replay() -> void:
+	var saved_dir := GameSession.save_dir
+	GameSession.save_dir = OS.get_temp_dir().path_join("normandy-replay-save-%d" % OS.get_process_id())
+	var built: Array = GameSession.build_skirmish({"map": "random", "size": 44, "seed": 77})
+	var battle: Battle = built[0]
+	battle.max_rounds = 6
+	GameSession.campaign = null
+	GameSession.war = null
+	GameSession.start_battle(battle, [true, true], built[1])
+	GameSession.recording = Replay.begin(battle, built[1], "skirmish", ["AI", "AI"])
+	GameSession.recording.attach(battle)
+	battle.start()
+	play_ai(battle, 60)
+	var recorded := GameSession.recording.commands.size()
+	GameSession.save_game()
+	GameSession.recording.detach()
+	check(GameSession.load_game("skirmish"), "the skirmish save loads")
+	var loaded := GameSession.battle
+	check(loaded != battle, "a fresh battle was loaded")
+	check(GameSession.recording != null, "the save keeps the replay")
+	check_eq(GameSession.recording.commands.size(), recorded, "with every command so far")
+	check_eq(GameSession.recording.head, loaded.checksum(), "and it leads to the saved state")
+	# Played on after loading, the replay covers the whole battle.
+	GameSession.recording.attach(loaded)
+	play_ai(loaded)
+	check(loaded.winner != -1, "the continued battle ends")
+	GameSession.recording.finish(loaded)
+	check(GameSession.recording.commands.size() > recorded, "commands after loading are recorded too")
+	check_eq(GameSession.recording.verify(), "", "the replay of a continued battle plays out from the very start")
+	# Online saves keep it too, and continuing our own save picks it up again.
+	var online: Battle = GameSession.build_skirmish({"map": "random", "size": 44, "seed": 78})[0]
+	GameSession.start_online(online, "Online test", 0, "game-r", "1.2.3.4:24944", true)
+	GameSession.recording = Replay.begin(online, "Online test", "online", ["You", "Opponent online"])
+	GameSession.recording.attach(online)
+	online.start()
+	play_ai(online, 30)
+	recorded = GameSession.recording.commands.size()
+	GameSession.save_online(0)
+	GameSession.recording.detach()
+	check(GameSession.resume_online(GameSession.online_offer(), 0, "", true), "the online save loads")
+	check(GameSession.recording != null and GameSession.recording.commands.size() == recorded, "continuing an online game keeps its replay")
+	check_eq(GameSession.recording.head, GameSession.battle.checksum(), "the online replay leads to the saved state")
+	check_eq(GameSession.recording.verify(), "", "the online replay plays out as recorded")
+	GameSession.delete_save("online")
+	GameSession.delete_save("skirmish")
+	DirAccess.remove_absolute(GameSession.save_dir)
+	GameSession.save_dir = saved_dir
+	GameSession.online = {}
+	GameSession.battle = null
+	GameSession.recording = null
+
+
 # --- Map generator ---
 
 func test_generated_maps_are_fair_and_connected() -> void:
@@ -1395,3 +1514,41 @@ func test_online_password_key() -> void:
 	check_eq(key.size(), 32, "password key is a SHA-256")
 	check_eq(key, net_script.password_key("fox-hole"), "the same password gives the same key")
 	check(key != net_script.password_key("foxhole"), "a different password gives a different key")
+
+
+func test_overwatch_holds_fire_on_targets_it_cannot_hurt() -> void:
+	# Germany's rifleman watches; an Allied tank and then a rifleman move into view.
+	var battle := make_battle([["Tank", 0, Vector2i(2, 8)], ["Rifleman", 0, Vector2i(2, 10)], ["Rifleman", 1, Vector2i(10, 8)]])
+	var tank := battle.units[0]
+	var watcher := battle.units[2]
+	watcher.overwatch = true
+	check(not CombatRules.can_hurt(watcher.weapon, tank, watcher.pos), "a rifle can't hurt a tank")
+	check(CombatRules.can_hurt(Weapon.rocket(false), tank, watcher.pos), "a rocket can")
+	var events := battle.execute({"cmd": "move", "unit": tank.id, "tile": Vector2i(4, 8)})
+	check_eq(tank.pos, Vector2i(4, 8), "the tank drove into view")
+	check(events_of(events, "shot").is_empty(), "rifle overwatch ignores the tank")
+	check(watcher.overwatch, "and stays on overwatch")
+	events = battle.execute({"cmd": "move", "unit": battle.units[1].id, "tile": Vector2i(4, 10)})
+	check_eq(events_of(events, "shot").size(), 1, "but fires at the rifleman")
+
+
+func test_skirmish_deployments() -> void:
+	var usual: Battle = GameSession.build_skirmish({"map": "random", "size": 44, "seed": 321})[0]
+	var spawns: Battle = GameSession.build_skirmish({"map": "random", "size": 44, "seed": 321, "deployment": [{}, {}]})[0]
+	check_eq(spawns.checksum(), usual.checksum(), "no deployment keeps the usual spawns")
+	var setup := {"map": "random", "size": 44, "seed": 321,
+			"deployment": [{"flank": "left", "posture": "offensive"}, {"flank": "balanced", "posture": "defensive"}]}
+	var battle: Battle = GameSession.build_skirmish(setup)[0]
+	check_eq(battle.checksum(), GameSession.build_skirmish(setup)[0].checksum(), "the same setup builds the same battle")
+	var allies := battle.units.filter(func(u: Unit) -> bool: return u.team == 0)
+	var germans := battle.units.filter(func(u: Unit) -> bool: return u.team == 1)
+	check(allies.all(func(u: Unit) -> bool: return u.pos.y < 44 / 2 + 2), "Allies massed on their left (north)")
+	check(allies.all(func(u: Unit) -> bool: return u.stance == Unit.Stance.STAND), "offensive Allies stand")
+	check(germans.all(func(u: Unit) -> bool: return u.vehicle or u.stance == Unit.Stance.CROUCH), "defensive Germans crouch")
+	var sandbags := germans.filter(func(u: Unit) -> bool:
+		var front: Vector2i = u.pos + Vector2i(-1, 0)
+		return battle.map.in_bounds(front) and battle.map.get_object(front) == Cover.HALF)
+	check(sandbags.size() >= germans.size() / 2, "defensive Germans mostly start behind sandbags")
+	var village: Battle = GameSession.build_skirmish({"map": "village", "seed": 5, "deployment": [{"flank": "right", "posture": "defensive"}, {}]})[0]
+	check(village.units.filter(func(u: Unit) -> bool: return u.team == 0).all(func(u: Unit) -> bool: return u.pos.y >= 48 / 2 - 2),
+			"the village takes deployments too (Allies' right is south)")

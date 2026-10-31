@@ -2,7 +2,8 @@ class_name GameSession
 extends RefCounted
 ## What the battle scene should play, plus saving and loading. Static so it survives scene changes.
 ## There are two save slots: the campaign (with any battle in progress) and a skirmish battle, plus a third
-## for the online game in progress, saved at every turn change both players agreed on.
+## for the online game in progress, saved at every turn change both players agreed on. Each save of a battle in
+## progress also holds its replay so far (`recording`); finished replays are files of their own (Replay).
 
 const SLOTS := {"campaign": "user://campaign.sav", "skirmish": "user://skirmish.sav", "online": "user://online.sav", "war": "user://war.sav"}
 const SAVE_VERSION := 1
@@ -23,6 +24,11 @@ static var war: WarCampaign
 static var show_campaign := false
 ## The online game being played: {"game_id", "title", "opponent", "hosted"}, or {} when offline.
 static var online := {}
+## The battle being played as recorded so far (ReplayRecorder), or null. Saved with the battle, so the replay
+## of a continued game is complete.
+static var recording: Replay
+## The replay being watched on the battle screen (ReplayControls), or null when playing.
+static var watching: Replay
 ## The folder the save slots live in: user:// unless the command line gives --save-dir=PATH (after "--"),
 ## so tests, and two copies of the game on one computer, keep separate saves.
 static var save_dir := _save_dir_from_args()
@@ -33,6 +39,8 @@ static func start_battle(p_battle: Battle, p_ai_teams: Array, title: String) -> 
 	ai_teams = p_ai_teams.duplicate()
 	ai_states = [{}, {}]
 	battle_title = title
+	recording = null
+	watching = null
 
 
 ## A skirmish from a setup {"map": "village" or "random", "size": side length, "seed": int}, or
@@ -45,8 +53,10 @@ static func build_skirmish(setup: Dictionary) -> Array:
 		# A scenario file's data travels in the setup, so an online opponent needs no copy of the file.
 		var scenario := Scenario.from_data(setup["scenario"])
 		return [scenario.build_battle(seed), scenario.title]
+	# Where each side deploys: {"flank", "posture"} as in the two-player campaign, or {} for the usual spawns.
+	var deployments: Array = setup.get("deployment", [{}, {}])
 	if setup["map"] == "village":
-		return [NormandyScenario.build(seed), "Normandy village"]
+		return [NormandyScenario.build(seed, deployments), "Normandy village"]
 	var size: int = setup["size"]
 	var roster := NormandyScenario.ROSTER.duplicate()
 	var wave := NormandyScenario.REINFORCEMENTS.duplicate()
@@ -65,8 +75,10 @@ static func build_skirmish(setup: Dictionary) -> Array:
 	var waves := []
 	for team in Battle.TEAM_COUNT:
 		waves.append({"round": NormandyScenario.REINFORCEMENT_ROUND, "team": team, "roster": wave})
-	var battle := BattleFactory.create(MapGenerator.generate(seed, Vector2i(size, size)), [roster, roster], seed,
+	var layout := MapGenerator.generate(seed, Vector2i(size, size))
+	var battle := BattleFactory.create(layout, WarCampaign.deploy(layout, [roster, roster], deployments), seed,
 			{"reinforcements": waves, "max_rounds": rounds, "vp_to_win": points})
+	WarCampaign.brace(battle, deployments)
 	return [battle, "Random %dx%d map #%d" % [size, size, seed % 10000]]
 
 
@@ -105,6 +117,7 @@ static func save_game() -> void:
 		"war": war.to_dict() if war != null else {},
 		"battle": battle.to_dict() if running else {},
 		"ai_teams": ai_teams, "ai_states": ai_states, "title": battle_title,
+		"replay": recording.to_dict() if running and recording != null else {},
 	}
 	_write(slot, data)
 
@@ -129,6 +142,8 @@ static func load_game(slot: String) -> bool:
 	ai_teams = data["ai_teams"]
 	ai_states = data["ai_states"]
 	battle_title = data["title"]
+	recording = Replay.from_dict(data["replay"]) if battle != null and not data.get("replay", {}).is_empty() else null
+	watching = null
 	return true
 
 
@@ -181,6 +196,7 @@ static func save_online(team: int) -> void:
 		"opponent": online["opponent"], "hosted": online["hosted"], "battle": battle.to_dict(),
 		"checksum": battle.checksum(), "round": battle.round_number, "turn_index": battle.turn_index,
 		"current_team": battle.current_team, "saved_at": int(Time.get_unix_time_from_system()),
+		"replay": recording.to_dict() if recording != null else {},
 	})
 
 
@@ -240,4 +256,8 @@ static func resume_online(offer: Dictionary, team: int, opponent: String, hosted
 	if loaded.checksum() != offer["checksum"]:
 		return false
 	start_online(loaded, offer["title"], team, offer["game_id"], opponent, hosted)
+	# Our own recording leads to exactly this state if our save is the one being continued.
+	var own := peek("online")
+	if own.get("game_id") == offer["game_id"] and own.get("checksum") == offer["checksum"] and not own.get("replay", {}).is_empty():
+		recording = Replay.from_dict(own["replay"])
 	return true

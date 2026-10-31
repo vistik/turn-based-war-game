@@ -38,7 +38,7 @@ signal turn_agreed(turn_index: int, checksum: String)
 
 const DEFAULT_PORT := 24944
 ## Bumped whenever the rules or the protocol change, so different versions refuse to play each other.
-const PROTOCOL := 6
+const PROTOCOL := 7
 ## How many players may be connecting at once while the host waits; only one gets in.
 const MAX_KNOCKING := 4
 ## Seconds a newcomer has to prove it knows the password.

@@ -34,6 +34,12 @@ const ACTION_BUTTONS := [
 ]
 const SHOT_LABELS := {"miss": "MISS", "graze": "GRAZE", "hit": "HIT", "crit": "CRITICAL", "suppressing": "SUPPRESSING FIRE"}
 const STANCE_COLOR := "8fd3ff"
+## Seconds a soldier takes to fall, and for a tank to brew up.
+const DEATH_TIME := 0.9
+const WRECK_TIME := 1.2
+## Ranges at or below/above these weapon range modifiers count as poor/good on the field of fire.
+const GUN_POOR := -10
+const GUN_GOOD := 5
 ## Playback speeds; 0 means instant.
 const SPEEDS := [1.0, 2.0, 4.0, 0.0]
 const SPEED_NAMES := ["1x", "2x", "4x", "Instant"]
@@ -88,6 +94,9 @@ var _visible_tiles := {}
 var _seen_units := {}
 var _target_odds := {}
 var _flankers: Array[Unit] = []
+## The selected unit's field of fire: every tile it can see, keyed to how its gun does there
+## (1 = at its best, 0 = fair, -1 = poor range).
+var _gun_view := {}
 ## Presentation state that trails the engine while events play back. Positions are in grid space.
 var _display_pos := {}
 var _display_hp := {}
@@ -96,6 +105,11 @@ var _facing := {}
 var _walking := {}
 var _hit_at := {}
 var _died_at := {}
+## Per dying unit: {"forward": falls face down, "knock": Vector2 grid offset it is thrown}.
+var _death_style := {}
+## Where the latest hit came from: {"at": grid position, "blast": bool}, and per unit the last that hit it.
+var _last_source := {}
+var _hit_from := {}
 ## Units forced visible (e.g. while shooting) or tracked step by step while moving through fog.
 var _revealed := {}
 var _move_visibility := {}
@@ -127,11 +141,16 @@ var _log_toggle: Button
 ## The newest log line, shown in the log's header while the log is folded away.
 var _log_last: RichTextLabel
 var _help: PanelContainer
+## While watching a replay: its controls, which also choose the fog shown (see scripts/view/replay_controls.gd).
+var replay: ReplayControls
 
 
 func _ready() -> void:
 	GameSettings.ensure_loaded()
 	_font = ThemeDB.fallback_font
+	if GameSession.watching != null:
+		GameSession.battle = GameSession.watching.build()
+		GameSession.battle_title = "Replay: %s" % GameSession.watching.title
 	if GameSession.battle == null:
 		# Started straight from the editor: a quick skirmish against the AI.
 		GameSession.campaign = null
@@ -167,8 +186,13 @@ func _ready() -> void:
 		Net.disconnected.connect(_on_net_disconnected)
 		Net.turn_agreed.connect(_on_turn_agreed)
 		_buttons["quit"].text = "Leave game"
-	# Move suggestions (H) and the agent link (MCP server); see scripts/advisor/.
-	add_child(AdvisorView.new(self))
+	if GameSession.watching != null:
+		replay = ReplayControls.new(self, GameSession.watching)
+		add_child(replay)
+	else:
+		# Move suggestions (H) and the agent link (MCP server); see scripts/advisor/.
+		add_child(AdvisorView.new(self))
+		add_child(ReplayRecorder.new(self))
 	_apply_turn_speed(battle.current_team)
 	_focus_on_team(_view_team() if _view_team() != -1 else battle.current_team)
 	_refresh()
@@ -192,7 +216,7 @@ func _focus_on_team(team: int) -> void:
 
 ## Autosave: the battle in its current state, plus the AI's memory. Online battles are saved by _on_turn_agreed.
 func _save() -> void:
-	if _online:
+	if _online or replay != null:
 		return
 	for team in 2:
 		GameSession.ai_states[team] = controllers[team].to_dict() if controllers[team] != null else {}
@@ -200,6 +224,9 @@ func _save() -> void:
 
 
 func _quit_to_menu() -> void:
+	if replay != null:
+		replay.quit()
+		return
 	if battle.winner == -1:
 		_save()
 	Net.close()
@@ -505,6 +532,10 @@ func _dismiss_overlay() -> void:
 	if _overlay_state == "net_ended":
 		_quit_to_menu()
 		return
+	if replay != null:
+		_overlay_state = ""
+		_overlay.hide()
+		return
 	if _overlay_state == "game_over":
 		Net.close()
 		if GameSession.campaign != null:
@@ -517,7 +548,7 @@ func _dismiss_overlay() -> void:
 		else:
 			GameSession.end_online()
 		GameSession.show_campaign = GameSession.campaign != null or GameSession.war != null
-		get_tree().change_scene_to_file(GameSession.MENU_SCENE)
+		get_tree().change_scene_to_file(GameSession.BATTLE_SCENE if GameSession.watching != null else GameSession.MENU_SCENE)
 		return
 	_overlay_state = ""
 	_overlay.hide()
@@ -597,6 +628,8 @@ func _command(command: Dictionary) -> void:
 
 
 func _controller_name(team: int) -> String:
+	if replay != null:
+		return " (%s)" % replay.side_name(team)
 	if controllers[team] is RemotePlayer:
 		return " (opponent)"
 	return " (AI)" if controllers[team] != null else ""
@@ -619,6 +652,8 @@ func _on_turn_agreed(turn_index: int, checksum: String) -> void:
 
 ## The team whose fog of war is shown: the only human, the current human in hotseat, or -1 to see everything.
 func _view_team() -> int:
+	if replay != null:
+		return replay.view_team
 	var humans := [0, 1].filter(func(t: int) -> bool: return controllers[t] == null)
 	if humans.size() == 2:
 		return battle.current_team
@@ -750,7 +785,7 @@ func _run(events: Array) -> void:
 			await _wait(0.2)
 		if battle.winner == -1 and not _is_human_turn():
 			var controller: Variant = controllers[battle.current_team]
-			if controller is RemotePlayer:
+			if controller.has_method("next_events"):
 				var remote_events: Variant = await controller.next_events()
 				if remote_events != null and is_inside_tree():
 					_run(remote_events)
@@ -758,7 +793,15 @@ func _run(events: Array) -> void:
 				_run(controller.act())
 
 
+## Event types that only show if the side watching can see the unit doing or suffering them. Attacks on
+## the watcher's own units (shots, throws) always show, and give the attacker away.
+const PRIVATE_EVENTS := ["pivot", "stance", "damage", "suppression", "status", "heal", "mine_cleared", "mortar_fire", "object_shot", "smoke", "mine"]
+
+
 func _play_event(e: Dictionary) -> void:
+	if e["type"] in PRIVATE_EVENTS and _unseen_enemy(battle.get_unit(e.get("unit", -1))):
+		_play_unseen(e)
+		return
 	match e["type"]:
 		"move":
 			await _play_move(e)
@@ -780,6 +823,7 @@ func _play_event(e: Dictionary) -> void:
 			var u := battle.get_unit(e["unit"])
 			_display_hp[u.id] = e["hp"]
 			_hit_at[u.id] = _time
+			_hit_from[u.id] = _last_source
 			var text := "-%d" % e["amount"]
 			if e["absorbed"] > 0:
 				text += " (armor %d)" % e["absorbed"]
@@ -792,10 +836,15 @@ func _play_event(e: Dictionary) -> void:
 				_effects.append({"kind": "explosion", "at": _display_pos[u.id], "radius": 1.2, "age": 0.0, "life": 1.4})
 				_float(_display_pos[u.id], "KNOCKED OUT", Color("ff3b3b"))
 				_log_line("[color=#ff6b6b]%s is knocked out![/color]" % u.name)
+				await _wait(0.35)
+				# The ammunition goes up as the turret lifts.
+				_effects.append({"kind": "explosion", "at": _display_pos[u.id], "radius": 0.7, "age": 0.0, "life": 1.0})
+				await _wait(0.45)
 			else:
+				_start_fall(u)
 				_float(_display_pos[u.id], "KILLED", Color("ff3b3b"))
 				_log_line("[color=#ff6b6b]%s (%s) was killed.[/color]" % [u.name, u.role])
-			await _wait(0.6)
+				await _wait(0.6)
 		"suppression":
 			var u := battle.get_unit(e["unit"])
 			_display_suppression[u.id] = e["value"]
@@ -809,6 +858,7 @@ func _play_event(e: Dictionary) -> void:
 				_float(_display_pos[u.id], "Suppressed", Color("ffa040"))
 				await _wait(0.2)
 		"explosion":
+			_last_source = {"at": _center(e["center"]), "blast": true}
 			_hold_layout = false
 			_effects.append({"kind": "explosion", "at": _center(e["center"]), "radius": e["radius"] + 0.5, "age": 0.0, "life": 1.4})
 			_log_line("Explosion: %d pieces of cover destroyed." % e["destroyed"])
@@ -899,6 +949,55 @@ func _play_event(e: Dictionary) -> void:
 				_show_overlay("game_over", "%s win %s!\n%d to %d\n\nClick or press any key to continue" % [Battle.TEAM_NAMES[winner], how, battle.victory_points[0], battle.victory_points[1]], TEAM_COLORS[winner])
 
 
+## How a soldier falls: away from what killed him, on his back if it came from in front, face down if from
+## behind, and thrown back by a blast. A puff of dust as he lands.
+func _start_fall(u: Unit) -> void:
+	var source: Dictionary = _hit_from.get(u.id, {})
+	var style := {"forward": false, "knock": Vector2.ZERO}
+	if not source.is_empty():
+		var at: Vector2 = _display_pos[u.id]
+		var toward: Vector2 = source["at"] - at
+		if toward.length() > 0.05:
+			toward = toward.normalized()
+			if _facing[u.id].dot(toward) < -0.3:
+				style["forward"] = true
+			else:
+				_facing[u.id] = toward
+			style["knock"] = -toward * (0.45 if source["blast"] else 0.1)
+	_death_style[u.id] = style
+	var landed := func() -> void:
+		if is_inside_tree():
+			_effects.append({"kind": "puff", "at": _proj.project(_display_pos[u.id] + style["knock"], 0.1), "age": 0.0, "life": 0.6})
+	get_tree().create_timer(DEATH_TIME * 0.8).timeout.connect(landed)
+
+
+## An enemy the watching side can't see at the moment (always false when watching everything).
+func _unseen_enemy(u: Unit) -> bool:
+	var view := _view_team()
+	return u != null and view != -1 and u.team != view and not _is_drawn(u)
+
+
+## What an unseen enemy did: the view's bookkeeping is kept up to date, but nothing is shown or logged
+## beyond what could be noticed from afar.
+func _play_unseen(e: Dictionary) -> void:
+	var u := battle.get_unit(e["unit"])
+	match e["type"]:
+		"pivot":
+			_facing[u.id] = Vector2(e["to"]).normalized()
+		"damage", "heal":
+			_display_hp[u.id] = e["hp"]
+		"suppression":
+			_display_suppression[u.id] = e["value"]
+		"mortar_fire":
+			_log_line("[color=#ffb84d]A mortar fires somewhere in the distance.[/color]")
+		"smoke":
+			_effects.append({"kind": "puff_burst", "at": _center(e["center"]), "age": 0.0, "life": 0.8})
+			_log_line("Smoke rises.")
+		"mine":
+			_float(_center(e["tile"]), "MINE!", Color("ff3b3b"))
+			_log_line("[color=#ff6b6b]A mine goes off.[/color]")
+
+
 func _play_move(e: Dictionary) -> void:
 	var u := battle.get_unit(e["unit"])
 	var path: Array = e["path"]
@@ -944,12 +1043,13 @@ func _jump_move(u: Unit, e: Dictionary) -> void:
 ## Whether the camera follows a team's moves: always your own, the opponent's only if the setting says so.
 ## With no human playing (AI vs AI) it follows everyone.
 func _follows(team: int) -> bool:
-	return GameSettings.follow_opponent or controllers[team] == null or _view_team() == -1
+	return GameSettings.follow_opponent or controllers[team] == null or _view_team() == -1 or replay != null
 
 
 func _play_shot(e: Dictionary) -> void:
 	var shooter := battle.get_unit(e["shooter"])
 	var target := battle.get_unit(e["target"])
+	_last_source = {"at": _display_pos[shooter.id], "blast": false}
 	_revealed[shooter.id] = true
 	_revealed[target.id] = true
 	_facing[shooter.id] = (_display_pos[target.id] - _display_pos[shooter.id]).normalized()
@@ -1168,6 +1268,14 @@ func _refresh() -> void:
 			else:
 				_target_odds[e.id] = battle.shot_odds(selected, e, false, _shot_cmd == "aimed_shot")["hit"]
 	_flankers = _compute_flankers()
+	_gun_view.clear()
+	if can_act or (selected != null and not busy and selected.team == view):
+		for p: Vector2i in battle.visible_from(selected.pos, selected.current_sight()):
+			if p == selected.pos:
+				_gun_view[p] = 0
+			else:
+				var modifier := selected.weapon.range_modifier(Vector2(p).distance_to(Vector2(selected.pos)))
+				_gun_view[p] = 1 if modifier >= GUN_GOOD else (-1 if modifier <= GUN_POOR else 0)
 	_update_panel()
 	_update_target_info()
 	_mark_chunks_dirty(false)
@@ -1915,6 +2023,7 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 		c.draw_polyline(TerrainPainter.ground_circle(_proj, center, radius), color, 2.0)
 	if busy or selected == null or not _is_human_turn():
 		return
+	_draw_gun_view(c)
 	if mode == Mode.MOVE and not _reach.is_empty():
 		for p: Vector2i in _reach:
 			if p != selected.pos:
@@ -1985,6 +2094,25 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 					c.draw_polyline(TerrainPainter.ground_circle(_proj, _display_pos[risk["unit"].id], 0.45), Color("ff6b6b"), 2.5)
 
 
+## The selected unit's field of fire: an outline round everything it can see, a green outline round where
+## its gun is at its best, and a faint red where it's poor. Aiming fills the bands in.
+func _draw_gun_view(c: CanvasItem) -> void:
+	if _gun_view.is_empty() or mode in [Mode.GRENADE, Mode.SMOKE, Mode.MORTAR, Mode.MEDKIT, Mode.PIVOT]:
+		return
+	var aiming := mode == Mode.SHOOT
+	var good := {}
+	for p: Vector2i in _gun_view:
+		var band: int = _gun_view[p]
+		if band == 1:
+			good[p] = true
+		if aiming and band != 0:
+			c.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), Color(0.55, 0.9, 0.45, 0.1) if band == 1 else Color(1, 0.4, 0.3, 0.08))
+		elif band == -1:
+			c.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), Color(1, 0.4, 0.3, 0.05))
+	_draw_region_border(c, _gun_view, Color(1, 0.95, 0.8, 0.45 if aiming else 0.3))
+	_draw_region_border(c, good, Color(0.55, 0.9, 0.45, 0.7 if aiming else 0.45))
+
+
 ## An arrow on the ground showing which way a tank will face on a tile.
 func _draw_heading(c: CanvasItem, tile: Vector2i, dir: Vector2i, color: Color) -> void:
 	var at := _center(tile)
@@ -2009,7 +2137,7 @@ func _draw_region_border(c: CanvasItem, tiles: Dictionary, color: Color) -> void
 func _pose(u: Unit) -> Dictionary:
 	var death := 0.0
 	if _display_hp[u.id] <= 0:
-		death = clampf((_time - _died_at.get(u.id, -10.0)) / 0.45, 0.0, 1.0)
+		death = clampf((_time - _died_at.get(u.id, -10.0)) / (WRECK_TIME if u.vehicle else DEATH_TIME), 0.0, 1.0)
 	var alive := death == 0.0
 	return {
 		"facing": _facing[u.id],
@@ -2021,6 +2149,7 @@ func _pose(u: Unit) -> Dictionary:
 		"deployed": u.deployed and alive,
 		"wounded": u.is_wounded() and alive,
 		"death": death,
+		"fall_forward": _death_style.get(u.id, {}).get("forward", false),
 		"flash": clampf(1.0 - (_time - _hit_at.get(u.id, -10.0)) / 0.3, 0.0, 1.0),
 		"breath": _time * 2.2 + u.id * 1.7,
 		"time": _time,
@@ -2042,7 +2171,13 @@ func _paint_unit(c: CanvasItem, u: Unit) -> void:
 		return
 	if pose["death"] > 0.0:
 		var facing: Vector2 = pose["facing"]
-		c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, g - facing * 0.3, 0.05 + 0.25 * pose["death"], false), Color(0.33, 0.03, 0.03, 0.7))
+		var death: float = pose["death"]
+		# Thrown back as he falls (furthest by a blast), then a pool of blood spreads slowly under him.
+		g += _death_style.get(u.id, {}).get("knock", Vector2.ZERO) * (1.0 - pow(1.0 - death, 3.0))
+		var head := g + facing * (0.3 if pose["fall_forward"] else -0.3)
+		var spread := clampf((_time - _died_at.get(u.id, -10.0) - DEATH_TIME * 0.7) / 3.0, 0.0, 1.0)
+		if death >= 1.0 and spread > 0.0:
+			c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, head.lerp(g, 0.4), 0.06 + 0.26 * sqrt(spread), false), Color(0.33, 0.03, 0.03, 0.7))
 	else:
 		c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, g + TerrainPainter.LIGHT * 0.25, 0.26, false), Color(0, 0, 0, 0.3))
 		# A ring in the side's colour under every soldier, so the sides read apart at a glance.
@@ -2120,16 +2255,21 @@ func _draw_markers() -> void:
 			draw_string(_font, top + Vector2(-30, -18), odds_text, HORIZONTAL_ALIGNMENT_CENTER, 60, 15, Color.WHITE)
 	if busy or selected == null or not battle.map.in_bounds(hover) or mode != Mode.MOVE or not _reach.has(hover) or hover == selected.pos:
 		return
-	# Cover shields on each side of the move destination, and lines to enemies that would flank it.
+	# Cover shields on each side of the move destination, and how many seen enemies would have it in the open.
 	var center := _center(hover)
 	for d: Vector2i in TacticalMap.DIRS4:
 		var c := battle.map.cover_toward(hover, d)
 		if c != Cover.NONE:
 			_draw_shield(_proj.project(center + Vector2(d) * 0.36, 0.5), c == Cover.FULL)
-	for e in _flankers:
-		draw_dashed_line(_proj.project(center, 0.5), _proj.project(_display_pos[e.id], 0.5), Color(1, 0.3, 0.3, 0.8), 2.0, 6.0)
+	var notes := PackedStringArray()
 	if not _move_tiles.has(hover):
-		draw_string(_font, _proj.project(center) + Vector2(-30, 20), "DASH", HORIZONTAL_ALIGNMENT_CENTER, 60, 12, DASH_COLOR)
+		notes.append("DASH")
+	if not _flankers.is_empty():
+		notes.append("EXPOSED TO %d" % _flankers.size())
+	if not notes.is_empty():
+		var at := _proj.project(center) + Vector2(-60, 20)
+		draw_string_outline(_font, at, "  ".join(notes), HORIZONTAL_ALIGNMENT_CENTER, 120, 12, 3, Color(0, 0, 0, 0.7))
+		draw_string(_font, at, "  ".join(notes), HORIZONTAL_ALIGNMENT_CENTER, 120, 12, Color("ff8a7a") if not _flankers.is_empty() else DASH_COLOR)
 
 
 func _draw_shield(at: Vector2, full: bool) -> void:

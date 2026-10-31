@@ -79,7 +79,8 @@ static func is_local(host: String) -> bool:
 ## on a thread. Returns {"upnp": UPNP, "address": the router's public address} or {} if it said no.
 static func open_router_port(port: int) -> Dictionary:
 	var upnp := UPNP.new()
-	if upnp.discover(1500, 2) != UPNP.UPNP_RESULT_SUCCESS:
+	# Routers don't always answer the first discovery in time.
+	if upnp.discover(1500, 2) != UPNP.UPNP_RESULT_SUCCESS and upnp.discover(2500, 2) != UPNP.UPNP_RESULT_SUCCESS:
 		return {}
 	var gateway := upnp.get_gateway()
 	if gateway == null or not gateway.is_valid_gateway():

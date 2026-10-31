@@ -13,6 +13,15 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   and stance. The exact hit chance is shown, with every modifier itemised.
 - Directional half and full cover, flanking and line of sight that steps out around corners. Fog of war,
   overwatch, and destructible cover with craters.
+- Fog of war hides what the enemy does out of sight: no turning, stance changes, reloading, healing or damage
+  shown for units you can't see, only what you'd notice from afar (a mortar firing, smoke rising, a mine
+  going off).
+- Overwatch holds its fire for targets it can't hurt, such as rifles and machine guns against a tank.
+- The selected soldier's field of fire: an outline round everything it can see, green where its gun is at its
+  best and a red tint where the range is poor (filled in while aiming).
+- Moving shows the cover at the destination, and "EXPOSED TO 2" if seen enemies would have it in the open.
+- Soldiers fall away from what killed them (thrown back by blasts), drop their weapon, and bleed out slowly;
+  tanks brew up, their turret blown off its ring.
 - Suppression and pinning, wounds that slow soldiers for two turns, panic when friends die, and an officer
   who can rally the squad.
 - Roles:
@@ -58,7 +67,10 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
     forward) or defensive (further back, behind sandbags, crouched).
   - Win a map to take its points; a draw splits them. Most points wins.
 - **Skirmish** on the hand-made Normandy village, a random map (standard 44x44, large 64x64, huge 84x84 with
-  bigger forces), or your own scenarios. Play vs AI, hotseat, or watch AI vs AI.
+  bigger forces), or your own scenarios. Play vs AI, hotseat, or watch AI vs AI. On the village and random
+  maps each side picks a deployment, as in the two-player campaign: the usual spawns, balanced or massed on
+  the left or right flank, offensive (further forward) or defensive (further back, behind sandbags,
+  crouched), or random. Online, the host picks both.
 - **Online**: two computers connect directly, at home or over the internet, no server needed.
   - Every game has a password. The joiner proves it knows the password before the host lets it in (the
     password itself never travels); wrong guesses are turned away, and a run of them locks the game for a
@@ -82,6 +94,11 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 **Other**
 - **Saves**: a campaign slot and a skirmish slot with autosave, "Save & quit", and exact replay (dice and AI
   memory included).
+- **Replays**: every battle is recorded (against the AI, hotseat, AI vs AI, both campaigns, online), including
+  across saves. Watch it from the game-over screen or the main menu's Replays page (the last 20 finished
+  battles, plus battles in progress). Play, pause, step one order at a time, skip to the next turn, restart,
+  change the speed, and switch the fog of war at any moment between the Allies' view, Germany's view and the
+  whole map.
 - **Settings**: instant movement, following opponent moves, playback speeds, camera pan speed, hit chances,
   end-turn confirmation, fullscreen, and the AI helper switches.
 
@@ -104,6 +121,9 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 | Q / E / V | Rotate the view / switch isometric and top-down |
 | + / - | Playback speed |
 
+While watching a replay: Space play / pause, N next action, Enter next turn, R restart, 1 / 2 / 3 the Allies'
+view, Germany's view, the whole map. Camera keys and + / - work as in battle.
+
 The map editor has its own keys, listed in its panel: 1–7 pick a tool, R turns a unit, Ctrl+Z undoes and
 Ctrl+S saves.
 
@@ -125,14 +145,16 @@ codesign --force --deep -s - "build/Normandy 1944.app"
 
 Run the export command once first so the export templates for 4.7 are installed. To try online play on one
 computer, open the app twice (`open -n "build/Normandy 1944.app"`), type the same password in both, host in
-one and join `127.0.0.1` in the other. Over the internet, join the address the host's waiting page shows. If
+one and join `127.0.0.1` in the other. Players behind the same router always use the "On your network"
+address: most routers won't pass a connection to their own internet address back inside, and the joining
+game says so. Over the internet, join the address the host's waiting page shows. If
 neither the router nor "Let them in" gets you connected (some mobile and office networks block it), forward
 UDP port 24944 on the host's router, or both use a VPN such as Tailscale.
 
 ## Testing and balancing
 
 ```sh
-Godot --headless --path . -s tests/run_tests.gd         # engine, AI, saves, scenarios, settings
+Godot --headless --path . -s tests/run_tests.gd         # engine, AI, saves, replays, scenarios, settings
 Godot --headless --path . -s tests/advisor_tests.gd     # move suggestions and the MCP tools
 Godot --headless --path . -s tests/terrain_tests.gd     # fuel drums, oil tanks, fire, mines, wheat and wire
 GODOT=Godot sh tests/net_resume.sh 26000 44             # two copies online: save, quit, resume, desync checks
@@ -154,6 +176,7 @@ A single online match between two processes, with the AI on both sides:
 | `scripts/view/` | Battle scene, isometric projection and procedural painters for terrain, soldiers and tanks |
 | `scripts/ui/` | Main menu and campaign screens, settings, theme, map editor |
 | `scripts/campaign/` | The campaign |
+| `scripts/replay/` | Recording battles and replay files (the viewer is `scripts/view/replay_controls.gd`) |
 | `scripts/net/` | Online play |
 | `scripts/advisor/`, `scripts/mcp/` | Move suggestions and the agent link |
 | `scenarios/` | Bundled scenarios (JSON) |

@@ -119,7 +119,7 @@ func act() -> Array:
 	var events := battle.execute(command)
 	if events.is_empty() and command["cmd"] != "end_turn":
 		push_warning("AI command %s was rejected; ending turn" % command)
-		return battle.end_turn()
+		return battle.execute({"cmd": "end_turn"})
 	return events
 
 

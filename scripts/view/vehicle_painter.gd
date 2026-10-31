@@ -18,15 +18,17 @@ const SCALE := 1.3
 static func draw(c: CanvasItem, proj: ViewProjection, g: Vector2, unit: Unit, pose: Dictionary) -> void:
 	var facing: Vector2 = pose["facing"]
 	var right := Vector2(-facing.y, facing.x)
-	var wrecked: bool = pose["death"] >= 1.0
+	# Brewing up: the hull blackens, and the turret is blown up off its ring and comes down askew.
+	var death: float = pose["death"]
+	var wrecked: bool = death >= 1.0
 	var flash: float = pose["flash"]
-	var hull: Color = WRECK if wrecked else HULLS[unit.team]
-	var tracks := TRACKS.darkened(0.3) if wrecked else TRACKS
+	var hull: Color = (HULLS[unit.team] as Color).lerp(WRECK, death)
+	var tracks := TRACKS.lerp(TRACKS.darkened(0.3), death)
 	if flash > 0.0:
 		hull = hull.lerp(Color.WHITE, flash)
 	var german := unit.team == 1
-	# Turret slews a little off-centre on a wreck.
-	var turret_turn := 0.5 if wrecked else 0.0
+	var turret_turn := 0.5 * minf(1.0, death * 1.5)
+	var turret_lift := sin(clampf(death / 0.7, 0.0, 1.0) * PI) * 0.45
 	var turret_facing := facing.rotated(turret_turn)
 	var turret_right := Vector2(-turret_facing.y, turret_facing.x)
 
@@ -37,12 +39,12 @@ static func draw(c: CanvasItem, proj: ViewProjection, g: Vector2, unit: Unit, po
 		[_box(g, facing * k, right * k, -0.42, 0.44, -0.27, 0.27), 0.1 * k, 0.4 * k, hull],
 	]
 	var turret := _box(g, turret_facing * k, turret_right * k, -0.2, 0.15, -0.18, 0.18) if german else _octagon(g + facing * -0.03 * k, turret_facing, 0.2 * k)
-	parts.append([turret, 0.4 * k, 0.62 * k, hull.lightened(0.05)])
+	parts.append([turret, (0.4 + turret_lift) * k, (0.62 + turret_lift) * k, hull.lightened(0.05)])
 	parts.sort_custom(func(a: Array, b: Array) -> bool: return _depth(proj, a[0], a[1]) < _depth(proj, b[0], b[1]))
 
 	# The gun is drawn before the turret when it points away from the viewer, after it otherwise.
-	var gun_from := proj.project(g + turret_facing * 0.08 * k, 0.52 * k)
-	var gun_to := proj.project(g + turret_facing * (0.66 if german else 0.62) * k, 0.54 * k)
+	var gun_from := proj.project(g + turret_facing * 0.08 * k, (0.52 + turret_lift) * k)
+	var gun_to := proj.project(g + turret_facing * (0.66 if german else 0.62) * k, (0.54 + turret_lift - 0.12 * death) * k)
 	var gun_toward_viewer := proj.depth(g + turret_facing) > proj.depth(g)
 	for part: Array in parts:
 		if part == parts.back() and not gun_toward_viewer:
@@ -54,7 +56,7 @@ static func draw(c: CanvasItem, proj: ViewProjection, g: Vector2, unit: Unit, po
 					c.draw_line(q[0].lerp(q[1], t), q[3].lerp(q[2], t), tracks.lightened(0.15), 1.0)
 	if gun_toward_viewer:
 		_gun(c, gun_from, gun_to, german, wrecked)
-	if not wrecked:
+	if death < 0.5:
 		_marking(c, proj, g + turret_facing * -0.03 * k, turret_facing, german)
 	if pose["death"] > 0.0:
 		_burn(c, proj, g, pose["time"])

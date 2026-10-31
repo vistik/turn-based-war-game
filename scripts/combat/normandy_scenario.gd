@@ -19,11 +19,15 @@ const S := MapBuilder.S
 const W := MapBuilder.W
 
 
-static func build(seed := 0) -> Battle:
+## `deployments`: per side {"flank", "posture"} as in WarCampaign.deploy, or {} for the usual spawns.
+static func build(seed := 0, deployments := [{}, {}]) -> Battle:
 	var waves := []
 	for team in Battle.TEAM_COUNT:
 		waves.append({"round": REINFORCEMENT_ROUND, "team": team, "roster": REINFORCEMENTS})
-	return BattleFactory.create(layout(), [ROSTER, ROSTER], seed, {"reinforcements": waves})
+	var village := layout()
+	var battle := BattleFactory.create(village, WarCampaign.deploy(village, [ROSTER, ROSTER], deployments), seed, {"reinforcements": waves})
+	WarCampaign.brace(battle, deployments)
+	return battle
 
 
 static func layout() -> Dictionary:

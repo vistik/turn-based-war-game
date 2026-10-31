@@ -10,6 +10,9 @@ extends RefCounted
 ## Every command can also be given as data through execute(), which is how AI moves, saved replays
 ## and the online opponent's moves are applied: {"cmd": "move", "unit": id, "tile": Vector2i}, etc.
 
+## Emitted after execute() applied a command (one that produced events), so it can be recorded for replays.
+signal executed(command: Dictionary)
+
 const TEAM_COUNT := 2
 const TEAM_NAMES := ["Allies", "Germany"]
 ## `winner` value when the game ends level.
@@ -809,6 +812,13 @@ func use_medkit(u: Unit, target: Unit) -> Array:
 
 ## Applies a command given as data. Returns its events, or [] when it isn't allowed.
 func execute(command: Dictionary) -> Array:
+	var events := _apply_command(command)
+	if not events.is_empty():
+		executed.emit(command)
+	return events
+
+
+func _apply_command(command: Dictionary) -> Array:
 	var cmd: String = command.get("cmd", "")
 	if cmd == "end_turn":
 		return end_turn()
@@ -1202,7 +1212,8 @@ func _status(u: Unit, text: String) -> Array:
 func _overwatchers_seeing(u: Unit) -> Array[Unit]:
 	var result: Array[Unit] = []
 	for e in enemies_of(u):
-		if e.overwatch and e.ammo > 0 and not e.is_pinned() and can_see(e, u):
+		# Overwatch holds its fire for targets it couldn't hurt, such as rifles against a tank.
+		if e.overwatch and e.ammo > 0 and not e.is_pinned() and CombatRules.can_hurt(e.weapon, u, e.pos) and can_see(e, u):
 			result.append(e)
 	return result
 

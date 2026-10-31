@@ -14,6 +14,14 @@ const SKIRMISH_MAPS := [
 	["Random map, large (64x64, 12 a side)", "random", 64],
 	["Random map, huge (84x84, 15 a side with tanks)", "random", 84],
 ]
+## [label, flank, posture] for a skirmish side's deployment; "" flank keeps the map's usual spawns.
+const DEPLOYMENTS := [
+	["Usual spawns", "", ""],
+	["Balanced, offensive", "balanced", "offensive"], ["Balanced, defensive", "balanced", "defensive"],
+	["Left flank, offensive", "left", "offensive"], ["Left flank, defensive", "left", "defensive"],
+	["Right flank, offensive", "right", "offensive"], ["Right flank, defensive", "right", "defensive"],
+	["Random", "random", "random"],
+]
 ## [label, Allies are AI, Germany is AI]
 const SKIRMISH_MODES := [["Play vs AI", false, true], ["Hotseat", false, false], ["Watch AI vs AI", true, true]]
 
@@ -22,6 +30,9 @@ var _map_choice: OptionButton
 ## Scenario files listed after SKIRMISH_MAPS in the map choice.
 var _scenario_paths: Array[String] = []
 var _recruit_choice: OptionButton
+## Per side, the skirmish deployment picked (an index into DEPLOYMENTS), kept while the game runs.
+var _deploy_choices: Array[OptionButton] = []
+static var _last_deployments := [0, 0]
 ## The orders being written on the two-player campaign's orders page.
 var _order_side := 0
 var _order_counts := {}
@@ -108,6 +119,22 @@ func _show_main() -> void:
 		_scenario_paths.append(entry["path"])
 	_map_choice.custom_minimum_size = Vector2(0, 40)
 	box.add_child(_map_choice)
+	_deploy_choices.clear()
+	for side in 2:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		box.add_child(row)
+		var label := _text(row, Battle.TEAM_NAMES[side], ALLIED if side == 0 else GERMAN, 14)
+		label.custom_minimum_size = Vector2(70, 0)
+		var choice := OptionButton.new()
+		for entry: Array in DEPLOYMENTS:
+			choice.add_item(entry[0])
+		choice.selected = _last_deployments[side]
+		choice.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		choice.item_selected.connect(func(index: int) -> void: _last_deployments[side] = index)
+		row.add_child(choice)
+		_deploy_choices.append(choice)
+	_text(box, "Deployment: balanced along your edge or massed on the left or right flank (seen from your own edge), offensive (further forward) or defensive (further back, behind sandbags, crouched). Not for scenarios, which place their own units.", MUTED, 13, true)
 	var modes := HBoxContainer.new()
 	modes.add_theme_constant_override("separation", 8)
 	box.add_child(modes)
@@ -159,6 +186,7 @@ func _show_main() -> void:
 		if not online_save["hosted"]:
 			_address.text = online_save["opponent"]
 	_gap(box, 12)
+	_button(box, "Replays", _show_replays)
 	_button(box, "Settings", _show_settings)
 	_button(box, "Quit", get_tree().quit)
 
@@ -191,7 +219,19 @@ func _skirmish_setup() -> Dictionary:
 			return {"map": "scenario", "scenario": scenario.to_data(), "seed": randi() % 1000000000 + 1}
 		push_warning(Scenario.last_error)
 	var spec: Array = SKIRMISH_MAPS[maxi(0, _map_choice.selected) if index < 0 else 0]
-	return {"map": spec[1], "size": spec[2], "seed": randi() % 1000000000 + 1}
+	return {"map": spec[1], "size": spec[2], "seed": randi() % 1000000000 + 1, "deployment": _chosen_deployments()}
+
+
+## The two sides' deployments for GameSession.build_skirmish, with "Random" settled now so both online games
+## build the same battle.
+func _chosen_deployments() -> Array:
+	var result := []
+	for side in 2:
+		var entry: Array = DEPLOYMENTS[_deploy_choices[side].selected if side < _deploy_choices.size() else 0]
+		if entry[1] == "random":
+			entry = DEPLOYMENTS[randi_range(1, DEPLOYMENTS.size() - 2)]
+		result.append({} if entry[1] == "" else {"flank": entry[1], "posture": entry[2]})
+	return result
 
 
 func _start_skirmish(mode: int) -> void:
@@ -211,7 +251,7 @@ func _host() -> void:
 	_host_offer = {}
 	if not await _open_game(port, 0):
 		return
-	_show_host_page(_map_choice.get_item_text(_map_choice.selected))
+	_show_host_page(_map_choice.get_item_text(_map_choice.selected), port)
 
 
 ## Hosting: reach the internet (router and STUN), then listen on `port` as `team`. False if it didn't work
@@ -243,12 +283,11 @@ func _take_password() -> bool:
 
 
 ## Waiting for the other player: where they can find us, and a way to let them through the NAT.
-func _show_host_page(what: String) -> void:
+func _show_host_page(what: String, port: int) -> void:
 	var box := _new_page(600)
 	_title(box, "Waiting for the other player", 32)
 	_text(box, what, UITheme.PAPER, 16, true)
 	_text(box, "They choose Join game, type the same password, and one of these addresses:", UITheme.PAPER, 16, true)
-	var port := _port.text.to_int()
 	var lines := []
 	if Net.internet_address != "":
 		lines.append("Over the internet:  %s" % Net.internet_address)
@@ -302,6 +341,13 @@ func _join() -> void:
 		var page := _page
 		await Net.prepare_internet(local_port, false)
 		if _page != page:
+			return
+		# The host's internet address is our own: it's behind the same router (or on this computer), and
+		# most routers won't pass a connection to their own address back inside.
+		if host == Net.internet_address.get_slice(":", 0):
+			Net.close()
+			_show_net_page("The host is on your network",
+					"%s is this network's own internet address, so the host is behind the same router as you (or on this computer). Join with the address the host's page shows under \"On your network\" instead, e.g. 192.168.1.20:%d." % [host, port], "Back")
 			return
 	var err := Net.join(host, port, local_port)
 	if err != OK:
@@ -369,7 +415,7 @@ func _host_resume() -> void:
 	if not await _open_game(port, offer["team"]):
 		return
 	_host_offer = offer
-	_show_host_page("Continuing %s, round %d, as %s." % [offer["title"], offer["round"], Battle.TEAM_NAMES[offer["team"]]])
+	_show_host_page("Continuing %s, round %d, as %s." % [offer["title"], offer["round"], Battle.TEAM_NAMES[offer["team"]]], port)
 
 
 ## Joiner: the host wants to continue a saved game. Matching saves go straight on; otherwise ask first.
@@ -432,6 +478,70 @@ func _show_settings() -> void:
 		GameSettings.save_settings()
 		GameSettings.apply_window()
 		_show_settings())
+
+
+# --- Replays ---
+
+## Finished battles (Replay files, newest first) and the battles in progress in the save slots.
+func _show_replays() -> void:
+	var box := _new_page(700)
+	_title(box, "Replays", 40)
+	_text(box, "Every battle is recorded. Watch one again with the fog of war of either side, or the whole map. The last %d finished battles are kept." % Replay.KEEP, MUTED, 14, true)
+	var in_progress := []
+	for slot in ["campaign", "skirmish", "war", "online"]:
+		var data := GameSession.peek(slot)
+		if not data.get("replay", {}).is_empty():
+			in_progress.append(data["replay"])
+	if not in_progress.is_empty():
+		_section(box, "In progress")
+		for data: Dictionary in in_progress:
+			_replay_row(box, data, "")
+	_section(box, "Finished battles")
+	var finished := Replay.list()
+	if finished.is_empty():
+		_text(box, "None yet.", MUTED, 14)
+	for data in finished:
+		_replay_row(box, data, data["path"])
+	_gap(box, 12)
+	_button(box, "Back", _show_main, true)
+
+
+## One replay: title, date, sides and result, with Watch (and Delete for a file).
+func _replay_row(parent: Control, data: Dictionary, path: String) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	parent.add_child(row)
+	var info := VBoxContainer.new()
+	info.add_theme_constant_override("separation", 0)
+	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(info)
+	_text(info, data.get("title", "?"), Color.WHITE, 16)
+	var sides: Array = data.get("sides", ["", ""])
+	var result: String = data.get("result", "")
+	var details := "%s   Allies (%s) vs Germany (%s)   %s" % [Replay.date_text(data.get("date", 0)), sides[0], sides[1],
+			result if result != "" else "in progress, %d orders" % data.get("orders", data.get("commands", []).size())]
+	var winner: int = data.get("winner", -1)
+	_text(info, details, ALLIED if winner == 0 else (GERMAN if winner == 1 else MUTED), 13)
+	_button(row, "Watch", _watch_replay.bind(data, path))
+	if path != "":
+		_button(row, "Delete", func() -> void:
+			Replay.delete_file(path)
+			_show_replays())
+
+
+func _watch_replay(data: Dictionary, path: String) -> void:
+	var replay := Replay.load_file(path) if path != "" else Replay.from_dict(data)
+	var problem := "The replay can't be read." if replay == null else replay.verify()
+	if problem != "":
+		var box := _new_page(560)
+		_title(box, "Can't show this replay", 32)
+		_text(box, problem + " The game's rules have probably changed since it was recorded.", Color.WHITE, 16, true)
+		_gap(box, 12)
+		_button(box, "Back", _show_replays, true)
+		return
+	ReplayControls.return_to_campaign = false
+	GameSession.watching = replay
+	get_tree().change_scene_to_file(GameSession.BATTLE_SCENE)
 
 
 # --- Campaign screen ---

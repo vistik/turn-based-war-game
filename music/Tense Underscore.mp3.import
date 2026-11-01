@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://b77egl0wn5j7k"
+path="res://.godot/imported/Tense Underscore.mp3-48e851aa37f5393816c0666038d1c668.mp3str"
+
+[deps]
+
+source_file="res://music/Tense Underscore.mp3"
+dest_files=["res://.godot/imported/Tense Underscore.mp3-48e851aa37f5393816c0666038d1c668.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

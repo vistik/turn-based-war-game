@@ -47,7 +47,7 @@ var aim: int
 var defense := 0
 ## Movement budget per action, in path cost (1 = one open tile).
 var mobility: float
-var sight := 12.0
+var sight := 18.0
 var weapon: Weapon
 var ammo: int
 var grenades := 0

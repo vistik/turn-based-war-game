@@ -401,7 +401,7 @@ func _position_score(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 		var nearest := INF
 		for e in seen:
 			nearest = minf(nearest, Vector2(tile).distance_to(Vector2(e.pos)))
-		score -= absf(nearest - float(u.def.get("range", 6.0))) * RANGE_WEIGHT
+		score -= absf(nearest - float(u.def.get("range", 6.0)) * Weapon.RANGE_SCALE) * RANGE_WEIGHT
 		if nearest_open < INF and not u.def.get("holds_back", false):
 			score -= nearest_open * OBJECTIVE_PULL * (1.0 + 2.0 * _urgency)
 

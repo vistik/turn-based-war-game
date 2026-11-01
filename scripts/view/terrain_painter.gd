@@ -163,7 +163,7 @@ static func ground_circle(proj: ViewProjection, g: Vector2, radius: float, close
 
 # --- Ground ---
 
-static func draw_tile(c: CanvasItem, proj: ViewProjection, map: TacticalMap, p: Vector2i) -> void:
+static func draw_tile(c: Object, proj: ViewProjection, map: TacticalMap, p: Vector2i) -> void:
 	var g := Vector2(p)
 	var n := noise(p)
 	if _arid() and _draw_arid_tile(c, proj, map, p, g, n):
@@ -172,14 +172,14 @@ static func draw_tile(c: CanvasItem, proj: ViewProjection, map: TacticalMap, p: 
 		TacticalMap.Terrain.FLOOR when _tropical():
 			# Lush scrub: brighter grass, more blades and the odd broad-leafed tuft.
 			c.draw_colored_polygon(tile_poly(proj, p), TROPIC_GRASS[0].lerp(TROPIC_GRASS[1], n))
-			for i in 8:
+			for i in 6:
 				var at := g + Vector2(0.08, 0.08) + Vector2(noise(p, i * 2 + 1), noise(p, i * 2 + 2)) * 0.84
 				c.draw_line(proj.project(at), proj.project(at + Vector2(0.03, -0.05), 0.13), TROPIC_BLADES[i % 3], 1.5)
-			if n > 0.55:
+			if n > 0.65:
 				var tuft := g + Vector2(0.25, 0.25) + Vector2(noise(p, 31), noise(p, 32)) * 0.5
-				for j in 4:
-					var dir := Vector2.from_angle(TAU * j / 4.0 + n * 3.0)
-					_leaf(c, proj.project(tuft), proj.project(tuft + dir * 0.13, 0.1), 2.2, TROPIC_BLADES[j % 3].darkened(0.1))
+				for j in 3:
+					var dir := Vector2.from_angle(TAU * j / 3.0 + n * 3.0)
+					_leaf(c, proj.project(tuft), proj.project(tuft + dir * 0.13, 0.1), 2.2, TROPIC_BLADES[j % 3].darkened(0.1), false)
 		TacticalMap.Terrain.FLOOR:
 			c.draw_colored_polygon(tile_poly(proj, p), GRASS[0].lerp(GRASS[1], n))
 			for i in 6:
@@ -305,7 +305,7 @@ static func draw_tile(c: CanvasItem, proj: ViewProjection, map: TacticalMap, p: 
 
 
 ## The shadow a prism of the given height casts on the ground.
-static func draw_shadow(c: CanvasItem, proj: ViewProjection, footprint: PackedVector2Array, height: float) -> void:
+static func draw_shadow(c: Object, proj: ViewProjection, footprint: PackedVector2Array, height: float) -> void:
 	var points := PackedVector2Array()
 	for p in footprint:
 		points.append(proj.project(p))
@@ -317,7 +317,7 @@ static func draw_shadow(c: CanvasItem, proj: ViewProjection, footprint: PackedVe
 		c.draw_colored_polygon(hull, SHADOW)
 
 
-static func draw_object_shadow(c: CanvasItem, proj: ViewProjection, map: TacticalMap, p: Vector2i) -> void:
+static func draw_object_shadow(c: Object, proj: ViewProjection, map: TacticalMap, p: Vector2i) -> void:
 	var center := Vector2(p) + Vector2(0.5, 0.5)
 	match map.get_object_kind(p):
 		"tree" when _arid():
@@ -349,7 +349,7 @@ static func draw_object_shadow(c: CanvasItem, proj: ViewProjection, map: Tactica
 			draw_shadow(c, proj, rect_poly(Rect2(Vector2(p), Vector2.ONE).grow(-0.2)), 0.45)
 
 
-static func draw_edge_shadow(c: CanvasItem, proj: ViewProjection, map: TacticalMap, key: Vector3i) -> void:
+static func draw_edge_shadow(c: Object, proj: ViewProjection, map: TacticalMap, key: Vector3i) -> void:
 	var kind := map.edge_kind(key)
 	var height: float = {"wall": WALL_HEIGHT, "window": WALL_HEIGHT, "hedge": HEDGE_HEIGHT, "stone": LOW_WALL_HEIGHT,
 		"dyke": DYKE_HEIGHT, "bamboo_wall": WALL_HEIGHT, "bamboo_window": WALL_HEIGHT, "mud_wall": WALL_HEIGHT,
@@ -364,7 +364,7 @@ static func draw_edge_shadow(c: CanvasItem, proj: ViewProjection, map: TacticalM
 
 ## A vertical prism over a convex grid footprint, lit from LIGHT. Returns the visible side faces
 ## as screen quads [bottom a, bottom b, top b, top a] so callers can add surface detail.
-static func prism(c: CanvasItem, proj: ViewProjection, footprint: PackedVector2Array, base: float, top: float, color: Color, alpha := 1.0) -> Array:
+static func prism(c: Object, proj: ViewProjection, footprint: PackedVector2Array, base: float, top: float, color: Color, alpha := 1.0) -> Array:
 	var faces := []
 	var center := Vector2.ZERO
 	for p in footprint:
@@ -395,7 +395,7 @@ static func prism(c: CanvasItem, proj: ViewProjection, footprint: PackedVector2A
 	return faces
 
 
-static func draw_object(c: CanvasItem, proj: ViewProjection, map: TacticalMap, p: Vector2i, alpha: float, dark: bool) -> void:
+static func draw_object(c: Object, proj: ViewProjection, map: TacticalMap, p: Vector2i, alpha: float, dark: bool) -> void:
 	var center := Vector2(p) + Vector2(0.5, 0.5)
 	var tint := 0.45 if dark else 0.0
 	match map.get_object_kind(p):
@@ -458,7 +458,7 @@ static func draw_object(c: CanvasItem, proj: ViewProjection, map: TacticalMap, p
 
 
 ## A boulder: a wide irregular base with a smaller, offset cap.
-static func _draw_rock(c: CanvasItem, proj: ViewProjection, p: Vector2i, center: Vector2, color: Color, alpha: float) -> void:
+static func _draw_rock(c: Object, proj: ViewProjection, p: Vector2i, center: Vector2, color: Color, alpha: float) -> void:
 	var height := _rock_height(p)
 	var split := height * (0.5 + noise(p, 4) * 0.15)
 	var faces := prism(c, proj, blob_poly(center, 0.44, p, 0.7), 0.0, split, color, alpha)
@@ -471,7 +471,7 @@ static func _draw_rock(c: CanvasItem, proj: ViewProjection, p: Vector2i, center:
 			c.draw_line(q[0].lerp(q[3], t), q[1].lerp(q[2], t + 0.2), Color(color.darkened(0.4), alpha * 0.7), 1.0)
 
 
-static func _draw_tree(c: CanvasItem, proj: ViewProjection, p: Vector2i, center: Vector2, tint: float, alpha: float) -> void:
+static func _draw_tree(c: Object, proj: ViewProjection, p: Vector2i, center: Vector2, tint: float, alpha: float) -> void:
 	prism(c, proj, blob_poly(center, 0.08, p, 0.2), 0.0, 0.8, TRUNK.darkened(tint), alpha)
 	var puffs := []
 	for i in 8:
@@ -484,7 +484,7 @@ static func _draw_tree(c: CanvasItem, proj: ViewProjection, p: Vector2i, center:
 		c.draw_circle(proj.project(puff[0], puff[1]), puff[2], Color(color.darkened(tint), alpha))
 
 
-static func _draw_sandbags(c: CanvasItem, proj: ViewProjection, p: Vector2i, center: Vector2, color: Color, alpha: float) -> void:
+static func _draw_sandbags(c: Object, proj: ViewProjection, p: Vector2i, center: Vector2, color: Color, alpha: float) -> void:
 	var faces := prism(c, proj, blob_poly(center, 0.4, p, 0.05), 0.0, 0.42, color, alpha)
 	var seam := Color(color.darkened(0.35), alpha)
 	for q: Array in faces:
@@ -497,7 +497,7 @@ static func _draw_sandbags(c: CanvasItem, proj: ViewProjection, p: Vector2i, cen
 		c.draw_circle(proj.project(center + Vector2.from_angle(TAU * i / 3.0 + 0.4) * 0.17, 0.43), 4.0, Color(color.lightened(0.18), alpha))
 
 
-static func _draw_crate(c: CanvasItem, proj: ViewProjection, rect: Rect2, height: float, color: Color, alpha: float) -> void:
+static func _draw_crate(c: Object, proj: ViewProjection, rect: Rect2, height: float, color: Color, alpha: float) -> void:
 	var faces := prism(c, proj, rect_poly(rect), 0.0, height, color, alpha)
 	var line := Color(color.darkened(0.45), alpha)
 	for q: Array in faces:
@@ -509,7 +509,7 @@ static func _draw_crate(c: CanvasItem, proj: ViewProjection, rect: Rect2, height
 	c.draw_line(proj.project(corners[1], height), proj.project(corners[3], height), line, 1.0)
 
 
-static func draw_edge(c: CanvasItem, proj: ViewProjection, map: TacticalMap, key: Vector3i, alpha: float, dark: bool) -> void:
+static func draw_edge(c: Object, proj: ViewProjection, map: TacticalMap, key: Vector3i, alpha: float, dark: bool) -> void:
 	var tint := 0.45 if dark else 0.0
 	match map.edge_kind(key):
 		"dyke" when _arid():
@@ -587,7 +587,7 @@ static func draw_edge(c: CanvasItem, proj: ViewProjection, map: TacticalMap, key
 
 
 ## A drifting cloud of smoke over a tile.
-static func draw_smoke(c: CanvasItem, proj: ViewProjection, p: Vector2i, time: float) -> void:
+static func draw_smoke(c: Object, proj: ViewProjection, p: Vector2i, time: float) -> void:
 	var center := Vector2(p) + Vector2(0.5, 0.5)
 	for i in 3:
 		var drift := Vector2(sin(time * 0.6 + i * 2.1 + p.x), cos(time * 0.5 + i * 1.7 + p.y)) * 0.12
@@ -597,7 +597,7 @@ static func draw_smoke(c: CanvasItem, proj: ViewProjection, p: Vector2i, time: f
 
 
 ## Flames licking up from a burning tile, with embers.
-static func draw_fire(c: CanvasItem, proj: ViewProjection, p: Vector2i, time: float) -> void:
+static func draw_fire(c: Object, proj: ViewProjection, p: Vector2i, time: float) -> void:
 	var center := Vector2(p) + Vector2(0.5, 0.5)
 	c.draw_colored_polygon(ground_circle(proj, center, 0.42, false), Color(0.12, 0.06, 0.03, 0.55))
 	for i in 5:
@@ -615,7 +615,7 @@ static func draw_fire(c: CanvasItem, proj: ViewProjection, p: Vector2i, time: fl
 
 
 ## A spotted mine: the buried disc and a little warning sign.
-static func draw_mine(c: CanvasItem, proj: ViewProjection, p: Vector2i) -> void:
+static func draw_mine(c: Object, proj: ViewProjection, p: Vector2i) -> void:
 	var center := Vector2(p) + Vector2(0.5, 0.5)
 	c.draw_colored_polygon(ground_circle(proj, center, 0.18, false), MINE)
 	c.draw_polyline(ground_circle(proj, center, 0.18), MINE.lightened(0.3), 1.0)
@@ -655,68 +655,71 @@ const PALM_HEIGHT := 1.75
 
 
 ## A pointed leaf from base to tip, `width` pixels across at its widest, with a pale midrib.
-static func _leaf(c: CanvasItem, base: Vector2, tip: Vector2, width: float, color: Color) -> void:
+static func _leaf(c: Object, base: Vector2, tip: Vector2, width: float, color: Color, midrib := true) -> void:
 	var along := tip - base
 	if along.length() < 0.5:
 		return
 	var across := Vector2(-along.y, along.x).normalized() * width
 	var mid := base + along * 0.42
 	c.draw_colored_polygon(PackedVector2Array([base, mid + across, tip, mid - across]), color)
-	c.draw_line(base, base.lerp(tip, 0.85), color.lightened(0.18), 0.8)
+	if midrib:
+		c.draw_line(base, base.lerp(tip, 0.85), color.lightened(0.18), 0.8)
 
 
 ## Jungle: a dark floor packed with ferns and broad leaves at several heights, low enough that whoever
 ## stands in it still shows above it.
-static func _draw_jungle(c: CanvasItem, proj: ViewProjection, p: Vector2i, g: Vector2, n: float) -> void:
+static func _draw_jungle(c: Object, proj: ViewProjection, p: Vector2i, g: Vector2, n: float) -> void:
 	c.draw_colored_polygon(tile_poly(proj, p), JUNGLE_FLOOR[0].lerp(JUNGLE_FLOOR[1], n))
 	var leaves := []
-	# Fern fans low down.
-	for i in 7:
+	# Fern fans low down. (Kept lean: the ground is redrawn every frame, and jungle covers much of a map.)
+	for i in 3:
 		var at := g + Vector2(0.1, 0.1) + Vector2(noise(p, i * 2 + 61), noise(p, i * 2 + 62)) * 0.8
 		var spin := noise(p, i + 70) * TAU
-		for j in 6:
-			var dir := Vector2.from_angle(spin + TAU * j / 6.0)
+		for j in 5:
+			var dir := Vector2.from_angle(spin + TAU * j / 5.0)
 			leaves.append([proj.depth(at + dir * 0.1), at, at + dir * (0.2 + noise(p, i * 6 + j) * 0.08), 0.03, 0.18 + noise(p, j + 80) * 0.12,
 				2.4, JUNGLE_LEAVES[(i + j) % 3]])
 	# Big broad leaves standing up higher.
-	for i in 6:
+	for i in 3:
 		var at := g + Vector2(0.12, 0.12) + Vector2(noise(p, i * 2 + 91), noise(p, i * 2 + 92)) * 0.76
 		var dir := Vector2.from_angle(noise(p, i + 100) * TAU)
 		leaves.append([proj.depth(at + dir * 0.12), at, at + dir * 0.28, 0.1, 0.4 + noise(p, i + 110) * 0.15, 6.5,
 			JUNGLE_LEAVES[(i + 1) % 4]])
-	# Vines and stems standing up through it.
-	for i in 2:
+	# A vine or stem standing up through it.
+	for i in 1:
 		var at := g + Vector2(0.2, 0.2) + Vector2(noise(p, i + 120), noise(p, i + 122)) * 0.6
 		leaves.append([proj.depth(at), at, at + Vector2(0.03, -0.02), 0.0, 0.6, 1.2, JUNGLE_TRUNK.darkened(0.3)])
 	leaves.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
 	for leaf: Array in leaves:
 		var color: Color = leaf[6]
-		_leaf(c, proj.project(leaf[1], leaf[3]), proj.project(leaf[2], leaf[4]), leaf[5], color)
+		# Only the big leaves get a midrib; on the small fern leaves it doesn't show.
+		_leaf(c, proj.project(leaf[1], leaf[3]), proj.project(leaf[2], leaf[4]), leaf[5], color, leaf[5] > 3.0)
 
 
 ## A flooded rice paddy: muddy water catching the sky, and rows of rice shoots mirrored in it.
-static func _draw_paddy(c: CanvasItem, proj: ViewProjection, p: Vector2i, g: Vector2, n: float) -> void:
+static func _draw_paddy(c: Object, proj: ViewProjection, p: Vector2i, g: Vector2, n: float) -> void:
 	c.draw_colored_polygon(tile_poly(proj, p), PADDY_WATER[0].lerp(PADDY_WATER[1], n))
 	for i in 2:
 		var at := g + Vector2(0.1 + noise(p, i + 5) * 0.4, 0.15 + noise(p, i + 7) * 0.7)
 		c.draw_colored_polygon(ground_circle(proj, at + Vector2(0.15, 0.0), 0.12, false), Color(PADDY_MUD, 0.35))
-	for i in 3:
+	for i in 2:
 		var at := g + Vector2(0.1 + noise(p, i + 11) * 0.5, 0.1 + noise(p, i + 13) * 0.8)
 		c.draw_line(proj.project(at), proj.project(at + Vector2(0.3, 0.0)), Color(0.82, 0.9, 0.95, 0.22), 2.0)
-	for r in 4:
-		for k in 4:
-			var at := g + Vector2((k + 0.5) / 4.0 + (noise(p, r * 4 + k + 20) - 0.5) * 0.08, (r + 0.5) / 4.0)
+	for r in 3:
+		for k in 3:
+			var at := g + Vector2((k + 0.5) / 3.0 + (noise(p, r * 4 + k + 20) - 0.5) * 0.08, (r + 0.5) / 3.0)
 			var base := proj.project(at)
-			for s in 3:
+			for s in 2:
 				var color: Color = RICE[(s + r + k) % 3]
-				var off := Vector2(-0.03 + s * 0.03, 0.02 - s * 0.02)
+				var off := Vector2(-0.02 + s * 0.04, 0.01 - s * 0.02)
 				var tip := proj.project(at + off, 0.13 + noise(p, r * 12 + k * 3 + s) * 0.06)
-				c.draw_line(base + (base - tip) * 0.6, base, Color(color, 0.22), 1.2)
+				if s == 0:
+					c.draw_line(base + (base - tip) * 0.6, base, Color(color, 0.22), 1.2)
 				c.draw_line(base, tip, color, 1.3)
 
 
 ## A tall rainforest tree: a pale trunk with buttress roots and a broad, flat, dark canopy.
-static func _draw_jungle_tree(c: CanvasItem, proj: ViewProjection, p: Vector2i, center: Vector2, tint: float, alpha: float) -> void:
+static func _draw_jungle_tree(c: Object, proj: ViewProjection, p: Vector2i, center: Vector2, tint: float, alpha: float) -> void:
 	var trunk := JUNGLE_TRUNK.darkened(tint)
 	for i in 3:
 		var dir := Vector2.from_angle(TAU * i / 3.0 + noise(p, 3) * TAU)
@@ -739,7 +742,7 @@ static func _palm_lean(p: Vector2i) -> Vector2:
 
 
 ## A coconut palm: a slender ringed trunk curving up to a crown of drooping fronds and a few coconuts.
-static func _draw_palm(c: CanvasItem, proj: ViewProjection, p: Vector2i, center: Vector2, tint: float, alpha: float) -> void:
+static func _draw_palm(c: Object, proj: ViewProjection, p: Vector2i, center: Vector2, tint: float, alpha: float) -> void:
 	var lean := _palm_lean(p)
 	var trunk := PALM_TRUNK.darkened(tint)
 	var points := PackedVector2Array()
@@ -788,7 +791,7 @@ static func _draw_palm(c: CanvasItem, proj: ViewProjection, p: Vector2i, center:
 
 
 ## A clump of bamboo: tall jointed stalks leaning out from the root, with sprays of narrow leaves.
-static func _draw_bamboo(c: CanvasItem, proj: ViewProjection, p: Vector2i, center: Vector2, tint: float, alpha: float) -> void:
+static func _draw_bamboo(c: Object, proj: ViewProjection, p: Vector2i, center: Vector2, tint: float, alpha: float) -> void:
 	var stalks := []
 	for i in 11:
 		var at := center + Vector2.from_angle(TAU * i / 11.0 + noise(p, i) * 0.8) * 0.22 * sqrt(noise(p, i + 10))
@@ -817,7 +820,7 @@ static func _draw_bamboo(c: CanvasItem, proj: ViewProjection, p: Vector2i, cente
 
 
 ## Burlap rice sacks stacked two high, tied at the ends.
-static func _draw_rice_sacks(c: CanvasItem, proj: ViewProjection, p: Vector2i, center: Vector2, color: Color, alpha: float) -> void:
+static func _draw_rice_sacks(c: Object, proj: ViewProjection, p: Vector2i, center: Vector2, color: Color, alpha: float) -> void:
 	var along_x := noise(p, 2) < 0.5
 	var sacks := []
 	for row in [-0.13, 0.13]:
@@ -841,7 +844,7 @@ static func _draw_rice_sacks(c: CanvasItem, proj: ViewProjection, p: Vector2i, c
 
 
 ## A paddy dyke: a low earthen bank with grass along its top.
-static func _draw_dyke(c: CanvasItem, proj: ViewProjection, key: Vector3i, tint: float, alpha: float) -> void:
+static func _draw_dyke(c: Object, proj: ViewProjection, key: Vector3i, tint: float, alpha: float) -> void:
 	var color := DYKE_EARTH.darkened(tint)
 	var faces := prism(c, proj, _edge_rect(key, -0.02, 1.02, 0.15), 0.0, DYKE_HEIGHT, color, alpha)
 	for q: Array in faces:
@@ -859,7 +862,7 @@ static func _draw_dyke(c: CanvasItem, proj: ViewProjection, key: Vector3i, tint:
 
 
 ## A wall of lashed bamboo poles (from..to along the edge, base..top in height), as on a hamlet hut.
-static func _draw_bamboo_wall(c: CanvasItem, proj: ViewProjection, key: Vector3i, from: float, to: float, base: float, top: float, tint: float, alpha: float) -> void:
+static func _draw_bamboo_wall(c: Object, proj: ViewProjection, key: Vector3i, from: float, to: float, base: float, top: float, tint: float, alpha: float) -> void:
 	var color := BAMBOO_WALL.darkened(tint)
 	var faces := prism(c, proj, _edge_rect(key, from, to, 0.05), base, top, color, alpha)
 	var poles := maxi(2, int((to - from) * 14.0))
@@ -887,7 +890,7 @@ const LEATHER_TIE := Color("6a5534")
 
 
 ## A tunnel entrance: a small square hole with a wooden trapdoor propped open beside it, in leaf litter.
-static func draw_tunnel(c: CanvasItem, proj: ViewProjection, p: Vector2i) -> void:
+static func draw_tunnel(c: Object, proj: ViewProjection, p: Vector2i) -> void:
 	var center := Vector2(p) + Vector2(0.5, 0.5)
 	for i in 7:
 		var at := center + Vector2(noise(p, i + 1) - 0.5, noise(p, i + 9) - 0.5) * 0.8
@@ -921,7 +924,7 @@ static func tile_poly_rect(proj: ViewProjection, rect: Rect2) -> PackedVector2Ar
 
 
 ## A spotted trap: "punji" (a pit of sharpened bamboo stakes), "ied" (a buried shell, found) or "mine".
-static func draw_trap(c: CanvasItem, proj: ViewProjection, p: Vector2i, kind: String) -> void:
+static func draw_trap(c: Object, proj: ViewProjection, p: Vector2i, kind: String) -> void:
 	if kind == "ied":
 		_draw_ied(c, proj, p)
 		return
@@ -952,10 +955,10 @@ static func draw_trap(c: CanvasItem, proj: ViewProjection, p: Vector2i, kind: St
 
 
 ## Elephant grass: tall pale blades bending every way, some with feathery plumes.
-static func _draw_tall_grass(c: CanvasItem, proj: ViewProjection, p: Vector2i, g: Vector2, n: float) -> void:
+static func _draw_tall_grass(c: Object, proj: ViewProjection, p: Vector2i, g: Vector2, n: float) -> void:
 	c.draw_colored_polygon(tile_poly(proj, p), ELEPHANT_GRASS_GROUND[0].lerp(ELEPHANT_GRASS_GROUND[1], n))
 	var blades := []
-	for i in 22:
+	for i in 12:
 		var at := g + Vector2(0.04, 0.04) + Vector2(noise(p, i * 2 + 1), noise(p, i * 2 + 2)) * 0.92
 		blades.append([proj.depth(at), at, i])
 	blades.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
@@ -967,24 +970,24 @@ static func _draw_tall_grass(c: CanvasItem, proj: ViewProjection, p: Vector2i, g
 		var color: Color = ELEPHANT_GRASS[i % 4]
 		var line := PackedVector2Array([proj.project(at), proj.project(at + lean * 0.25, h * 0.55), proj.project(at + lean, h)])
 		c.draw_polyline(line, color.darkened(0.15), 1.7)
-		if i % 5 == 0:
+		if i % 4 == 0:
 			c.draw_line(line[2], line[2] + (line[2] - line[1]).normalized() * 5.0, PLUME, 2.4)
 
 
 # --- Afghanistan and Iraq ---
 
 ## Draws the ground of an arid tile; returns false for terrain drawn as everywhere else.
-static func _draw_arid_tile(c: CanvasItem, proj: ViewProjection, map: TacticalMap, p: Vector2i, g: Vector2, n: float) -> bool:
+static func _draw_arid_tile(c: Object, proj: ViewProjection, map: TacticalMap, p: Vector2i, g: Vector2, n: float) -> bool:
 	match map.get_terrain(p):
 		TacticalMap.Terrain.FLOOR:
 			# Dusty tan ground with sparse dry tufts and pebbles.
 			c.draw_colored_polygon(tile_poly(proj, p), DUST[0].lerp(DUST[1], n))
-			for i in 4:
+			for i in 2:
 				var at := g + Vector2(0.1, 0.1) + Vector2(noise(p, i * 2 + 1), noise(p, i * 2 + 2)) * 0.8
 				for j in 3:
 					var lean := Vector2(-0.04 + j * 0.04, -0.03)
 					c.draw_line(proj.project(at), proj.project(at + lean, 0.08), DRY_TUFT[(i + j) % 3], 1.3)
-			for i in 4:
+			for i in 2:
 				var at := g + Vector2(noise(p, i + 13), noise(p, i + 17)) * 0.9 + Vector2(0.05, 0.05)
 				c.draw_circle(proj.project(at), 1.4, PEBBLE.darkened(noise(p, i + 21) * 0.2))
 		TacticalMap.Terrain.ROUGH:
@@ -1019,7 +1022,7 @@ static func _draw_arid_tile(c: CanvasItem, proj: ViewProjection, map: TacticalMa
 		TacticalMap.Terrain.WHEAT:
 			# Green-gold wheat, with poppies flowering here and there.
 			c.draw_colored_polygon(tile_poly(proj, p), GREEN_WHEAT[0].lerp(GREEN_WHEAT[1], n))
-			for i in 12:
+			for i in 9:
 				var at := g + Vector2(0.06, 0.06) + Vector2(noise(p, i * 2 + 1), noise(p, i * 2 + 2)) * 0.88
 				var top := proj.project(at + Vector2(0.02, -0.02), 0.32 + noise(p, i + 40) * 0.1)
 				var color: Color = GREEN_STALKS[i % 3]
@@ -1056,7 +1059,7 @@ static func _draw_arid_tile(c: CanvasItem, proj: ViewProjection, map: TacticalMa
 
 
 ## A poplar: a pale trunk and a tall, narrow column of leaves.
-static func _draw_poplar(c: CanvasItem, proj: ViewProjection, p: Vector2i, center: Vector2, tint: float, alpha: float) -> void:
+static func _draw_poplar(c: Object, proj: ViewProjection, p: Vector2i, center: Vector2, tint: float, alpha: float) -> void:
 	prism(c, proj, blob_poly(center, 0.06, p, 0.2), 0.0, 0.7, POPLAR_TRUNK.darkened(tint), alpha)
 	for i in 12:
 		var t := i / 11.0
@@ -1068,7 +1071,7 @@ static func _draw_poplar(c: CanvasItem, proj: ViewProjection, p: Vector2i, cente
 
 
 ## A burnt-out sedan: rusted, blackened body, the glass gone, sitting on bare rims.
-static func _draw_car(c: CanvasItem, proj: ViewProjection, p: Vector2i, center: Vector2, tint: float, alpha: float) -> void:
+static func _draw_car(c: Object, proj: ViewProjection, p: Vector2i, center: Vector2, tint: float, alpha: float) -> void:
 	var along := Vector2(1, 0).rotated(round(noise(p, 2) * 3.0) * PI * 0.5 + (noise(p, 3) - 0.5) * 0.5)
 	var across := Vector2(-along.y, along.x)
 	var box := func(back: float, front: float, half: float) -> PackedVector2Array:
@@ -1098,7 +1101,7 @@ static func _draw_car(c: CanvasItem, proj: ViewProjection, p: Vector2i, center: 
 
 
 ## A HESCO bastion: a wire-mesh basket lined with fabric and filled with sand.
-static func _draw_hesco(c: CanvasItem, proj: ViewProjection, p: Vector2i, center: Vector2, tint: float, alpha: float) -> void:
+static func _draw_hesco(c: Object, proj: ViewProjection, p: Vector2i, center: Vector2, tint: float, alpha: float) -> void:
 	var rect := Rect2(center - Vector2(0.44, 0.44), Vector2(0.88, 0.88))
 	var color := HESCO_SAND.darkened(tint)
 	var faces := prism(c, proj, rect_poly(rect), 0.0, HESCO_HEIGHT, color, alpha)
@@ -1119,7 +1122,7 @@ static func _draw_hesco(c: CanvasItem, proj: ViewProjection, p: Vector2i, center
 
 
 ## A concrete jersey barrier: a wide foot and a tall narrow top.
-static func _draw_jersey(c: CanvasItem, proj: ViewProjection, p: Vector2i, center: Vector2, tint: float, alpha: float) -> void:
+static func _draw_jersey(c: Object, proj: ViewProjection, p: Vector2i, center: Vector2, tint: float, alpha: float) -> void:
 	var along_x := noise(p, 2) < 0.5
 	var size := func(length: float, width: float) -> Rect2:
 		var extent := Vector2(length, width) if along_x else Vector2(width, length)
@@ -1134,7 +1137,7 @@ static func _draw_jersey(c: CanvasItem, proj: ViewProjection, p: Vector2i, cente
 
 
 ## A mud-brick compound wall (from..to along the edge, base..top in height) with a rounded top and patches.
-static func _draw_mud_wall(c: CanvasItem, proj: ViewProjection, key: Vector3i, from: float, to: float, base: float, top: float, tint: float, alpha: float) -> void:
+static func _draw_mud_wall(c: Object, proj: ViewProjection, key: Vector3i, from: float, to: float, base: float, top: float, tint: float, alpha: float) -> void:
 	var color := MUD_BRICK.darkened(tint)
 	var rounded := top >= WALL_HEIGHT - 0.01
 	var faces := prism(c, proj, _edge_rect(key, from, to, MUD_HALF_THICKNESS), base, top - (0.05 if rounded else 0.0), color, alpha)
@@ -1157,7 +1160,7 @@ static func _draw_mud_wall(c: CanvasItem, proj: ViewProjection, key: Vector3i, f
 
 
 ## An irrigation ditch: a low earth bank with a strip of muddy water along one side and weeds on top.
-static func _draw_ditch(c: CanvasItem, proj: ViewProjection, key: Vector3i, tint: float, alpha: float) -> void:
+static func _draw_ditch(c: Object, proj: ViewProjection, key: Vector3i, tint: float, alpha: float) -> void:
 	var frame := _edge_frame(key)
 	var start: Vector2 = frame[0]
 	var along: Vector2 = frame[1]
@@ -1176,7 +1179,7 @@ static func _draw_ditch(c: CanvasItem, proj: ViewProjection, key: Vector3i, tint
 
 
 ## A found IED: a patch of disturbed earth, the nose of a buried shell and a wire running off.
-static func _draw_ied(c: CanvasItem, proj: ViewProjection, p: Vector2i) -> void:
+static func _draw_ied(c: Object, proj: ViewProjection, p: Vector2i) -> void:
 	var center := Vector2(p) + Vector2(0.5, 0.5)
 	c.draw_colored_polygon(blob_poly_projected(proj, center, 0.3, p), Color("6e5a40"))
 	for i in 6:

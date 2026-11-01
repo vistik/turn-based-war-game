@@ -13,7 +13,7 @@ const ROCKET_RANGE := [0, 20, 15, 10, 5, 0, -5, -10, -20, -30, -40]
 
 const WEAPONS := {
 	"m16": {"name": "M16", "kind": "rifle", "damage": [3, 5], "crit": 10, "crit_damage": 2, "clip": 10, "suppression": 22, "range": M16_RANGE},
-	"m60": {"name": "M60", "kind": "mg", "damage": [3, 5], "crit": 5, "crit_damage": 2, "clip": 6, "suppression": 50, "range": MG_RANGE, "setup": true},
+	"m60": {"name": "M60", "kind": "mg", "damage": [4, 6], "crit": 5, "crit_damage": 2, "clip": 6, "suppression": 50, "range": MG_RANGE, "setup": true},
 	## The grenadier's M79 fires buckshot at close quarters; its grenades are lobbed (long throw range).
 	"m79": {"name": "M79 (buckshot)", "kind": "launcher", "damage": [2, 5], "crit": 5, "crit_damage": 2, "clip": 1, "suppression": 20,
 		"range": [0, 30, 20, 10, 0, -10, -25, -40]},
@@ -23,10 +23,10 @@ const WEAPONS := {
 	"sks": {"name": "SKS", "kind": "rifle", "damage": [3, 4], "crit": 10, "crit_damage": 2, "clip": 6, "suppression": 15,
 		"range": [0, 10, 9, 8, 6, 4, 2, 1, 0, 0, -3, -6, -10, -15]},
 	## A light machine gun on a bipod: no setting up, less suppression than a heavy one.
-	"rpd": {"name": "RPD", "kind": "mg", "damage": [3, 4], "crit": 5, "crit_damage": 2, "clip": 5, "suppression": 35,
+	"rpd": {"name": "RPD", "kind": "mg", "damage": [4, 5], "crit": 5, "crit_damage": 2, "clip": 5, "suppression": 35,
 		"range": [0, 10, 10, 8, 6, 5, 4, 3, 2, 0, -3, -6, -10, -15]},
 	## Its warhead bursts on the target, tearing away the cover beside it.
-	"rpg": {"name": "RPG-2", "kind": "at", "damage": [5, 8], "crit": 0, "crit_damage": 0, "clip": 1, "suppression": 30, "range": ROCKET_RANGE,
+	"rpg": {"name": "RPG-2", "kind": "at", "damage": [7, 10], "crit": 0, "crit_damage": 0, "clip": 1, "suppression": 30, "range": ROCKET_RANGE,
 		"anti_tank": true, "blast": 0.5},
 	"type50": {"name": "Type 50", "kind": "smg", "damage": [3, 4], "crit": 10, "crit_damage": 2, "clip": 6, "suppression": 25,
 		"range": [0, 35, 28, 20, 12, 5, -5, -15, -25, -35, -45]},
@@ -115,20 +115,20 @@ static func _us_roles() -> Dictionary:
 	return {
 		"Squad Leader": Theatre.role({"name": "Squad Leader", "hp": 8, "aim": 70, "mobility": 6.5, "grenades": 1, "smoke": 2, "weapon": WEAPONS["m16"],
 			"leader": true, "name_prefix": "Sgt. ", "range": 6.0, "cost": 6, "note": "Rallies and steadies the squad", "kit": "Officer", "icon": "Officer"}),
-		"Rifleman": Theatre.role({"name": "Rifleman", "hp": 8, "aim": 68, "mobility": 6.5, "sight": 11.0, "grenades": 2, "weapon": WEAPONS["m16"],
+		"Rifleman": Theatre.role({"name": "Rifleman", "hp": 8, "aim": 68, "mobility": 6.5, "sight": 16.0, "grenades": 2, "weapon": WEAPONS["m16"],
 			"range": 6.0, "cost": 4, "note": "M16 and two grenades"}),
 		"Grenadier": Theatre.role({"name": "Grenadier", "hp": 8, "aim": 62, "mobility": 6.5, "grenades": 5, "throw_range": 15.0, "weapon": WEAPONS["m79"],
 			"range": 7.0, "cost": 5, "note": "M79: lobs grenades a long way", "kit": "Grenadier", "icon": "Grenadier"}),
-		"M60 Gunner": Theatre.role({"name": "M60 Gunner", "hp": 9, "aim": 62, "mobility": 6.0, "weapon": WEAPONS["m60"], "range": 9.0, "cost": 7,
+		"M60 Gunner": Theatre.role({"name": "M60 Gunner", "hp": 9, "aim": 72, "mobility": 6.0, "weapon": WEAPONS["m60"], "range": 9.0, "cost": 7,
 			"note": "Heavy suppression once set up", "kit": "MG", "icon": "MG"}),
 		"Medic": Theatre.role({"name": "Medic", "hp": 7, "aim": 58, "mobility": 6.5, "medkits": 4, "smoke": 1, "weapon": WEAPONS["m16"],
 			"range": 6.0, "cost": 5, "note": "\"Doc\": heals and treats wounds"}),
 		"RTO": Theatre.role({"name": "RTO", "hp": 8, "aim": 62, "mobility": 6.5, "mortar_rounds": 2, "mortar_smoke": 1, "weapon": WEAPONS["m16"],
 			"indirect": ARTILLERY, "range": 8.0, "holds_back": true, "cost": 9,
 			"note": "Radio: calls artillery or napalm on what he sees", "kit": "RTO", "icon": "RTO"}),
-		"Sniper": Theatre.role({"name": "Sniper", "hp": 7, "aim": 75, "mobility": 6.0, "sight": 15.0, "weapon": WEAPONS["m21"], "range": 12.0,
+		"Sniper": Theatre.role({"name": "Sniper", "hp": 7, "aim": 75, "mobility": 6.0, "sight": 22.0, "weapon": WEAPONS["m21"], "range": 12.0,
 			"holds_back": true, "cost": 7, "note": "Long sight, best at range"}),
-		"M113": Theatre.role({"name": "M113", "vehicle": true, "hull_armor": APC_ARMOR, "hp": 14, "aim": 60, "sight": 10.0, "mobility": 7.0,
+		"M113": Theatre.role({"name": "M113", "vehicle": true, "hull_armor": APC_ARMOR, "hp": 14, "aim": 60, "sight": 15.0, "mobility": 7.0,
 			"weapon": WEAPONS["m2"], "range": 8.0, "cost": 14, "note": "Armoured carrier with a .50 cal", "model": "m113", "icon": "APC"}),
 	}
 
@@ -147,14 +147,14 @@ static func _vc_roles() -> Dictionary:
 			"cost": 2, "note": "Cheap and quick, an old rifle", "kit": "Guerrilla", "icon": "Rifleman"}),
 		"Assault": vc.call({"name": "Assault", "hp": 5, "aim": 55, "mobility": 8.0, "grenades": 2, "weapon": WEAPONS["ak47"], "range": 4.0,
 			"cost": 3, "note": "AK-47: deadly up close", "kit": "Assault", "icon": "SMG"}),
-		"RPD Gunner": vc.call({"name": "RPD Gunner", "hp": 6, "aim": 52, "mobility": 7.0, "weapon": WEAPONS["rpd"], "range": 8.0, "cost": 4,
+		"RPD Gunner": vc.call({"name": "RPD Gunner", "hp": 6, "aim": 62, "mobility": 7.0, "weapon": WEAPONS["rpd"], "range": 8.0, "cost": 4,
 			"note": "Light machine gun, no setting up", "kit": "MG", "icon": "MG"}),
 		"RPG": vc.call({"name": "RPG", "hp": 5, "aim": 52, "mobility": 7.5, "weapon": WEAPONS["rpg"], "range": 5.0, "cost": 4,
 			"note": "RPG-2: stops armour, blows cover apart", "kit": "AT", "icon": "AT"}),
 		"Sapper": vc.call({"name": "Sapper", "hp": 5, "aim": 50, "mobility": 8.5, "grenades": 3, "weapon": WEAPONS["type50"], "range": 3.0,
 			"cost": 3, "note": "Satchel charges; lays punji traps", "kit": "Sapper", "icon": "Sapper", "traits": ["traps"], "traps": 2}),
 		"Mortar": vc.call({"name": "Mortar", "hp": 5, "aim": 50, "mobility": 6.5, "mortar_rounds": 3, "mortar_smoke": 1, "weapon": WEAPONS["sks"],
-			"indirect": {"name": "mortar", "max": 20.0}, "range": 14.0, "holds_back": true, "cost": 5, "note": "60mm mortar over the treeline"}),
+			"indirect": {"name": "mortar", "max": 20.0}, "range": 14.0, "holds_back": true, "cost": 4, "note": "60mm mortar over the treeline"}),
 	}
 
 

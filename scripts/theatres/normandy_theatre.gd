@@ -25,8 +25,8 @@ const WEAPONS := {
 			"range": [0, 35, 28, 20, 12, 4, -6, -16, -26, -36, -46]},
 	],
 	"mg": [
-		{"name": "M1919 Browning", "kind": "mg", "damage": [3, 5], "crit": 5, "crit_damage": 2, "clip": 5, "suppression": 45, "range": MG_RANGE, "setup": true},
-		{"name": "MG 42", "kind": "mg", "damage": [3, 5], "crit": 5, "crit_damage": 2, "clip": 5, "suppression": 55, "range": MG_RANGE, "setup": true},
+		{"name": "M1919 Browning", "kind": "mg", "damage": [4, 6], "crit": 5, "crit_damage": 2, "clip": 5, "suppression": 45, "range": MG_RANGE, "setup": true},
+		{"name": "MG 42", "kind": "mg", "damage": [4, 6], "crit": 5, "crit_damage": 2, "clip": 5, "suppression": 55, "range": MG_RANGE, "setup": true},
 	],
 	"sniper": [
 		{"name": "M1903 Springfield", "kind": "sniper", "damage": [5, 7], "crit": 25, "crit_damage": 3, "clip": 4, "suppression": 10, "range": SNIPER_RANGE},
@@ -37,8 +37,8 @@ const WEAPONS := {
 		{"name": "Gewehr 33/40", "kind": "carbine", "damage": [2, 4], "crit": 8, "crit_damage": 2, "clip": 5, "suppression": 12, "range": CARBINE_RANGE},
 	],
 	"at": [
-		{"name": "Bazooka", "kind": "at", "damage": [6, 9], "crit": 0, "crit_damage": 0, "clip": 1, "suppression": 30, "range": ROCKET_RANGE, "anti_tank": true},
-		{"name": "Panzerschreck", "kind": "at", "damage": [6, 9], "crit": 0, "crit_damage": 0, "clip": 1, "suppression": 30, "range": ROCKET_RANGE, "anti_tank": true},
+		{"name": "Bazooka", "kind": "at", "damage": [8, 11], "crit": 0, "crit_damage": 0, "clip": 1, "suppression": 30, "range": ROCKET_RANGE, "anti_tank": true},
+		{"name": "Panzerschreck", "kind": "at", "damage": [8, 11], "crit": 0, "crit_damage": 0, "clip": 1, "suppression": 30, "range": ROCKET_RANGE, "anti_tank": true},
 	],
 	"tank": [
 		{"name": "75mm M3", "kind": "tank", "damage": [4, 6], "crit": 10, "crit_damage": 2, "clip": 12, "suppression": 60, "range": TANK_GUN_RANGE, "anti_tank": true, "blast": 1.0},
@@ -135,24 +135,24 @@ func _init() -> void:
 static func _roles(side: int) -> Dictionary:
 	var w := func(kind: String) -> Dictionary: return WEAPONS[kind][side]
 	return {
-		"Officer": Theatre.role({"name": "Officer", "sight": 13.0, "grenades": 1, "smoke": 2, "weapon": w.call("smg"), "leader": true,
+		"Officer": Theatre.role({"name": "Officer", "sight": 19.0, "grenades": 1, "smoke": 2, "weapon": w.call("smg"), "leader": true,
 			"name_prefix": "Lt. ", "range": 5.0, "cost": 5, "note": "Rallies and steadies nearby soldiers"}),
 		"Rifleman": Theatre.role({"name": "Rifleman", "grenades": 1, "weapon": w.call("rifle"), "range": 7.0, "cost": 3,
 			"note": "Reliable all-rounder with a grenade"}),
 		"SMG": Theatre.role({"name": "SMG", "aim": 60, "mobility": 8.0, "grenades": 2, "weapon": w.call("smg"), "range": 3.0, "cost": 4,
 			"note": "Fast, deadly up close"}),
-		"MG": Theatre.role({"name": "MG", "hp": 8, "aim": 60, "mobility": 6.0, "weapon": w.call("mg"), "range": 9.0, "cost": 6,
+		"MG": Theatre.role({"name": "MG", "hp": 8, "aim": 70, "mobility": 6.0, "weapon": w.call("mg"), "range": 9.0, "cost": 6,
 			"note": "Heavy suppression once set up"}),
 		"AT": Theatre.role({"name": "AT", "aim": 60, "weapon": w.call("at"), "range": 4.0, "cost": 6,
 			"note": "Bazooka: the answer to tanks" if side == 0 else "Panzerschreck: the answer to tanks"}),
 		"Medic": Theatre.role({"name": "Medic", "hp": 6, "aim": 55, "medkits": 3, "smoke": 1, "weapon": w.call("carbine"), "range": 6.0,
 			"cost": 4, "note": "Heals and treats wounds"}),
-		"Sniper": Theatre.role({"name": "Sniper", "hp": 6, "aim": 75, "mobility": 6.0, "sight": 16.0, "weapon": w.call("sniper"),
+		"Sniper": Theatre.role({"name": "Sniper", "hp": 6, "aim": 75, "mobility": 6.0, "sight": 24.0, "weapon": w.call("sniper"),
 			"range": 12.0, "holds_back": true, "cost": 6, "note": "Long sight, best at range"}),
 		"Mortar": Theatre.role({"name": "Mortar", "hp": 6, "aim": 55, "mobility": 6.0, "mortar_rounds": 4, "mortar_smoke": 2,
-			"weapon": w.call("carbine"), "indirect": {"name": "mortar"}, "range": 14.0, "holds_back": true, "cost": 7,
+			"weapon": w.call("carbine"), "indirect": {"name": "mortar"}, "range": 14.0, "holds_back": true, "cost": 5,
 			"note": "Indirect fire over cover"}),
-		"Tank": Theatre.role({"name": "Tank", "vehicle": true, "hull_armor": TANK_ARMOR, "hp": 18, "aim": 60, "sight": 11.0,
+		"Tank": Theatre.role({"name": "Tank", "vehicle": true, "hull_armor": TANK_ARMOR, "hp": 18, "aim": 60, "sight": 16.0,
 			"weapon": w.call("tank"), "range": 8.0, "cost": 15, "note": "Armoured, rifles can't hurt it",
 			"model": "sherman" if side == 0 else "panzer4"}),
 	}

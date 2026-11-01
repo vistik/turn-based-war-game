@@ -14,14 +14,14 @@ const SNIPER_RANGE := [0, -20, -15, -10, -5, 0, 5, 8, 10, 12, 14, 15, 15, 15, 15
 const WEAPONS := {
 	"m4": {"name": "M4", "kind": "rifle", "damage": [3, 5], "crit": 12, "crit_damage": 2, "clip": 10, "suppression": 22, "range": M4_RANGE},
 	## A light machine gun: no setting up.
-	"m249": {"name": "M249 SAW", "kind": "mg", "damage": [3, 4], "crit": 5, "crit_damage": 2, "clip": 8, "suppression": 40, "range": MG_RANGE},
+	"m249": {"name": "M249 SAW", "kind": "mg", "damage": [4, 5], "crit": 5, "crit_damage": 2, "clip": 8, "suppression": 40, "range": MG_RANGE},
 	"m110": {"name": "M110", "kind": "sniper", "damage": [5, 7], "crit": 25, "crit_damage": 3, "clip": 6, "suppression": 12, "range": SNIPER_RANGE},
 	"m2": {"name": "M2 .50 cal", "kind": "mg", "damage": [4, 6], "crit": 10, "crit_damage": 2, "clip": 10, "suppression": 55, "range": MG_RANGE},
 	"ak47": {"name": "AK-47", "kind": "assault", "damage": [3, 5], "crit": 10, "crit_damage": 2, "clip": 8, "suppression": 25, "range": AK_RANGE},
-	"pkm": {"name": "PKM", "kind": "mg", "damage": [3, 5], "crit": 5, "crit_damage": 2, "clip": 6, "suppression": 40, "range": MG_RANGE},
+	"pkm": {"name": "PKM", "kind": "mg", "damage": [4, 6], "crit": 5, "crit_damage": 2, "clip": 6, "suppression": 40, "range": MG_RANGE},
 	"svd": {"name": "SVD Dragunov", "kind": "sniper", "damage": [5, 7], "crit": 20, "crit_damage": 3, "clip": 5, "suppression": 10, "range": SNIPER_RANGE},
 	## The RPG-7's warhead bursts on the target: deadly to the MRAP's sides, and it tears cover apart.
-	"rpg7": {"name": "RPG-7", "kind": "at", "damage": [6, 9], "crit": 0, "crit_damage": 0, "clip": 1, "suppression": 30,
+	"rpg7": {"name": "RPG-7", "kind": "at", "damage": [8, 11], "crit": 0, "crit_damage": 0, "clip": 1, "suppression": 30,
 		"range": [0, 20, 18, 14, 10, 5, 0, -5, -12, -20, -30, -40], "anti_tank": true, "blast": 0.5},
 }
 const MRAP_ARMOR := {"front": 2, "side": 1, "rear": 0}
@@ -110,9 +110,9 @@ static func _coalition_roles() -> Dictionary:
 			"kit": "Officer", "icon": "Officer"}),
 		"Rifleman": Theatre.role({"name": "Rifleman", "hp": 8, "aim": 70, "mobility": 6.5, "body_armor": 1, "grenades": 2, "weapon": WEAPONS["m4"],
 			"range": 6.0, "cost": 5, "note": "M4 and body armour"}),
-		"SAW Gunner": Theatre.role({"name": "SAW Gunner", "hp": 8, "aim": 64, "mobility": 6.0, "body_armor": 1, "grenades": 1, "weapon": WEAPONS["m249"],
+		"SAW Gunner": Theatre.role({"name": "SAW Gunner", "hp": 8, "aim": 74, "mobility": 6.0, "body_armor": 1, "grenades": 1, "weapon": WEAPONS["m249"],
 			"range": 8.0, "cost": 6, "note": "Light machine gun, no setting up", "kit": "MG", "icon": "MG"}),
-		"Marksman": Theatre.role({"name": "Marksman", "hp": 7, "aim": 76, "mobility": 6.0, "body_armor": 1, "sight": 15.0, "weapon": WEAPONS["m110"],
+		"Marksman": Theatre.role({"name": "Marksman", "hp": 7, "aim": 76, "mobility": 6.0, "body_armor": 1, "sight": 22.0, "weapon": WEAPONS["m110"],
 			"range": 12.0, "holds_back": true, "cost": 7, "note": "Long sight, best at range", "kit": "Sniper", "icon": "Sniper"}),
 		"Medic": Theatre.role({"name": "Medic", "hp": 7, "aim": 60, "mobility": 6.5, "body_armor": 1, "medkits": 4, "smoke": 1, "weapon": WEAPONS["m4"],
 			"range": 6.0, "cost": 5, "note": "Heals and treats wounds"}),
@@ -121,7 +121,7 @@ static func _coalition_roles() -> Dictionary:
 			"note": "Calls air strikes on what he sees", "kit": "RTO", "icon": "RTO"}),
 		"EOD Tech": Theatre.role({"name": "EOD Tech", "hp": 7, "aim": 62, "mobility": 6.5, "body_armor": 1, "spot_chance": 90, "weapon": WEAPONS["m4"],
 			"range": 6.0, "cost": 5, "note": "Finds IEDs and mines almost every time", "kit": "EOD", "icon": "EOD"}),
-		"MRAP": Theatre.role({"name": "MRAP", "vehicle": true, "hull_armor": MRAP_ARMOR, "hp": 13, "aim": 60, "sight": 10.0, "mobility": 7.0,
+		"MRAP": Theatre.role({"name": "MRAP", "vehicle": true, "hull_armor": MRAP_ARMOR, "hp": 13, "aim": 60, "sight": 15.0, "mobility": 7.0,
 			"weapon": WEAPONS["m2"], "range": 8.0, "cost": 14, "note": "Armoured truck with a .50 cal, built to survive IEDs", "model": "mrap", "icon": "APC"}),
 	}
 
@@ -133,17 +133,17 @@ static func _insurgent_roles() -> Dictionary:
 			"leader": true, "range": 6.0, "cost": 4, "note": "Leads and steadies the fighters", "kit": "Officer", "icon": "Officer"}),
 		"Fighter": Theatre.role({"name": "Fighter", "hp": 6, "aim": 55, "mobility": 7.5, "grenades": 1, "weapon": WEAPONS["ak47"], "range": 5.0,
 			"cost": 2, "note": "AK-47, cheap and quick", "kit": "Assault", "icon": "SMG"}),
-		"PKM Gunner": Theatre.role({"name": "PKM Gunner", "hp": 6, "aim": 54, "mobility": 6.5, "weapon": WEAPONS["pkm"], "range": 8.0, "cost": 4,
+		"PKM Gunner": Theatre.role({"name": "PKM Gunner", "hp": 6, "aim": 64, "mobility": 6.5, "weapon": WEAPONS["pkm"], "range": 8.0, "cost": 4,
 			"note": "Machine gun, no setting up", "kit": "MG", "icon": "MG"}),
 		"RPG": Theatre.role({"name": "RPG", "hp": 6, "aim": 54, "mobility": 7.0, "weapon": WEAPONS["rpg7"], "range": 5.0, "cost": 4,
 			"note": "RPG-7: stops the MRAP, blows cover apart", "kit": "AT", "icon": "AT"}),
-		"Sniper": Theatre.role({"name": "Sniper", "hp": 5, "aim": 70, "mobility": 6.5, "sight": 15.0, "weapon": WEAPONS["svd"], "range": 12.0,
+		"Sniper": Theatre.role({"name": "Sniper", "hp": 5, "aim": 70, "mobility": 6.5, "sight": 22.0, "weapon": WEAPONS["svd"], "range": 12.0,
 			"holds_back": true, "cost": 5, "note": "Dragunov, best at range"}),
 		"Bomb Maker": Theatre.role({"name": "Bomb Maker", "hp": 5, "aim": 50, "mobility": 7.0, "weapon": WEAPONS["ak47"], "range": 9.0,
 			"holds_back": true, "cost": 4, "note": "Plants IEDs and sets them off from cover", "traits": ["traps", "detonator"], "traps": 2,
 			"trap_kind": "ied", "kit": "Sapper", "icon": "Sapper"}),
 		"Mortar": Theatre.role({"name": "Mortar", "hp": 5, "aim": 50, "mobility": 6.0, "mortar_rounds": 3, "mortar_smoke": 1, "weapon": WEAPONS["ak47"],
-			"indirect": {"name": "mortar", "max": 24.0}, "range": 14.0, "holds_back": true, "cost": 5, "note": "82mm mortar"}),
+			"indirect": {"name": "mortar", "max": 24.0}, "range": 14.0, "holds_back": true, "cost": 4, "note": "82mm mortar"}),
 	}
 
 
@@ -183,10 +183,11 @@ func skirmish_forces(size: int) -> Dictionary:
 	}
 
 
-## The Coalition scores for the ground it holds; the insurgents two points for every Coalition soldier they
-## kill (four for a vehicle): armoured and well supported, the Coalition loses few, and each one counts.
+## The Coalition scores for the ground it holds; the insurgents for every Coalition soldier they kill (a
+## vehicle counts double), each kill worth 1.75 objective-rounds. Points are multiplied by 4 to stay whole:
+## 4 per objective per round, 7 per kill, four times the usual points to win.
 func battle_options() -> Dictionary:
-	return {"kill_points": [0, 2], "objective_points": [1, 0]}
+	return {"kill_points": [0, 7], "objective_points": [4, 0], "points_scale": 4}
 
 
 func campaign_title() -> String:

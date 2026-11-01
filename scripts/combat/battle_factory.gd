@@ -9,7 +9,7 @@ extends RefCounted
 ## mirrored) to reinforcement waves.
 
 ## options: theatre (an id, Normandy if left out), vp_to_win, max_rounds, kill_points and objective_points
-## ([team 0, team 1], see Battle), reinforcements: [{"round", "team", "roster", "air"?, "tunnels"?}]. A wave that is "air"
+## ([team 0, team 1], see Battle), points_scale (multiplies vp_to_win), reinforcements: [{"round", "team", "roster", "air"?, "tunnels"?}]. A wave that is "air"
 ## is flown in to the side's landing zone (the layout's "landing_zones"); one that comes by "tunnels" comes up
 ## at the side's tunnel entrances (the layout's "tunnels": [team 0 tiles, team 1 tiles]).
 static func create(layout: Dictionary, rosters: Array, seed := 0, options := {}) -> Battle:
@@ -36,7 +36,8 @@ static func create(layout: Dictionary, rosters: Array, seed := 0, options := {})
 		var copy := objective.duplicate()
 		copy["owner"] = -1
 		battle.objectives.append(copy)
-	battle.vp_to_win = options.get("vp_to_win", battle.vp_to_win)
+	# "points_scale" multiplies the points needed to win, so a theatre can score in halves (see ModernTheatre).
+	battle.vp_to_win = options.get("vp_to_win", battle.vp_to_win) * int(options.get("points_scale", 1))
 	battle.kill_points = options.get("kill_points", [0, 0]).duplicate()
 	battle.objective_points = options.get("objective_points", [1, 1]).duplicate()
 	# The side that lays punji traps knows where every trap on the map is; its tunnels it knows anyway.

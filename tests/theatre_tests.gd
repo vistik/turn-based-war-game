@@ -390,3 +390,18 @@ func test_ieds_hurt_vehicles_and_the_eod_tech_finds_them() -> void:
 			test.execute({"cmd": "move", "unit": 0, "tile": Vector2i(6, 5)})
 			found[i] += int(test.mines_known_to(0).has(Vector2i(4, 4)))
 	check(found[0] > found[1] + 6, "the EOD tech spots IEDs far more often (%d vs %d of 20)" % found)
+
+
+# --- Music ---
+
+func test_every_theatre_has_menu_and_battle_themes() -> void:
+	for theatre_id: String in Theatres.IDS:
+		var stream := MusicComposer.render(theatre_id, "battle")
+		var samples := stream.data.size() / 2
+		check(samples > MusicComposer.RATE * 20, "%s battle theme lasts over 20 s" % theatre_id)
+		check_eq(stream.loop_mode, AudioStreamWAV.LOOP_FORWARD, "%s battle theme loops" % theatre_id)
+		var loud := 0
+		for i in range(0, samples, 101):
+			loud += int(absi(stream.data.decode_s16(i * 2)) > 1000)
+		check(loud > samples / 101 / 4, "%s battle theme isn't silent" % theatre_id)
+	check_eq(MusicComposer.render("vietnam", "menu").data, MusicComposer.render("vietnam", "menu").data, "a theme is the same every time")

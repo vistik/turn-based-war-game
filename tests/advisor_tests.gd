@@ -334,6 +334,9 @@ func test_execute_runs_a_list() -> void:
 	var battle: Battle = hosted[0]
 	var tools: McpGameTools = hosted[1]
 	var host: FakeHost = hosted[2]
+	# The enemy lies hidden in the wheat, out of everyone's sight.
+	battle.map.set_terrain(Vector2i(14, 14), TacticalMap.Terrain.WHEAT)
+	battle.get_unit(2).stance = Unit.Stance.PRONE
 	var answer: Dictionary = finish(tools.call_tool("execute_command", {"fast": true, "commands": [
 			{"cmd": "move", "unit": 0, "tile": [3, 2]}, {"cmd": "overwatch", "unit": 0}]}))["result"]
 	check_eq(answer["steps"].size(), 2, "both ran")

@@ -39,11 +39,20 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   - The **insurgents** are many and light: fighters with AKs, PKM gunners, RPG-7s, a Dragunov sniper, a mortar
     and **bomb makers**. Bomb makers plant **IEDs** (a big blast that cuts through armour) and **set them off
     remotely** (K) when they can see them. IEDs are already buried along the road in.
-  - The Coalition scores for ground, the insurgents two points for every Coalition soldier killed.
+  - The Coalition scores for ground, the insurgents 1.75 times as much for every Coalition soldier killed (shown multiplied by 4: 4 per objective per round, 7 per kill).
+
+**Music**
+- The tracks in `music/` (MP3, OGG or WAV) play as one playlist, in name order, looping round all of them
+  through menus and battles. Tracks added to the save folder's `music/` join the playlist.
+- Turn it off with the Music button on the main menu or M in battle, or set the volume in Settings.
+- With no tracks at all, the game falls back to themes composed in code for each theatre (a menu and a battle
+  theme each).
 
 **Battles**
 - Two actions per soldier per turn: move, dash, or move and act. Path cost depends on terrain, hedgerows, walls
   and stance. The exact hit chance is shown, with every modifier itemised.
+- Soldiers see 18 tiles (snipers further) and rifles stay accurate to about 9-10, so a unit can shoot about as
+  far as it can run.
 - Directional half and full cover, flanking and line of sight that steps out around corners. Fog of war,
   overwatch, and destructible cover with craters.
 - Fog of war hides what the enemy does out of sight: no turning, stance changes, reloading, healing or damage
@@ -163,6 +172,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 | Wheel / F | Zoom / focus the selected soldier |
 | Q / E / V | Rotate the view / switch isometric and top-down |
 | + / - | Playback speed |
+| M | Music on / off |
 
 While watching a replay: Space play / pause, N next action, Enter next turn, R restart, 1 / 2 / 3 the Allies'
 view, Germany's view, the whole map. Camera keys and + / - work as in battle.
@@ -218,6 +228,8 @@ GODOT=Godot sh tests/net_auth.sh 26100                  # passwords, wrong passw
 Godot --headless --path . -s tools/balance.gd -- --scenario res://scenarios/village.json --games 50 --seed 1
 Godot --headless --path . -s tools/balance.gd -- --map random --size 64 --games 20 --csv results.csv
 Godot --headless --path . -s tools/balance.gd -- --theatre vietnam --map random --size 44 --games 20
+# Unit against unit: every role against every enemy role, 1v1 and 2v2, on a small arena (win rates per matchup)
+Godot --headless --path . -s tools/matchups.gd -- --theatre normandy --games 8 --sizes 1,2 --out matchups.md
 ```
 
 A single online match between two processes, with the AI on both sides:

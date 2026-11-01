@@ -17,7 +17,7 @@ extends RefCounted
 
 ## Default role fields; role() fills in whatever a definition leaves out.
 const ROLE_DEFAULTS := {
-	"name": "", "hp": 7, "aim": 65, "mobility": 7.0, "sight": 12.0,
+	"name": "", "hp": 7, "aim": 65, "mobility": 7.0, "sight": 18.0,
 	"grenades": 0, "smoke": 0, "medkits": 0, "mortar_rounds": 0, "mortar_smoke": 0,
 	## A tank or other armoured vehicle, and the damage each side of its armour stops.
 	"vehicle": false, "hull_armor": {},
@@ -25,7 +25,8 @@ const ROLE_DEFAULTS := {
 	"leader": false,
 	## Indirect fire (mortar, artillery): see Theatre.indirect(). Empty for everyone else.
 	"indirect": {},
-	## How far the role likes to keep from the enemy (AI), and whether it hangs back from objectives.
+	## How far the role likes to keep from the enemy (AI, scaled by Weapon.RANGE_SCALE like the range tables),
+	## and whether it hangs back from objectives.
 	"range": 6.0, "holds_back": false,
 	## Grenade throwing range (a grenade launcher reaches further).
 	"throw_range": 10.0,

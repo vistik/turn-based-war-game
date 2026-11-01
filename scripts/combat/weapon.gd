@@ -34,8 +34,13 @@ func _init(p_name: String, p_kind: String, p_damage: Vector2i, p_crit_chance: in
 	needs_setup = p_needs_setup
 
 
+## Range tables are written per tile at the old scale; every distance is divided by this, so weapons hold
+## their accuracy 1.5 times as far (as do sight ranges, set in the theatres' role data).
+const RANGE_SCALE := 1.5
+
+
 func range_modifier(distance: float) -> int:
-	return range_mods[clampi(roundi(distance), 0, range_mods.size() - 1)]
+	return range_mods[clampi(roundi(distance / RANGE_SCALE), 0, range_mods.size() - 1)]
 
 
 ## A weapon from its data (see the theatres): {"name", "kind", "damage": [min, max], "crit", "crit_damage", "clip",

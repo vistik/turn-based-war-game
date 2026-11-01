@@ -299,12 +299,14 @@ func test_hit_chance() -> void:
 	battle.map.set_object(Vector2i(4, 5), Cover.HALF)
 	var shooter := battle.units[0]
 	var target := battle.units[1]
-	check_eq(battle.shot_odds(shooter, target)["hit"], 65 + 6 - 20, "aim + range - half cover")
+	var range_mod := shooter.weapon.range_modifier(4.0)
+	check_eq(range_mod, 8, "the Garand at 4 tiles (its table stretched by Weapon.RANGE_SCALE)")
+	check_eq(battle.shot_odds(shooter, target)["hit"], 65 + range_mod - 20, "aim + range - half cover")
 	target.hunkered = true
-	check_eq(battle.shot_odds(shooter, target)["hit"], 65 + 6 - 40, "hunkering doubles cover")
+	check_eq(battle.shot_odds(shooter, target)["hit"], 65 + range_mod - 40, "hunkering doubles cover")
 	target.hunkered = false
 	shooter.suppression = Unit.SUPPRESSED_AT
-	check_eq(battle.shot_odds(shooter, target)["hit"], 65 + 6 - 20 - CombatRules.SUPPRESSED_AIM_PENALTY, "suppressed shooters aim worse")
+	check_eq(battle.shot_odds(shooter, target)["hit"], 65 + range_mod - 20 - CombatRules.SUPPRESSED_AIM_PENALTY, "suppressed shooters aim worse")
 	shooter.suppression = 0
 	shooter.pos = Vector2i(5, 1)
 	var odds := battle.shot_odds(shooter, target)
@@ -1177,7 +1179,7 @@ func test_settings_save_and_load_round_trip() -> void:
 	check_eq(GameSettings.to_dict(), GameSettings.defaults(), "a missing file keeps the defaults")
 	var changed := {
 		"instant_movement": true, "follow_opponent": false, "own_speed": 2, "opponent_speed": 3,
-		"pan_speed": 0, "show_hit_chance": false, "confirm_end_turn": true, "fullscreen": true,
+		"pan_speed": 0, "show_hit_chance": false, "confirm_end_turn": true, "fullscreen": true, "music_volume": 4,
 	}
 	GameSettings.from_dict(changed)
 	GameSettings.save_settings(TEST_SETTINGS)

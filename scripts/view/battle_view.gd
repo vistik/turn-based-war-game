@@ -16,7 +16,7 @@ const DrawLayer := preload("res://scripts/view/draw_layer.gd")
 const PANEL_WIDTH := 280.0
 const TOP_BAR_HEIGHT := 50.0
 ## Controls listed by the "?" button in the top bar.
-const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nTab next unit   Enter end turn\n1-0, T, C, Z, X, B, G, U, J, K: actions (see buttons)\nH: suggest a move (Shift+H: this soldier)\nWASD / arrows / middle drag: pan\nWheel: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\n+ / -: playback speed"
+const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nTab next unit   Enter end turn\n1-0, T, C, Z, X, B, G, U, J, K: actions (see buttons)\nH: suggest a move (Shift+H: this soldier)\nWASD / arrows / middle drag: pan\nWheel: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\n+ / -: playback speed   M: music on / off"
 const NEUTRAL_COLOR := Color("e8e2cf")
 ## The mortar button's tag for each kind of round.
 const KIND_TAGS := {"he": "HE", "smoke": "SMK", "napalm": "NPM"}
@@ -43,6 +43,8 @@ const SHOT_LABELS := {"miss": "MISS", "graze": "GRAZE", "hit": "HIT", "crit": "C
 const STANCE_COLOR := "8fd3ff"
 ## Seconds a soldier takes to fall, and for a tank to brew up.
 const DEATH_TIME := 0.9
+## Times a second an idle unit on screen is repainted (breathing, flames on a wreck).
+const IDLE_REDRAW := 12.0
 const WRECK_TIME := 1.2
 ## Ranges at or below/above these weapon range modifiers count as poor/good on the field of fire.
 const GUN_POOR := -10
@@ -110,6 +112,8 @@ var _display_hp := {}
 var _display_suppression := {}
 var _facing := {}
 var _walking := {}
+## Unit id -> [time, state] when it was last repainted (see _update_units).
+var _unit_drawn := {}
 var _hit_at := {}
 var _died_at := {}
 ## Per dying unit: {"forward": falls face down, "knock": Vector2 grid offset it is thrown}.
@@ -343,6 +347,9 @@ func _handle_camera_input(event: InputEvent) -> bool:
 				_rotate_view(1)
 			KEY_V:
 				_toggle_view()
+			KEY_M:
+				GameSettings.toggle_music()
+				_flash("Music %s" % ("on" if GameSettings.music_volume > 0 else "off"))
 			KEY_F:
 				if selected != null:
 					_focus(_display_pos[selected.id])
@@ -1474,8 +1481,8 @@ func _update_panel() -> void:
 		var owner: int = objective["owner"]
 		var color: Color = _team_color(owner) if owner != -1 else NEUTRAL_COLOR
 		holders.append("[color=%s]%s[/color]" % [color.to_html(false), objective["name"]])
-	_score_label.text = "[color=%s]Allies %d[/color]  vs  [color=%s]Germany %d[/color]   (%d to win)\n%s" % [
-		_team_color(0).to_html(false), battle.victory_points[0], _team_color(1).to_html(false), battle.victory_points[1],
+	_score_label.text = "[color=%s]%s %d[/color]  vs  [color=%s]%s %d[/color]   (%d to win)\n%s" % [
+		_team_color(0).to_html(false), battle.team_name(0), battle.victory_points[0], _team_color(1).to_html(false), battle.team_name(1), battle.victory_points[1],
 		battle.vp_to_win, "   ".join(holders)]
 	if not _is_human_turn():
 		_unit_info.text = "[i]%s are taking their turn...[/i]" % battle.team_name(team)
@@ -2066,27 +2073,34 @@ func _chunk_tiles(chunk: Vector2i) -> Array[Vector2i]:
 	return tiles
 
 
+## Ground, shadows, fog and props are drawn into a DrawBatch, so each is one draw call instead of hundreds.
 func _paint_ground_chunk(c: CanvasItem, chunk: Vector2i) -> void:
+	var batch := DrawBatch.new()
 	for p in _chunk_tiles(chunk):
-		TerrainPainter.draw_tile(c, _proj, battle.map, p)
-		c.draw_polyline(_tile_outline(p), Color(0, 0, 0, 0.08), 1.0)
+		TerrainPainter.draw_tile(batch, _proj, battle.map, p)
+		batch.draw_polyline(_tile_outline(p), Color(0, 0, 0, 0.08), 1.0)
+	batch.flush(c)
 
 
 ## Shadows sit on their own layer so they can fall across chunk borders onto ground drawn later.
 func _paint_shadow_chunk(c: CanvasItem, chunk: Vector2i) -> void:
 	var map := battle.map
+	var batch := DrawBatch.new()
 	for p in _chunk_tiles(chunk):
 		if map.get_object(p) != Cover.NONE:
-			TerrainPainter.draw_object_shadow(c, _proj, map, p)
+			TerrainPainter.draw_object_shadow(batch, _proj, map, p)
 	for key: Vector3i in map.get_edges():
 		if Vector2i(key.x, key.y) / CHUNK == chunk:
-			TerrainPainter.draw_edge_shadow(c, _proj, map, key)
+			TerrainPainter.draw_edge_shadow(batch, _proj, map, key)
+	batch.flush(c)
 
 
 func _paint_fog_chunk(c: CanvasItem, chunk: Vector2i) -> void:
+	var batch := DrawBatch.new()
 	for p in _chunk_tiles(chunk):
 		if not _visible_tiles.has(p):
-			c.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), Color(0.03, 0.03, 0.05, 0.5))
+			batch.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), Color(0.03, 0.03, 0.05, 0.5))
+	batch.flush(c)
 
 
 ## One canvas item per object and wall, recorded once. Rebuilt when the map layout changes.
@@ -2123,11 +2137,15 @@ func _add_prop(painter: Callable, center: Vector2, tiles: Array[Vector2i]) -> No
 
 
 func _paint_object(c: CanvasItem, p: Vector2i) -> void:
-	TerrainPainter.draw_object(c, _proj, battle.map, p, 1.0, false)
+	var batch := DrawBatch.new()
+	TerrainPainter.draw_object(batch, _proj, battle.map, p, 1.0, false)
+	batch.flush(c)
 
 
 func _paint_edge(c: CanvasItem, key: Vector3i) -> void:
-	TerrainPainter.draw_edge(c, _proj, battle.map, key, 1.0, false)
+	var batch := DrawBatch.new()
+	TerrainPainter.draw_edge(batch, _proj, battle.map, key, 1.0, false)
+	batch.flush(c)
 
 
 ## Props out of sight are darkened, like the fog under them.
@@ -2199,14 +2217,28 @@ func _paint_smoke(c: CanvasItem, p: Vector2i) -> void:
 	TerrainPainter.draw_smoke(c, _proj, p, _time)
 
 
+## Soldiers are the costliest thing to draw, so a unit is only repainted while it is on screen, and every frame
+## only while something is happening to it (moving, turning, hit, falling, selected or targeted). Otherwise
+## it is repainted IDLE_REDRAW times a second, enough for breathing and a burning wreck.
 func _update_units() -> void:
+	var view := _view_rect()
 	for u in battle.units:
 		if not _unit_nodes.has(u.id):
 			continue
 		var node: Node2D = _unit_nodes[u.id]
 		node.visible = _is_drawn(u)
-		if node.visible:
-			node.z_index = _depth_z(_display_pos[u.id], 0.05)
+		if not node.visible:
+			continue
+		var at: Vector2 = _display_pos[u.id]
+		node.z_index = _depth_z(at, 0.05)
+		if not view.has_point(_proj.project(at)):
+			continue
+		var drawn: Array = _unit_drawn.get(u.id, [])
+		var state := [at, _facing[u.id], u.stance, u == selected, mode, _display_hp[u.id], _display_suppression[u.id], u.deployed]
+		var busy_now: bool = _walking.has(u.id) or _time - _hit_at.get(u.id, -10.0) < 0.5 or _time - _died_at.get(u.id, -10.0) < DEATH_TIME + 3.5 \
+				or u == selected or (mode == Mode.SHOOT and _target_odds.has(u.id))
+		if busy_now or drawn.is_empty() or drawn[1] != state or _time - drawn[0] >= 1.0 / IDLE_REDRAW:
+			_unit_drawn[u.id] = [_time, state]
 			node.queue_redraw()
 
 

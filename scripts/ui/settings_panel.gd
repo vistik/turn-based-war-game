@@ -25,8 +25,9 @@ func _ready() -> void:
 			"pan_speed", GameSettings.PAN_SPEED_NAMES)
 	_toggle("Show hit chances", "Hit, graze and crit odds when hovering or aiming at a target.", "show_hit_chance")
 	_toggle("Confirm end turn", "Ask before ending the turn while some units can still act.", "confirm_end_turn")
-	_heading("Display")
+	_heading("Display and sound")
 	_toggle("Fullscreen", "Play in fullscreen instead of a window.", "fullscreen")
+	_choice("Music", "Each theatre has its own themes, for the menus and for battle.", "music_volume", GameSettings.MUSIC_VOLUME_NAMES)
 	_heading("AI helper")
 	AdvisorSettings.load_settings()
 	_advisor_toggle("Agent link", "Let an AI agent (Claude Code, Claude Desktop) connect to battles over MCP, on this computer only. See docs/MCP.md.",

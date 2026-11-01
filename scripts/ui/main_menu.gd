@@ -94,6 +94,7 @@ func _ready() -> void:
 ## The first page: what's saved to carry on with, then one button per way to play. Each opens its own page
 ## with that mode's options.
 func _show_main() -> void:
+	Music.menu_theatre = _theatre_id
 	var box := _new_page(480)
 	var theatre := _theatre()
 	_title(box, theatre.title, 48)
@@ -127,6 +128,11 @@ func _show_main() -> void:
 	for spec: Array in [["Replays", _show_replays], ["Map editor", func() -> void: get_tree().change_scene_to_file("res://scenes/editor.tscn")],
 			["Settings", _show_settings], ["Quit", get_tree().quit]]:
 		_button(row, spec[0], spec[1]).size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var music_label := func() -> String: return "Music: %s" % ("on" if GameSettings.music_volume > 0 else "off")
+	var music: Button
+	music = _button(box, music_label.call(), func() -> void:
+		GameSettings.toggle_music()
+		music.text = music_label.call())
 
 
 ## [label, action] for each saved game that can be continued.
@@ -714,7 +720,7 @@ func _show_campaign() -> void:
 				_text(box, "   Round %d reinforcements: %s" % [wave["round"], _force(wave["roster"], 1, theatre)], theirs, 14, true)
 		if mission.has("support"):
 			_text(box, "Support: %s" % _force(mission["support"], 0, theatre), ours, 14)
-		_text(box, "Win: first to %d points from the objectives, or wipe them out. %d rounds." % [mission["vp_to_win"], mission["max_rounds"]], MUTED, 14, true)
+		_text(box, "Win: first to %d points from the objectives, or wipe them out. %d rounds." % [mission["vp_to_win"] * int(theatre.battle_options().get("points_scale", 1)), mission["max_rounds"]], MUTED, 14, true)
 
 	_section(box, "Your squad")
 	var deploying := {}

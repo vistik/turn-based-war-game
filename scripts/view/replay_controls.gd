@@ -9,10 +9,10 @@ extends Node
 
 signal _advance
 
-## [label, view team, key, tooltip]
+## [label, view team, key, tooltip]; "%s" is the side's name in the replay's theatre.
 const VIEWS := [
-	["Allies' view", 0, KEY_1, "Only what the Allies saw (1)"],
-	["Germany's view", 1, KEY_2, "Only what Germany saw (2)"],
+	["%s view", 0, KEY_1, "Only what the %s saw (1)"],
+	["%s view", 1, KEY_2, "Only what the %s saw (2)"],
 	["Whole map", -1, KEY_3, "No fog of war: both sides (3)"],
 ]
 const BAD := Color("ff7a6a")
@@ -204,7 +204,10 @@ func _build_ui() -> void:
 	row.add_child(VSeparator.new())
 	var group := ButtonGroup.new()
 	for spec: Array in VIEWS:
-		var button := _button(row, spec[0], spec[3], set_view.bind(spec[1]))
+		var side_name: String = view.battle.team_name(spec[1]) if spec[1] >= 0 else ""
+		var label: String = spec[0] % side_name if spec[1] >= 0 else spec[0]
+		var tip: String = spec[3] % side_name if spec[1] >= 0 else spec[3]
+		var button := _button(row, label, tip, set_view.bind(spec[1]))
 		button.toggle_mode = true
 		button.button_group = group
 		_view_buttons.append(button)

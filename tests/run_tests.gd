@@ -299,12 +299,14 @@ func test_hit_chance() -> void:
 	battle.map.set_object(Vector2i(4, 5), Cover.HALF)
 	var shooter := battle.units[0]
 	var target := battle.units[1]
-	check_eq(battle.shot_odds(shooter, target)["hit"], 65 + 6 - 20, "aim + range - half cover")
+	var range_mod := shooter.weapon.range_modifier(4.0)
+	check_eq(range_mod, 8, "the Garand at 4 tiles (its table stretched by Weapon.RANGE_SCALE)")
+	check_eq(battle.shot_odds(shooter, target)["hit"], 65 + range_mod - 20, "aim + range - half cover")
 	target.hunkered = true
-	check_eq(battle.shot_odds(shooter, target)["hit"], 65 + 6 - 40, "hunkering doubles cover")
+	check_eq(battle.shot_odds(shooter, target)["hit"], 65 + range_mod - 40, "hunkering doubles cover")
 	target.hunkered = false
 	shooter.suppression = Unit.SUPPRESSED_AT
-	check_eq(battle.shot_odds(shooter, target)["hit"], 65 + 6 - 20 - CombatRules.SUPPRESSED_AIM_PENALTY, "suppressed shooters aim worse")
+	check_eq(battle.shot_odds(shooter, target)["hit"], 65 + range_mod - 20 - CombatRules.SUPPRESSED_AIM_PENALTY, "suppressed shooters aim worse")
 	shooter.suppression = 0
 	shooter.pos = Vector2i(5, 1)
 	var odds := battle.shot_odds(shooter, target)
@@ -452,7 +454,7 @@ func test_mortar_needs_a_spotter_and_lands_next_turn() -> void:
 	check_eq(strikes.size(), 1, "lands at the start of our next turn")
 	if not strikes.is_empty():
 		var center: Vector2i = strikes[0]["center"]
-		check(Vector2(center).distance_to(Vector2(15, 8)) <= Battle.mortar_scatter(Vector2i(0, 8), Vector2i(15, 8)) + 1.0, "within scatter")
+		check(Vector2(center).distance_to(Vector2(15, 8)) <= Battle.mortar_scatter(Vector2i(0, 8), Vector2i(15, 8), battle.units[0].indirect) + 1.0, "within scatter")
 
 
 # --- Objectives and the flow of battle ---
@@ -1157,10 +1159,10 @@ func test_campaign_mission_updates_the_roster() -> void:
 
 func test_every_campaign_mission_builds() -> void:
 	var campaign := Campaign.create(3)
-	for i in Campaign.MISSIONS.size():
+	for i in campaign.missions().size():
 		campaign.mission_index = i
 		var battle := campaign.build_battle(i + 1)
-		var mission: Dictionary = Campaign.MISSIONS[i]
+		var mission: Dictionary = campaign.missions()[i]
 		check_eq(battle.alive_units(1).size(), mission["enemy"].size(), "%s enemy force" % mission["name"])
 		check_eq(battle.objectives.size(), 3, "%s objectives" % mission["name"])
 
@@ -1177,7 +1179,7 @@ func test_settings_save_and_load_round_trip() -> void:
 	check_eq(GameSettings.to_dict(), GameSettings.defaults(), "a missing file keeps the defaults")
 	var changed := {
 		"instant_movement": true, "follow_opponent": false, "own_speed": 2, "opponent_speed": 3,
-		"pan_speed": 0, "show_hit_chance": false, "confirm_end_turn": true, "fullscreen": true,
+		"pan_speed": 0, "show_hit_chance": false, "confirm_end_turn": true, "fullscreen": true, "music_volume": 4,
 	}
 	GameSettings.from_dict(changed)
 	GameSettings.save_settings(TEST_SETTINGS)
@@ -1477,7 +1479,7 @@ func test_war_campaign_deployment_and_scoring() -> void:
 	var points: int = war.current_map()["points"]
 	var result := war.complete_map(battle)
 	check_eq(war.scores, [0, points], "the winner takes the map's points")
-	check_eq(result["spent"], [WarCampaign.cost_of(["Officer", "Rifleman", "Rifleman", "MG", "AT"]), WarCampaign.cost_of(["Tank", "Rifleman", "SMG"])], "supply spent recorded")
+	check_eq(result["spent"], [war.cost_of(0, ["Officer", "Rifleman", "Rifleman", "MG", "AT"]), war.cost_of(1, ["Tank", "Rifleman", "SMG"])], "supply spent recorded")
 	check_eq(war.supply[0], WarCampaign.SUPPLY - result["spent"][0], "spent supply is gone")
 	var copy := WarCampaign.from_dict(war.to_dict())
 	check_eq(copy.to_dict(), war.to_dict(), "save and load round trip")
@@ -1523,7 +1525,7 @@ func test_overwatch_holds_fire_on_targets_it_cannot_hurt() -> void:
 	var watcher := battle.units[2]
 	watcher.overwatch = true
 	check(not CombatRules.can_hurt(watcher.weapon, tank, watcher.pos), "a rifle can't hurt a tank")
-	check(CombatRules.can_hurt(Weapon.rocket(false), tank, watcher.pos), "a rocket can")
+	check(CombatRules.can_hurt(Unit.create(99, "AT", "AT", 1, Vector2i.ZERO).weapon, tank, watcher.pos), "a rocket can")
 	var events := battle.execute({"cmd": "move", "unit": tank.id, "tile": Vector2i(4, 8)})
 	check_eq(tank.pos, Vector2i(4, 8), "the tank drove into view")
 	check(events_of(events, "shot").is_empty(), "rifle overwatch ignores the tank")

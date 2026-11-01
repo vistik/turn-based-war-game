@@ -16,16 +16,17 @@ const DrawLayer := preload("res://scripts/view/draw_layer.gd")
 const PANEL_WIDTH := 280.0
 const TOP_BAR_HEIGHT := 50.0
 ## Controls listed by the "?" button in the top bar.
-const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nTab next unit   Enter end turn\n1-0, T, C, Z, X, B, G: actions (see buttons)\nH: suggest a move (Shift+H: this soldier)\nWASD / arrows / middle drag: pan\nWheel: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\n+ / -: playback speed"
-## UI accent colours: Allied green and German field grey.
-const TEAM_COLORS := [Color("9cc45a"), Color("b8c0c8")]
+const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nTab next unit   Enter end turn\n1-0, T, C, Z, X, B, G, U, J, K: actions (see buttons)\nH: suggest a move (Shift+H: this soldier)\nWASD / arrows / middle drag: pan\nWheel: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\n+ / -: playback speed   M: music on / off"
 const NEUTRAL_COLOR := Color("e8e2cf")
+## The mortar button's tag for each kind of round.
+const KIND_TAGS := {"he": "HE", "smoke": "SMK", "napalm": "NPM"}
 const MOVE_COLOR := Color("4aa3ff")
 const DASH_COLOR := Color("f5c542")
 const KEY_ACTIONS := {
 	KEY_1: "shoot", KEY_2: "overwatch", KEY_3: "hunker", KEY_4: "reload", KEY_5: "grenade",
 	KEY_6: "smoke", KEY_7: "set_up", KEY_8: "rally", KEY_9: "medkit", KEY_0: "mortar", KEY_T: "pivot",
 	KEY_C: "crouch", KEY_Z: "prone", KEY_X: "aimed", KEY_B: "suppress", KEY_G: "clear_mine",
+	KEY_U: "tunnel", KEY_J: "trap", KEY_K: "detonate",
 	KEY_TAB: "next", KEY_ENTER: "end", KEY_KP_ENTER: "end",
 }
 ## The action bar, in order: [action, key, name]. Each gets an icon (ActionIcons) of the same name.
@@ -34,13 +35,16 @@ const ACTION_BUTTONS := [
 	["overwatch", "2", "Overwatch"], ["hunker", "3", "Hunker down"], ["reload", "4", "Reload"],
 	["grenade", "5", "Grenade"], ["smoke", "6", "Smoke grenade"], ["set_up", "7", "Set up the MG"], ["rally", "8", "Rally"],
 	["medkit", "9", "Medkit"], ["mortar", "0", "Mortar"], ["pivot", "T", "Turn the tank"],
-	["crouch", "C", "Crouch"], ["prone", "Z", "Go prone"], ["clear_mine", "G", "Clear a mine"],
+	["crouch", "C", "Crouch"], ["prone", "Z", "Go prone"], ["clear_mine", "G", "Clear a mine, or blow in a tunnel"],
+	["tunnel", "U", "Through the tunnels: up at another entrance (both actions)"], ["trap", "J", "Lay a trap"], ["detonate", "K", "Set off an IED"],
 	["next", "Tab", "Next soldier"], ["end", "Enter", "End turn"],
 ]
 const SHOT_LABELS := {"miss": "MISS", "graze": "GRAZE", "hit": "HIT", "crit": "CRITICAL", "suppressing": "SUPPRESSING FIRE"}
 const STANCE_COLOR := "8fd3ff"
 ## Seconds a soldier takes to fall, and for a tank to brew up.
 const DEATH_TIME := 0.9
+## Times a second an idle unit on screen is repainted (breathing, flames on a wreck).
+const IDLE_REDRAW := 12.0
 const WRECK_TIME := 1.2
 ## Ranges at or below/above these weapon range modifiers count as poor/good on the field of fire.
 const GUN_POOR := -10
@@ -62,7 +66,7 @@ const TOP_Z := 4000
 ## Chunks repainted per frame, to spread the cost of a full repaint.
 const CHUNK_BUDGET := 3
 
-enum Mode { MOVE, SHOOT, GRENADE, SMOKE, MEDKIT, MORTAR, PIVOT, CLEAR_MINE }
+enum Mode { MOVE, SHOOT, GRENADE, SMOKE, MEDKIT, MORTAR, PIVOT, CLEAR_MINE, TUNNEL, TRAP, DETONATE }
 
 var battle: Battle
 ## Per team: null for a human player, otherwise the TacticalAI playing it.
@@ -108,6 +112,8 @@ var _display_hp := {}
 var _display_suppression := {}
 var _facing := {}
 var _walking := {}
+## Unit id -> [time, state] when it was last repainted (see _update_units).
+var _unit_drawn := {}
 var _hit_at := {}
 var _died_at := {}
 ## Per dying unit: {"forward": falls face down, "knock": Vector2 grid offset it is thrown}.
@@ -165,6 +171,7 @@ func _ready() -> void:
 		GameSession.war = null
 		GameSession.start_battle(NormandyScenario.build(), [false, true], "Normandy village")
 	battle = GameSession.battle
+	TerrainPainter.use_theatre(battle.theatre_id)
 	_proj = ViewProjection.new(Vector2(battle.map.width, battle.map.height))
 	z_index = TOP_Z
 	for cy in ceili(battle.map.height / float(CHUNK)):
@@ -207,7 +214,7 @@ func _ready() -> void:
 	if not battle.started:
 		_run(battle.start())
 	elif controllers[0] == null and controllers[1] == null and GameSession.agent_team == -1:
-		_show_overlay("handover", "%s's turn\n\nClick or press any key" % Battle.TEAM_NAMES[battle.current_team], TEAM_COLORS[battle.current_team])
+		_show_overlay("handover", "%s's turn\n\nClick or press any key" % battle.team_name(battle.current_team), _team_color(battle.current_team))
 	else:
 		_turn_started = true
 		_run([])
@@ -340,6 +347,9 @@ func _handle_camera_input(event: InputEvent) -> bool:
 				_rotate_view(1)
 			KEY_V:
 				_toggle_view()
+			KEY_M:
+				GameSettings.toggle_music()
+				_flash("Music %s" % ("on" if GameSettings.music_volume > 0 else "off"))
 			KEY_F:
 				if selected != null:
 					_focus(_display_pos[selected.id])
@@ -395,6 +405,18 @@ func _on_click(tile: Vector2i) -> void:
 			err = battle.can_clear_mine(selected, tile)
 			if err == "":
 				_command({"cmd": "clear_mine", "unit": selected.id, "tile": tile})
+		Mode.TUNNEL:
+			err = battle.can_tunnel(selected, tile)
+			if err == "":
+				_command({"cmd": "tunnel", "unit": selected.id, "tile": tile})
+		Mode.TRAP:
+			err = battle.can_lay_trap(selected, tile)
+			if err == "":
+				_command({"cmd": "trap", "unit": selected.id, "tile": tile})
+		Mode.DETONATE:
+			err = battle.can_detonate(selected, tile)
+			if err == "":
+				_command({"cmd": "detonate", "unit": selected.id, "tile": tile})
 		Mode.GRENADE:
 			err = battle.can_throw_grenade(selected, tile)
 			if err == "":
@@ -475,9 +497,31 @@ func _on_action(action: String) -> void:
 		"clear_mine":
 			err = battle.can_act(selected)
 			if err == "" and _clearable_mines(selected).is_empty():
-				err = "No spotted mine next to this soldier"
+				err = "No spotted mine or tunnel next to this soldier"
 			if err == "":
 				_set_mode(Mode.CLEAR_MINE)
+		"tunnel":
+			err = battle.can_act(selected)
+			if err == "" and not selected.has_trait("tunnels"):
+				err = "Only the Viet Cong use the tunnels"
+			elif err == "" and battle.map.tunnel_owner(selected.pos) != selected.team:
+				err = "Stand on one of your tunnel entrances first"
+			elif err == "" and selected.actions < Unit.ACTIONS_PER_TURN:
+				err = "Going through the tunnels takes both actions"
+			if err == "":
+				_set_mode(Mode.TUNNEL)
+		"trap":
+			err = battle.can_act(selected)
+			if err == "" and (not selected.has_trait("traps") or selected.traps <= 0):
+				err = "No traps left"
+			if err == "":
+				_set_mode(Mode.TRAP)
+		"detonate":
+			err = battle.can_act(selected)
+			if err == "" and _detonatable(selected).is_empty():
+				err = "No IED of ours in sight"
+			if err == "":
+				_set_mode(Mode.DETONATE)
 		"crouch", "prone":
 			var stance := _stance_for(action)
 			err = battle.can_change_stance(selected, stance)
@@ -529,14 +573,17 @@ func _on_action(action: String) -> void:
 				_set_mode(Mode.PIVOT)
 		"mortar":
 			err = battle.can_act(selected)
-			if err == "" and selected.role != "Mortar":
+			if err == "" and selected.indirect.is_empty():
 				err = "Only the mortar team can fire the mortar"
 			if err == "":
-				# Pressing again switches between high explosive and smoke rounds.
-				if mode == Mode.MORTAR:
-					_mortar_kind = "smoke" if _mortar_kind == "he" else "he"
+				# Pressing again switches to the next kind of round (high explosive, smoke, napalm).
+				var kinds: Array = selected.indirect["kinds"].filter(func(k: String) -> bool: return selected.rounds_left(k) > 0)
+				if kinds.is_empty():
+					kinds = selected.indirect["kinds"]
+				if mode == Mode.MORTAR and kinds.has(_mortar_kind):
+					_mortar_kind = kinds[(kinds.find(_mortar_kind) + 1) % kinds.size()]
 				else:
-					_mortar_kind = "he" if selected.mortar_rounds > 0 else "smoke"
+					_mortar_kind = kinds[0]
 				_set_mode(Mode.MORTAR)
 	if err != "":
 		_flash(err)
@@ -677,6 +724,11 @@ func _on_turn_agreed(turn_index: int, checksum: String) -> void:
 
 
 ## The team whose fog of war is shown: the only human, the current human in hotseat, or -1 to see everything.
+## A side's UI accent colour (Allied green, German field grey...).
+func _team_color(team: int) -> Color:
+	return battle.theatre().team_color(team)
+
+
 func _view_team() -> int:
 	if replay != null:
 		return replay.view_team
@@ -825,7 +877,8 @@ func _run(events: Array) -> void:
 
 ## Event types that only show if the side watching can see the unit doing or suffering them. Attacks on
 ## the watcher's own units (shots, throws) always show, and give the attacker away.
-const PRIVATE_EVENTS := ["pivot", "stance", "damage", "suppression", "status", "heal", "mine_cleared", "mortar_fire", "object_shot", "smoke", "mine"]
+const PRIVATE_EVENTS := ["pivot", "stance", "damage", "suppression", "status", "heal", "mine_cleared", "mortar_fire", "object_shot", "smoke", "mine",
+		"trap_laid", "tunnel_collapsed"]
 
 
 func _play_event(e: Dictionary) -> void:
@@ -873,7 +926,7 @@ func _play_event(e: Dictionary) -> void:
 			else:
 				_start_fall(u)
 				_float(_display_pos[u.id], "KILLED", Color("ff3b3b"))
-				_log_line("[color=#ff6b6b]%s (%s) was killed.[/color]" % [u.name, u.role])
+				_log_line("[color=#ff6b6b]%s (%s) was killed.[/color]" % [u.name, u.def.get("name", u.role)])
 				await _wait(0.6)
 		"suppression":
 			var u := battle.get_unit(e["unit"])
@@ -908,8 +961,41 @@ func _play_event(e: Dictionary) -> void:
 			_log_line("[color=#999]The fire burns out.[/color]")
 		"mine":
 			var u := battle.get_unit(e["unit"])
-			_float(_center(e["tile"]), "MINE!", Color("ff3b3b"))
-			_log_line("[color=#ff6b6b]%s steps on a mine![/color]" % u.name)
+			var kind: String = e.get("kind", "mine")
+			_float(_center(e["tile"]), {"punji": "PUNJI TRAP!", "ied": "IED!"}.get(kind, "MINE!"), Color("ff3b3b"))
+			_log_line("[color=#ff6b6b]%s %s![/color]" % [u.name, {"punji": "steps into a punji trap", "ied": "sets off an IED"}.get(kind, "steps on a mine")])
+		"tunnel":
+			await _play_tunnel(e)
+		"tunnels_spotted":
+			if _view_team() == -1 or _view_team() == e["team"]:
+				for tile: Vector2i in e["tiles"]:
+					_float(_center(tile), "Tunnel!", Color("d9a66b"))
+				var finder := battle.get_unit(e["unit"])
+				_log_line("%s %d tunnel entrance%s." % ["%s finds" % finder.name if finder != null else "Found", e["tiles"].size(), "" if e["tiles"].size() == 1 else "s"])
+				await _wait(0.3)
+		"tunnel_collapsed":
+			_float(_center(e["tile"]), "Tunnel blown in", Color("8fe08a"))
+			_effects.append({"kind": "puff_burst", "at": _center(e["tile"]), "age": 0.0, "life": 0.8})
+			_log_line("%s blows in a tunnel entrance." % battle.get_unit(e["unit"]).name)
+			await _wait(0.3)
+		"trap_laid":
+			var ied: bool = battle.get_unit(e["unit"]).def.get("trap_kind", "punji") == "ied"
+			_float(_center(e["tile"]), "IED planted" if ied else "Trap laid", Color("d9a66b"))
+			_log_line("%s %s." % [battle.get_unit(e["unit"]).name, "plants an IED" if ied else "hides a punji trap"])
+		"ied":
+			_float(_center(e["tile"]), "IED!", Color("ff3b3b"))
+			_log_line("[color=#ff6b6b]An IED goes off![/color]")
+			await _wait(0.25)
+		"napalm":
+			_last_source = {"at": _center(e["center"]), "blast": true}
+			_hold_layout = false
+			_effects.append({"kind": "explosion", "at": _center(e["center"]), "radius": CombatRules.NAPALM_RADIUS + 1.0, "age": 0.0, "life": 1.6})
+			_float(_center(e["center"]), "NAPALM", Color("ff8a3d"))
+			_log_line("[color=#ffb84d]Napalm! The ground goes up in flames.[/color]")
+			await _wait(0.7)
+		"kill_points":
+			var scorer: int = e["team"]
+			_log_line("[color=%s]%s score for the kill: %d to %d.[/color]" % [_team_color(scorer).to_html(false), battle.team_name(scorer), e["points"][0], e["points"][1]])
 		"mines_spotted":
 			if _view_team() == -1 or _view_team() == e["team"]:
 				for tile: Vector2i in e["tiles"]:
@@ -945,29 +1031,32 @@ func _play_event(e: Dictionary) -> void:
 		"objective":
 			var objective: Dictionary = battle.objectives[e["index"]]
 			var owner: int = e["owner"]
-			_float(objective["center"], "%s take the %s" % [Battle.TEAM_NAMES[owner], objective["name"]], TEAM_COLORS[owner])
-			_log_line("[color=%s]%s take the %s.[/color]" % [TEAM_COLORS[owner].to_html(false), Battle.TEAM_NAMES[owner], objective["name"]])
+			_float(objective["center"], "%s take the %s" % [battle.team_name(owner), objective["name"]], _team_color(owner))
+			_log_line("[color=%s]%s take the %s.[/color]" % [_team_color(owner).to_html(false), battle.team_name(owner), objective["name"]])
 			await _wait(0.3)
 		"score":
 			var points: Array = e["points"]
-			_log_line("Score after the round: Allies %d, Germany %d." % [points[0], points[1]])
+			_log_line("Score after the round: %s %d, %s %d." % [battle.team_name(0), points[0], battle.team_name(1), points[1]])
 		"reinforcements":
 			var team: int = e["team"]
 			for id: int in e["units"]:
 				_add_display_state(battle.get_unit(id))
-			_log_line("[color=%s]%s reinforcements arrive.[/color]" % [TEAM_COLORS[team].to_html(false), Battle.TEAM_NAMES[team]])
+			var air: bool = e.get("air", false)
+			_log_line("[color=%s]%s reinforcements %s.[/color]" % [_team_color(team).to_html(false), battle.team_name(team), "fly in by helicopter" if air else "arrive"])
 			if _view_team() == -1 or _view_team() == team:
-				_show_banner("%s reinforcements!" % Battle.TEAM_NAMES[team], TEAM_COLORS[team])
+				_show_banner("%s reinforcements!" % battle.team_name(team), _team_color(team))
+			if air:
+				await _play_helicopters(e)
 		"turn":
 			var team: int = e["team"]
-			var who := "%s%s" % [Battle.TEAM_NAMES[team], _controller_name(team)]
-			_log_line("[b][color=%s]Round %d: %s[/color][/b]" % [TEAM_COLORS[team].to_html(false), e["round"], who])
+			var who := "%s%s" % [battle.team_name(team), _controller_name(team)]
+			_log_line("[b][color=%s]Round %d: %s[/color][/b]" % [_team_color(team).to_html(false), e["round"], who])
 			_turn_started = true
 			_apply_turn_speed(team)
 			if controllers[0] == null and controllers[1] == null and GameSession.agent_team == -1:
-				_show_overlay("handover", "%s's turn\n\nClick or press any key" % Battle.TEAM_NAMES[team], TEAM_COLORS[team])
+				_show_overlay("handover", "%s's turn\n\nClick or press any key" % battle.team_name(team), _team_color(team))
 			else:
-				_show_banner("Turn: %s" % who, TEAM_COLORS[team])
+				_show_banner("Turn: %s" % who, _team_color(team))
 		"game_over":
 			var winner: int = e["winner"]
 			var how := "by holding the objectives" if e.get("reason") == "points" else "by wiping out the enemy"
@@ -975,8 +1064,8 @@ func _play_event(e: Dictionary) -> void:
 				_log_line("[b]The battle ends in a draw.[/b]")
 				_show_overlay("game_over", "A draw: %d to %d\n\nClick or press any key to continue" % battle.victory_points, NEUTRAL_COLOR)
 			else:
-				_log_line("[b]%s win %s![/b]" % [Battle.TEAM_NAMES[winner], how])
-				_show_overlay("game_over", "%s win %s!\n%d to %d\n\nClick or press any key to continue" % [Battle.TEAM_NAMES[winner], how, battle.victory_points[0], battle.victory_points[1]], TEAM_COLORS[winner])
+				_log_line("[b]%s win %s![/b]" % [battle.team_name(winner), how])
+				_show_overlay("game_over", "%s win %s!\n%d to %d\n\nClick or press any key to continue" % [battle.team_name(winner), how, battle.victory_points[0], battle.victory_points[1]], _team_color(winner))
 
 
 ## How a soldier falls: away from what killed him, on his back if it came from in front, face down if from
@@ -1019,13 +1108,57 @@ func _play_unseen(e: Dictionary) -> void:
 		"suppression":
 			_display_suppression[u.id] = e["value"]
 		"mortar_fire":
-			_log_line("[color=#ffb84d]A mortar fires somewhere in the distance.[/color]")
+			if u.indirect.get("spotter", "team") == "self":
+				_log_line("[color=#ffb84d]Somewhere a radio crackles: a fire mission is on its way.[/color]")
+			else:
+				_log_line("[color=#ffb84d]A mortar fires somewhere in the distance.[/color]")
 		"smoke":
 			_effects.append({"kind": "puff_burst", "at": _center(e["center"]), "age": 0.0, "life": 0.8})
 			_log_line("Smoke rises.")
 		"mine":
-			_float(_center(e["tile"]), "MINE!", Color("ff3b3b"))
-			_log_line("[color=#ff6b6b]A mine goes off.[/color]")
+			var kind: String = e.get("kind", "mine")
+			_float(_center(e["tile"]), {"punji": "PUNJI TRAP!", "ied": "IED!"}.get(kind, "MINE!"), Color("ff3b3b"))
+			_log_line("[color=#ff6b6b]%s[/color]" % {"punji": "A scream: someone has stepped into a trap.", "ied": "An IED goes off."}.get(kind, "A mine goes off."))
+
+
+## Down one entrance, up another. The watching enemy sees the unit vanish only where it could see it, and come
+## up only where it can see the exit.
+func _play_tunnel(e: Dictionary) -> void:
+	var u := battle.get_unit(e["unit"])
+	var from: Vector2i = e["from"]
+	var to: Vector2i = e["to"]
+	var own := _view_team() == -1 or u.team == _view_team()
+	if own or _viewer_sees(from):
+		_float(_center(from), "Into the tunnels", Color("d9a66b"))
+		_effects.append({"kind": "puff", "at": _proj.project(_center(from), 0.1), "age": 0.0, "life": 0.6})
+		await _wait(0.35)
+	if not own:
+		_move_visibility[u.id] = _viewer_sees(to)
+	_display_pos[u.id] = _center(to)
+	if own or _viewer_sees(to):
+		if controllers[u.team] != null and _follows(u.team):
+			_focus(_center(to))
+		_float(_center(to), "Comes up out of the ground!" if not own else "Up here", Color("d9a66b"))
+		_effects.append({"kind": "puff", "at": _proj.project(_center(to), 0.1), "age": 0.0, "life": 0.6})
+		_log_line("%s %s." % [u.name, "comes up out of a tunnel" if not own else "goes through the tunnels"])
+		await _wait(0.35)
+
+
+## Helicopters bringing a wave in: they come in low from the side's own edge, flare over the landing zone and
+## leave. The soldiers are already on the ground when they pull away.
+func _play_helicopters(e: Dictionary) -> void:
+	var ids: Array = e["units"]
+	if ids.is_empty():
+		return
+	var lz: Vector2 = _display_pos[ids[0]]
+	var edge := Vector2(-4.0 if e["team"] == 0 else battle.map.width + 4.0, lz.y - 3.0)
+	if _view_team() == -1 or _view_team() == e["team"] or _viewer_sees(Vector2i(lz)):
+		if _follows(e["team"]):
+			_focus(lz)
+	for i in mini(2, ids.size()):
+		var offset := Vector2(0.0, 1.6 * i)
+		_effects.append({"kind": "helicopter", "from": edge + offset, "to": lz + offset + Vector2(0.0, -0.5), "age": 0.0, "life": 2.6})
+	await _wait(1.3)
 
 
 func _play_move(e: Dictionary) -> void:
@@ -1175,6 +1308,17 @@ func _explosives_in_sight(u: Unit) -> Array[Vector2i]:
 
 
 ## Spotted mines next to the unit that it could lift.
+## The side's IEDs this bomb maker could set off now.
+func _detonatable(u: Unit) -> Array[Vector2i]:
+	var result: Array[Vector2i] = []
+	if u == null or not u.has_trait("detonator"):
+		return result
+	for p: Vector2i in battle.mines_known_to(u.team):
+		if battle.can_detonate(u, p) == "":
+			result.append(p)
+	return result
+
+
 func _clearable_mines(u: Unit) -> Array[Vector2i]:
 	var result: Array[Vector2i] = []
 	for d: Vector2i in TacticalMap.DIRS8:
@@ -1196,8 +1340,11 @@ func _play_mortar_fire(e: Dictionary) -> void:
 	_revealed[u.id] = true
 	_effects.append({"kind": "muzzle", "at": _proj.project(_display_pos[u.id], 0.9), "age": 0.0, "life": 0.15})
 	_effects.append({"kind": "shell", "from": _display_pos[u.id], "to": target, "age": 0.0, "life": 0.8})
-	var round_name := "high explosive" if e["kind"] == "he" else "smoke"
-	_log_line("%s fires a %s round. It lands at the start of their next turn." % [u.name, round_name])
+	var round_name: String = Battle.KIND_NAMES.get(e["kind"], e["kind"])
+	if u.indirect.get("spotter", "team") == "self":
+		_log_line("%s calls in %s. It lands at the start of their next turn." % [u.name, "napalm" if e["kind"] == "napalm" else ("smoke" if e["kind"] == "smoke" else ("an " if String(u.indirect["name"]).begins_with("a") else "") + u.indirect["name"])])
+	else:
+		_log_line("%s fires a %s round. It lands at the start of their next turn." % [u.name, round_name])
 	await _wait(0.8)
 
 
@@ -1327,18 +1474,18 @@ func _compute_flankers() -> Array[Unit]:
 
 func _update_panel() -> void:
 	var team := battle.current_team
-	_turn_label.text = "Round %d/%d: %s%s" % [battle.round_number, battle.max_rounds, Battle.TEAM_NAMES[team], _controller_name(team)]
-	_turn_label.add_theme_color_override("font_color", TEAM_COLORS[team])
+	_turn_label.text = "Round %d/%d: %s%s" % [battle.round_number, battle.max_rounds, battle.team_name(team), _controller_name(team)]
+	_turn_label.add_theme_color_override("font_color", _team_color(team))
 	var holders := PackedStringArray()
 	for objective in battle.objectives:
 		var owner: int = objective["owner"]
-		var color: Color = TEAM_COLORS[owner] if owner != -1 else NEUTRAL_COLOR
+		var color: Color = _team_color(owner) if owner != -1 else NEUTRAL_COLOR
 		holders.append("[color=%s]%s[/color]" % [color.to_html(false), objective["name"]])
-	_score_label.text = "[color=%s]Allies %d[/color]  vs  [color=%s]Germany %d[/color]   (%d to win)\n%s" % [
-		TEAM_COLORS[0].to_html(false), battle.victory_points[0], TEAM_COLORS[1].to_html(false), battle.victory_points[1],
+	_score_label.text = "[color=%s]%s %d[/color]  vs  [color=%s]%s %d[/color]   (%d to win)\n%s" % [
+		_team_color(0).to_html(false), battle.team_name(0), battle.victory_points[0], _team_color(1).to_html(false), battle.team_name(1), battle.victory_points[1],
 		battle.vp_to_win, "   ".join(holders)]
 	if not _is_human_turn():
-		_unit_info.text = "[i]%s are taking their turn...[/i]" % Battle.TEAM_NAMES[team]
+		_unit_info.text = "[i]%s are taking their turn...[/i]" % battle.team_name(team)
 	elif selected != null:
 		_unit_info.text = _describe_unit(selected)
 	else:
@@ -1346,12 +1493,15 @@ func _update_panel() -> void:
 	var s := selected if _is_human_turn() else null
 	var visible := {
 		"grenade": s != null and s.grenades > 0, "smoke": s != null and s.smoke_grenades > 0,
-		"set_up": s != null and s.weapon.needs_setup, "rally": s != null and s.role == "Officer",
-		"medkit": s != null and s.medkits > 0, "mortar": s != null and s.role == "Mortar",
+		"set_up": s != null and s.weapon.needs_setup, "rally": s != null and s.leader,
+		"medkit": s != null and s.medkits > 0, "mortar": s != null and not s.indirect.is_empty(),
 		"pivot": s != null and s.vehicle, "hunker": s == null or not s.vehicle,
 		"crouch": s == null or not s.vehicle, "prone": s == null or not s.vehicle,
 		"suppress": s == null or not (s.vehicle or s.weapon.anti_tank),
 		"clear_mine": s != null and not s.vehicle and not _clearable_mines(s).is_empty(),
+		"tunnel": s != null and s.has_trait("tunnels") and battle.map.tunnel_owner(s.pos) == s.team,
+		"trap": s != null and s.has_trait("traps"),
+		"detonate": s != null and s.has_trait("detonator"),
 	}
 	for action: String in visible:
 		_buttons[action].visible = visible[action]
@@ -1363,10 +1513,16 @@ func _update_panel() -> void:
 	_buttons["rally"].disabled = s == null or battle.can_rally(s) != ""
 	for action in ["grenade", "smoke", "medkit", "mortar", "pivot"]:
 		_buttons[action].disabled = s == null or battle.can_act(s) != ""
-	if s != null and s.role == "Mortar":
-		_buttons["mortar"].disabled = s.actions < Unit.ACTIONS_PER_TURN
-		var smoke_round := mode == Mode.MORTAR and _mortar_kind == "smoke"
-		_buttons["mortar"].set_look("mortar", "Mortar: %s (press again to switch)" % ("smoke" if smoke_round else "high explosive"), "SMK" if smoke_round else "HE")
+	_buttons["tunnel"].disabled = s == null or battle.can_act(s) != "" or s.actions < Unit.ACTIONS_PER_TURN or s.is_pinned()
+	_buttons["trap"].disabled = s == null or battle.can_act(s) != "" or s.traps <= 0
+	var ied: bool = s != null and s.def.get("trap_kind", "punji") == "ied"
+	_buttons["trap"].set_look("trap", "Plant an IED next to the soldier (1 action)" if ied else "Lay a punji trap next to the soldier (1 action)", str(s.traps) if s != null else "")
+	_buttons["detonate"].disabled = s == null or battle.can_act(s) != "" or _detonatable(s).is_empty()
+	if s != null and not s.indirect.is_empty():
+		_buttons["mortar"].disabled = s.actions < Unit.ACTIONS_PER_TURN and s.indirect["still"]
+		var kind: String = _mortar_kind if mode == Mode.MORTAR else s.indirect["kinds"][0]
+		_buttons["mortar"].set_look("mortar", "%s: %s (press again to switch)" % [String(s.indirect["name"]).capitalize(), Battle.KIND_NAMES.get(kind, kind)],
+				KIND_TAGS.get(kind, "HE"))
 	for action in ["crouch", "prone"]:
 		_buttons[action].disabled = s == null or s.vehicle or battle.can_change_stance(s, _stance_for(action)) != ""
 	var crouched := s != null and s.stance == Unit.Stance.CROUCH
@@ -1389,7 +1545,7 @@ func _update_panel() -> void:
 
 func _describe_unit(u: Unit) -> String:
 	var lines := PackedStringArray()
-	lines.append("[b][color=%s]%s[/color][/b]  %s, %s" % [TEAM_COLORS[u.team].to_html(false), u.name, u.role, u.weapon.name])
+	lines.append("[b][color=%s]%s[/color][/b]  %s, %s" % [_team_color(u.team).to_html(false), u.name, u.def.get("name", u.role), u.weapon.name])
 	lines.append("HP %d/%d   Aim %d   Move %.0f%s   Ammo %d/%d" % [u.hp, u.max_hp, u.aim, u.current_mobility(),
 			"" if u.current_mobility() == u.mobility else " (of %.0f)" % u.mobility, u.ammo, u.weapon.clip_size])
 	var kit := PackedStringArray()
@@ -1422,13 +1578,20 @@ func _describe_unit(u: Unit) -> String:
 		Mode.SHOOT:
 			lines.append("[color=#ff9b8a]Shooting: click a target, or fuel drums / an oil tank to blow them up. Right click cancels.[/color]")
 		Mode.CLEAR_MINE:
-			lines.append("[color=#e7d9a8]Clear mine: click a spotted mine next to the soldier (1 action). Right click cancels.[/color]")
+			lines.append("[color=#e7d9a8]Clear mine: click a spotted mine, or an enemy tunnel entrance to blow it in, next to the soldier (1 action). Right click cancels.[/color]")
+		Mode.TUNNEL:
+			lines.append("[color=#d9a66b]Tunnels: click one of your other entrances to come up there. Uses both actions. Right click cancels.[/color]")
+		Mode.TRAP:
+			lines.append("[color=#d9a66b]%s: click a tile next to him (1 action). Only your side knows it's there.[/color]" % ("IED" if selected.def.get("trap_kind", "punji") == "ied" else "Punji trap"))
+		Mode.DETONATE:
+			lines.append("[color=#ff9b6b]Set off an IED: click one of your IEDs he can see. Ends his turn. Right click cancels.[/color]")
 		Mode.GRENADE:
 			lines.append("[color=#ffb84d]Grenade: click a tile in range. Right click cancels.[/color]")
 		Mode.SMOKE:
 			lines.append("[color=#c8d0d8]Smoke: click a tile in range. Right click cancels.[/color]")
 		Mode.MORTAR:
-			lines.append("[color=#ffb84d]Mortar (%s): click a spotted tile. Press 0 to switch rounds.[/color]" % ("smoke" if _mortar_kind == "smoke" else "high explosive"))
+			lines.append("[color=#ffb84d]%s (%s): click a %s tile. Press 0 to switch rounds.[/color]" % [String(selected.indirect["name"]).capitalize(),
+					Battle.KIND_NAMES.get(_mortar_kind, _mortar_kind), "visible" if selected.indirect["spotter"] == "self" else "spotted"])
 		Mode.MEDKIT:
 			lines.append("[color=#6bff8a]Medkit: click yourself or an adjacent ally. Right click cancels.[/color]")
 		Mode.PIVOT:
@@ -1464,13 +1627,14 @@ func _update_target_info() -> void:
 				text += _describe_scatter(hover, CombatRules.SMOKE_RADIUS, false)
 				text += _error_line(battle.can_throw_smoke(selected, hover))
 			Mode.MORTAR:
-				text = "[b]Mortar, %s[/b]  range %d-%d\nLands at the start of your next turn, up to %.1f tiles off target.\nNeeds a soldier who can see the target." % [
-					"smoke" if _mortar_kind == "smoke" else "high explosive", CombatRules.MORTAR_MIN_RANGE, CombatRules.MORTAR_MAX_RANGE,
-					Battle.mortar_scatter(selected.pos, hover)]
+				var spec := selected.indirect
+				text = "[b]%s, %s[/b]  range %d-%d\nLands at the start of your next turn, up to %.1f tiles off target.\n%s" % [
+					String(spec["name"]).capitalize(), Battle.KIND_NAMES.get(_mortar_kind, _mortar_kind), spec["min"], spec["max"],
+					Battle.mortar_scatter(selected.pos, hover, spec), "Needs to see the target himself." if spec["spotter"] == "self" else "Needs a soldier who can see the target."]
 				text += _error_line(battle.can_fire_mortar(selected, hover, _mortar_kind))
 			Mode.PIVOT:
 				text = "[b]Turn on the spot[/b]  1 action\nArmour: front %d, side %d, rear %d.\nOn the move, every 45° turned costs %.0f movement; backing up costs double." % [
-					CombatRules.VEHICLE_ARMOR["front"], CombatRules.VEHICLE_ARMOR["side"], CombatRules.VEHICLE_ARMOR["rear"], Pathfinder.TURN_COST]
+					CombatRules.armor_value(selected, "front"), CombatRules.armor_value(selected, "side"), CombatRules.armor_value(selected, "rear"), Pathfinder.TURN_COST]
 				if hover != selected.pos:
 					text += _error_line(battle.can_pivot(selected, _pivot_dir(hover)))
 	if text == "" and map.in_bounds(hover):
@@ -1484,7 +1648,7 @@ func _error_line(err: String) -> String:
 
 func _describe_suppression(shooter: Unit, target: Unit) -> String:
 	var lines := PackedStringArray()
-	lines.append("[b]Suppressive fire on %s[/b] (%s)  suppression %d" % [target.name, target.role, target.suppression])
+	lines.append("[b]Suppressive fire on %s[/b] (%s)  suppression %d" % [target.name, target.def.get("name", target.role), target.suppression])
 	lines.append("[color=#ffb84d]+%d suppression[/color], +%d to anyone within %.1f tiles of them" % [
 		roundi(shooter.weapon.suppression * CombatRules.SUPPRESSIVE_FIRE_FACTOR), shooter.weapon.suppression, CombatRules.SUPPRESSIVE_FIRE_RADIUS])
 	lines.append("No damage, but they don't recover from it at the start of their next turn.")
@@ -1495,7 +1659,7 @@ func _describe_suppression(shooter: Unit, target: Unit) -> String:
 func _describe_odds(shooter: Unit, target: Unit) -> String:
 	var odds := battle.shot_odds(shooter, target, false, mode == Mode.SHOOT and _shot_cmd == "aimed_shot")
 	var lines := PackedStringArray()
-	lines.append("[b]Target: %s[/b] (%s)  HP %d/%d" % [target.name, target.role, target.hp, target.max_hp])
+	lines.append("[b]Target: %s[/b] (%s)  HP %d/%d" % [target.name, target.def.get("name", target.role), target.hp, target.max_hp])
 	if GameSettings.show_hit_chance:
 		lines.append("[color=#8fff9b]Hit %d%%[/color]   Graze %d%%   Crit %d%%   Suppression +%d" % [odds["hit"], odds["graze"], odds["crit"], shooter.weapon.suppression])
 		for m: Array in odds["modifiers"]:
@@ -1505,7 +1669,7 @@ func _describe_odds(shooter: Unit, target: Unit) -> String:
 			lines.append("[color=#ff6b6b]Small arms can't hurt a tank[/color]")
 		else:
 			var side := CombatRules.armor_side(target, shooter.pos)
-			lines.append("[color=#ffb84d]Hitting its %s armour: -%d damage[/color]" % [side, CombatRules.VEHICLE_ARMOR[side]])
+			lines.append("[color=#ffb84d]Hitting its %s armour: -%d damage[/color]" % [side, CombatRules.armor_value(target, side)])
 	elif odds["flanked"]:
 		lines.append("[color=#ffb84d]No cover from this angle: +%d crit[/color]" % CombatRules.FLANK_CRIT_BONUS)
 	if shooter.weapon.blast_radius > 0.0:
@@ -1579,6 +1743,12 @@ func _describe_tile(p: Vector2i) -> String:
 			lines.append("Hides soldiers at range; trampled flat when walked through")
 		TacticalMap.Terrain.WIRE:
 			lines.append("Slow to cross on foot; tanks and explosions flatten it")
+		TacticalMap.Terrain.TALL_GRASS:
+			lines.append("Hides crouching and prone soldiers beyond 3 tiles; trampled flat when walked through")
+		TacticalMap.Terrain.JUNGLE:
+			lines.append("Hides anyone in it beyond 3 tiles; sight goes no further than one tile of jungle")
+		TacticalMap.Terrain.PADDY:
+			lines.append("Flooded: slow on foot, bogs vehicles down, no cover")
 	for objective in battle.objectives:
 		if (Vector2(p) + Vector2(0.5, 0.5)).distance_to(objective["center"]) <= objective["radius"]:
 			lines.append("Objective: %s" % objective["name"])
@@ -1903,27 +2073,34 @@ func _chunk_tiles(chunk: Vector2i) -> Array[Vector2i]:
 	return tiles
 
 
+## Ground, shadows, fog and props are drawn into a DrawBatch, so each is one draw call instead of hundreds.
 func _paint_ground_chunk(c: CanvasItem, chunk: Vector2i) -> void:
+	var batch := DrawBatch.new()
 	for p in _chunk_tiles(chunk):
-		TerrainPainter.draw_tile(c, _proj, battle.map, p)
-		c.draw_polyline(_tile_outline(p), Color(0, 0, 0, 0.08), 1.0)
+		TerrainPainter.draw_tile(batch, _proj, battle.map, p)
+		batch.draw_polyline(_tile_outline(p), Color(0, 0, 0, 0.08), 1.0)
+	batch.flush(c)
 
 
 ## Shadows sit on their own layer so they can fall across chunk borders onto ground drawn later.
 func _paint_shadow_chunk(c: CanvasItem, chunk: Vector2i) -> void:
 	var map := battle.map
+	var batch := DrawBatch.new()
 	for p in _chunk_tiles(chunk):
 		if map.get_object(p) != Cover.NONE:
-			TerrainPainter.draw_object_shadow(c, _proj, map, p)
+			TerrainPainter.draw_object_shadow(batch, _proj, map, p)
 	for key: Vector3i in map.get_edges():
 		if Vector2i(key.x, key.y) / CHUNK == chunk:
-			TerrainPainter.draw_edge_shadow(c, _proj, map, key)
+			TerrainPainter.draw_edge_shadow(batch, _proj, map, key)
+	batch.flush(c)
 
 
 func _paint_fog_chunk(c: CanvasItem, chunk: Vector2i) -> void:
+	var batch := DrawBatch.new()
 	for p in _chunk_tiles(chunk):
 		if not _visible_tiles.has(p):
-			c.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), Color(0.03, 0.03, 0.05, 0.5))
+			batch.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), Color(0.03, 0.03, 0.05, 0.5))
+	batch.flush(c)
 
 
 ## One canvas item per object and wall, recorded once. Rebuilt when the map layout changes.
@@ -1960,11 +2137,15 @@ func _add_prop(painter: Callable, center: Vector2, tiles: Array[Vector2i]) -> No
 
 
 func _paint_object(c: CanvasItem, p: Vector2i) -> void:
-	TerrainPainter.draw_object(c, _proj, battle.map, p, 1.0, false)
+	var batch := DrawBatch.new()
+	TerrainPainter.draw_object(batch, _proj, battle.map, p, 1.0, false)
+	batch.flush(c)
 
 
 func _paint_edge(c: CanvasItem, key: Vector3i) -> void:
-	TerrainPainter.draw_edge(c, _proj, battle.map, key, 1.0, false)
+	var batch := DrawBatch.new()
+	TerrainPainter.draw_edge(batch, _proj, battle.map, key, 1.0, false)
+	batch.flush(c)
 
 
 ## Props out of sight are darkened, like the fog under them.
@@ -2036,14 +2217,28 @@ func _paint_smoke(c: CanvasItem, p: Vector2i) -> void:
 	TerrainPainter.draw_smoke(c, _proj, p, _time)
 
 
+## Soldiers are the costliest thing to draw, so a unit is only repainted while it is on screen, and every frame
+## only while something is happening to it (moving, turning, hit, falling, selected or targeted). Otherwise
+## it is repainted IDLE_REDRAW times a second, enough for breathing and a burning wreck.
 func _update_units() -> void:
+	var view := _view_rect()
 	for u in battle.units:
 		if not _unit_nodes.has(u.id):
 			continue
 		var node: Node2D = _unit_nodes[u.id]
 		node.visible = _is_drawn(u)
-		if node.visible:
-			node.z_index = _depth_z(_display_pos[u.id], 0.05)
+		if not node.visible:
+			continue
+		var at: Vector2 = _display_pos[u.id]
+		node.z_index = _depth_z(at, 0.05)
+		if not view.has_point(_proj.project(at)):
+			continue
+		var drawn: Array = _unit_drawn.get(u.id, [])
+		var state := [at, _facing[u.id], u.stance, u == selected, mode, _display_hp[u.id], _display_suppression[u.id], u.deployed]
+		var busy_now: bool = _walking.has(u.id) or _time - _hit_at.get(u.id, -10.0) < 0.5 or _time - _died_at.get(u.id, -10.0) < DEATH_TIME + 3.5 \
+				or u == selected or (mode == Mode.SHOOT and _target_odds.has(u.id))
+		if busy_now or drawn.is_empty() or drawn[1] != state or _time - drawn[0] >= 1.0 / IDLE_REDRAW:
+			_unit_drawn[u.id] = [_time, state]
 			node.queue_redraw()
 
 
@@ -2069,9 +2264,11 @@ func _draw() -> void:
 func _paint_ground_overlays(c: CanvasItem) -> void:
 	for p: Vector2i in battle.map.get_fires():
 		TerrainPainter.draw_fire(c, _proj, p, _time)
+	for p: Vector2i in battle.tunnels_known_to(_view_team()):
+		TerrainPainter.draw_tunnel(c, _proj, p)
 	for p: Vector2i in battle.map.get_mines():
 		if _mine_known(p):
-			TerrainPainter.draw_mine(c, _proj, p)
+			TerrainPainter.draw_trap(c, _proj, p, battle.map.get_mine_kind(p))
 	if not busy and selected != null and _is_human_turn():
 		if mode == Mode.SHOOT and _shot_cmd == "shoot":
 			for p in _explosives_in_sight(selected):
@@ -2079,15 +2276,26 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 		elif mode == Mode.CLEAR_MINE:
 			for p in _clearable_mines(selected):
 				c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(p), 0.4), Color("e7d9a8"), 2.5)
+		elif mode == Mode.TUNNEL:
+			for p: Vector2i in battle.map.get_tunnels():
+				if battle.can_tunnel(selected, p) == "":
+					c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(p), 0.45), Color("d9a66b"), 2.5)
+		elif mode == Mode.DETONATE:
+			for p in _detonatable(selected):
+				c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(p), CombatRules.IED_RADIUS), Color("ff8a3d"), 2.0)
+		elif mode == Mode.TRAP:
+			for d: Vector2i in TacticalMap.DIRS8:
+				if battle.can_lay_trap(selected, selected.pos + d) == "":
+					c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(selected.pos + d), 0.35), Color("d9a66b"), 2.0)
 	for objective in battle.objectives:
 		var owner: int = objective["owner"]
-		var color: Color = TEAM_COLORS[owner] if owner != -1 else NEUTRAL_COLOR
+		var color: Color = _team_color(owner) if owner != -1 else NEUTRAL_COLOR
 		c.draw_polyline(TerrainPainter.ground_circle(_proj, objective["center"], objective["radius"]), Color(color, 0.7), 2.5)
 	for strike in battle.strikes:
-		var he: bool = strike["kind"] == "he"
+		var he: bool = strike["kind"] != "smoke"
 		var color := Color(1, 0.3, 0.2, 0.8) if he else Color(0.8, 0.85, 0.9, 0.8)
 		var center := _center(strike["target"])
-		var radius := (CombatRules.MORTAR_RADIUS if he else CombatRules.SMOKE_RADIUS) + float(strike["scatter"])
+		var radius := battle.strike_reach(strike)
 		var pulse := 0.5 + 0.5 * sin(_time * 6.0)
 		c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, center, radius, false), Color(color, 0.08 + 0.08 * pulse))
 		c.draw_polyline(TerrainPainter.ground_circle(_proj, center, radius), color, 2.0)
@@ -2102,8 +2310,9 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 		_draw_region_border(c, _move_tiles, MOVE_COLOR)
 	if mode == Mode.MORTAR:
 		var at := _center(selected.pos)
-		c.draw_polyline(TerrainPainter.ground_circle(_proj, at, CombatRules.MORTAR_MIN_RANGE), Color(1, 0.4, 0.3, 0.5), 1.5)
-		c.draw_polyline(TerrainPainter.ground_circle(_proj, at, CombatRules.MORTAR_MAX_RANGE), Color(1, 0.7, 0.3, 0.5), 1.5)
+		c.draw_polyline(TerrainPainter.ground_circle(_proj, at, selected.indirect["min"]), Color(1, 0.4, 0.3, 0.5), 1.5)
+		if selected.indirect["max"] < maxi(battle.map.width, battle.map.height):
+			c.draw_polyline(TerrainPainter.ground_circle(_proj, at, selected.indirect["max"]), Color(1, 0.7, 0.3, 0.5), 1.5)
 	if not battle.map.in_bounds(hover):
 		return
 	c.draw_polyline(_tile_outline(hover), Color(1, 1, 1, 0.8), 2.0)
@@ -2143,8 +2352,8 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 					c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(hover), scatter), Color(color, 0.9), 1.5)
 		Mode.MORTAR:
 			if battle.can_fire_mortar(selected, hover, _mortar_kind) == "":
-				var he := _mortar_kind == "he"
-				var radius := (CombatRules.MORTAR_RADIUS if he else CombatRules.SMOKE_RADIUS) + Battle.mortar_scatter(selected.pos, hover)
+				var he := _mortar_kind != "smoke"
+				var radius: float = (selected.indirect["radius"] if he else CombatRules.SMOKE_RADIUS) + Battle.mortar_scatter(selected.pos, hover, selected.indirect)
 				var color := Color(1, 0.45, 0.15, 0.3) if he else Color(0.8, 0.85, 0.9, 0.3)
 				c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, _center(hover), radius, false), color)
 				c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(hover), radius), Color(color, 0.9), 2.0)
@@ -2232,7 +2441,7 @@ func _paint_unit(c: CanvasItem, u: Unit) -> void:
 	if u.vehicle:
 		c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, g + TerrainPainter.LIGHT * 0.3, 0.55, false), Color(0, 0, 0, 0.3))
 		if pose["death"] == 0.0:
-			c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.62), Color(TEAM_COLORS[u.team], 0.55), 2.0)
+			c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.62), Color(_team_color(u.team), 0.55), 2.0)
 		if u == selected:
 			c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.65), Color.WHITE, 2.5)
 		if mode == Mode.SHOOT and _target_odds.has(u.id):
@@ -2251,7 +2460,7 @@ func _paint_unit(c: CanvasItem, u: Unit) -> void:
 	else:
 		c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, g + TerrainPainter.LIGHT * 0.25, 0.26, false), Color(0, 0, 0, 0.3))
 		# A ring in the side's colour under every soldier, so the sides read apart at a glance.
-		c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.34), Color(TEAM_COLORS[u.team], 0.6), 2.0)
+		c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.34), Color(_team_color(u.team), 0.6), 2.0)
 		if u == selected:
 			c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.42), Color.WHITE, 2.5)
 		if mode == Mode.SHOOT and _target_odds.has(u.id):
@@ -2264,7 +2473,7 @@ func _paint_unit(c: CanvasItem, u: Unit) -> void:
 func _draw_markers() -> void:
 	for objective in battle.objectives:
 		var owner: int = objective["owner"]
-		var color: Color = TEAM_COLORS[owner] if owner != -1 else NEUTRAL_COLOR
+		var color: Color = _team_color(owner) if owner != -1 else NEUTRAL_COLOR
 		var base := _proj.project(objective["center"])
 		var top := _proj.project(objective["center"], 2.2)
 		draw_line(base, top, Color("3a3226"), 3.0)
@@ -2297,8 +2506,8 @@ func _draw_markers() -> void:
 		if suppression > 0:
 			var bar_color := Color("ff5544") if suppression >= Unit.PINNED_AT else (Color("ffa040") if suppression >= Unit.SUPPRESSED_AT else Color("c8b060"))
 			draw_rect(Rect2(top + Vector2(-13, 4), Vector2(26.0 * suppression / 100.0, 2)), bar_color)
-		draw_rect(Rect2(top + Vector2(-14, 8), Vector2(28, 2)), TEAM_COLORS[u.team])
-		RoleIcons.draw_badge(self, top + Vector2(-24, 4), u.role, TEAM_COLORS[u.team])
+		draw_rect(Rect2(top + Vector2(-14, 8), Vector2(28, 2)), _team_color(u.team))
+		RoleIcons.draw_badge(self, top + Vector2(-24, 4), RoleIcons.icon_of(u), _team_color(u.team))
 		if u.team == battle.current_team and _is_human_turn():
 			for i in u.actions:
 				draw_circle(top + Vector2(19 + i * 6, 3), 2.5, Color("f5c542"))
@@ -2390,6 +2599,14 @@ func _draw_effects() -> void:
 				draw_circle(at, 3.0, Color("1d1d1b"))
 			"explosion":
 				_draw_explosion(fx["at"], fx["radius"], t)
+			"helicopter":
+				# In fast, hover low over the landing zone, then climb away the way it came.
+				var from: Vector2 = fx["from"]
+				var to: Vector2 = fx["to"]
+				var where := from.lerp(to, smoothstep(0.0, 0.45, t)) if t < 0.6 else to.lerp(from, smoothstep(0.6, 1.0, t))
+				var height := lerpf(3.0, 0.8, smoothstep(0.0, 0.45, t)) if t < 0.6 else lerpf(0.8, 3.5, smoothstep(0.6, 1.0, t))
+				var heading := (to - from).normalized() if t < 0.6 else (from - to).normalized()
+				VehiclePainter.draw_helicopter(self, _proj, where, heading, height, _time, 1.0 - smoothstep(0.85, 1.0, t))
 	for f in _floaters:
 		var t: float = f["age"] / f["life"]
 		var color: Color = f["color"]

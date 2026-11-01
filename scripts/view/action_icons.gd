@@ -103,6 +103,24 @@ static func draw(c: CanvasItem, at: Vector2, action: String, s: float, ink: Colo
 			c.draw_rect(Rect2(p.call(-0.75, 0.15), Vector2(1.5, 0.45) * s), ink)
 			c.draw_rect(Rect2(p.call(-0.25, -0.05), Vector2(0.5, 0.25) * s), ink)
 			c.draw_line(p.call(-0.85, -0.85), p.call(0.15, 0.0), ink, w)
+		"tunnel":
+			# A tunnel mouth: a dark hole in the ground with an arrow going down into it.
+			c.draw_colored_polygon(PackedVector2Array([p.call(-0.85, 0.35), p.call(0.85, 0.35), p.call(0.55, 0.85), p.call(-0.55, 0.85)]), ink)
+			c.draw_line(p.call(0.0, -0.9), p.call(0.0, 0.1), ink, w)
+			c.draw_colored_polygon(PackedVector2Array([p.call(-0.35, -0.15), p.call(0.35, -0.15), p.call(0.0, 0.2)]), ink)
+		"trap":
+			# Sharpened stakes in a pit.
+			c.draw_polyline(PackedVector2Array([p.call(-0.9, 0.2), p.call(-0.7, 0.85), p.call(0.7, 0.85), p.call(0.9, 0.2)]), ink, w)
+			for x: float in [-0.45, 0.0, 0.45]:
+				c.draw_colored_polygon(PackedVector2Array([p.call(x - 0.13, 0.8), p.call(x + 0.13, 0.8), p.call(x, -0.55)]), ink)
+		"detonate":
+			# A detonator: a box with a plunger, and a spark.
+			c.draw_rect(Rect2(p.call(-0.6, 0.0), Vector2(1.2, 0.8) * s), ink)
+			c.draw_line(p.call(0.0, 0.0), p.call(0.0, -0.6), ink, w)
+			c.draw_line(p.call(-0.4, -0.6), p.call(0.4, -0.6), ink, w * 1.4)
+			for i in 4:
+				var dir := Vector2.from_angle(i * TAU / 4 + 0.4)
+				c.draw_line(p.call(0.75, -0.75) + dir * s * 0.1, p.call(0.75, -0.75) + dir * s * 0.3, ink, w * 0.7)
 		"next":
 			# Next soldier: chevron to a figure.
 			c.draw_polyline(PackedVector2Array([p.call(-0.6, -0.6), p.call(0.0, 0.0), p.call(-0.6, 0.6)]), ink, w * 1.4)

@@ -1,55 +1,17 @@
 class_name Campaign
 extends RefCounted
-## A five-mission Normandy campaign with one persistent Allied squad.
+## A campaign of missions (from the theatre, see Theatre.campaign_missions) with one persistent squad on
+## team 0: in Normandy five missions with an Allied squad.
 ## Soldiers earn experience from missions and kills, rise in rank, get hurt and die for good.
 ## Supplies, earned by fighting, buy replacements. A lost mission can be tried again.
 ##
 ## A soldier record is {"id", "name", "role", "rank", "xp", "kills", "missions", "status", "out"}:
 ## status is "ready", "recovering" (sits out `out` more missions) or "dead".
+##
+## A mission is {"name", "briefing", "map": {"seed", "size": Vector2i} or "village" (the theatre's hand-made
+## map), "enemy": roster, "enemy_reinforcements": [{"round", "roster", "air"?}], "support": extra units for us,
+## "vp_to_win", "max_rounds"}.
 
-const MISSIONS := [
-	{
-		"name": "Hedgerow Country",
-		"briefing": "D+1. We push inland through the bocage. A thin German screen holds the church, the crossroads and the farm. Take them.",
-		"map": {"seed": 1101, "size": Vector2i(36, 36)},
-		"enemy": ["Officer", "Rifleman", "Rifleman", "SMG", "MG"],
-		"vp_to_win": 8, "max_rounds": 14,
-	},
-	{
-		"name": "The Village",
-		"briefing": "D+3. A full German platoon is dug in around the village crossroads, with a mortar behind the church.",
-		"map": "normandy",
-		"enemy": ["Officer", "Rifleman", "Rifleman", "Medic", "SMG", "MG", "Sniper", "Mortar"],
-		"vp_to_win": 10, "max_rounds": 16,
-	},
-	{
-		"name": "Panzers in the Orchard",
-		"briefing": "D+6. Recon spotted a Panzer IV among the orchards. Rifles won't scratch it: get the bazooka round its side or rear.",
-		"map": {"seed": 3303, "size": Vector2i(40, 40)},
-		"enemy": ["Officer", "Rifleman", "Rifleman", "SMG", "MG", "Tank"],
-		"vp_to_win": 10, "max_rounds": 16,
-	},
-	{
-		"name": "Counterattack",
-		"briefing": "D+9. The Germans are coming back with armour. A Sherman has joined us. Hold the ground we took.",
-		"map": {"seed": 4404, "size": Vector2i(40, 40)},
-		"enemy": ["Officer", "Rifleman", "Rifleman", "SMG", "MG", "AT"],
-		"enemy_reinforcements": [{"round": 3, "roster": ["Tank", "Rifleman", "Rifleman"]}, {"round": 6, "roster": ["Rifleman", "SMG"]}],
-		"support": ["Tank"],
-		"vp_to_win": 10, "max_rounds": 14,
-	},
-	{
-		"name": "The Road to Caen",
-		"briefing": "D+14. The last ridge before Caen. Everything they have left is waiting for us. This is it.",
-		"map": {"seed": 5505, "size": Vector2i(46, 46)},
-		"enemy": ["Officer", "Rifleman", "Rifleman", "Rifleman", "Medic", "SMG", "MG", "Sniper", "Mortar", "AT", "Tank"],
-		"enemy_reinforcements": [{"round": 4, "roster": ["Tank", "Rifleman"]}],
-		"support": ["Tank"],
-		"vp_to_win": 12, "max_rounds": 18,
-	},
-]
-const STARTING_ROLES := ["Officer", "Rifleman", "Rifleman", "AT", "Medic", "SMG", "MG", "Sniper"]
-const RECRUIT_ROLES := ["Rifleman", "AT", "Medic", "SMG", "MG", "Sniper", "Mortar", "Officer"]
 ## Experience needed for corporal and sergeant.
 const RANK_XP := [3, 7]
 const RANK_TITLES := ["Private", "Corporal", "Sergeant"]
@@ -60,6 +22,7 @@ const RECRUIT_COST := 1
 const WIN_SUPPLIES := 3
 const LOSS_SUPPLIES := 1
 
+var theatre_id := Theatres.DEFAULT
 var roster: Array[Dictionary] = []
 var mission_index := 0
 var supplies := STARTING_SUPPLIES
@@ -69,17 +32,31 @@ var _next_id := 0
 var _rng := RandomNumberGenerator.new()
 
 
-static func create(seed := 0) -> Campaign:
+static func create(seed := 0, p_theatre := Theatres.DEFAULT) -> Campaign:
 	var campaign := Campaign.new()
+	campaign.theatre_id = p_theatre
 	if seed != 0:
 		campaign._rng.seed = seed
-	for role in STARTING_ROLES:
+	for role: String in campaign.theatre().campaign_starting_roles():
 		campaign._add_soldier(role)
 	return campaign
 
 
+func theatre() -> Theatre:
+	return Theatres.get_theatre(theatre_id)
+
+
+func missions() -> Array:
+	return theatre().campaign_missions()
+
+
+## Roles that can be recruited as replacements.
+func recruit_roles() -> Array:
+	return theatre().campaign_recruit_roles()
+
+
 func is_won() -> bool:
-	return mission_index >= MISSIONS.size()
+	return mission_index >= missions().size()
 
 
 ## Out of soldiers and out of supplies to replace them.
@@ -91,7 +68,8 @@ func is_lost() -> bool:
 
 
 func current_mission() -> Dictionary:
-	return MISSIONS[mini(mission_index, MISSIONS.size() - 1)]
+	var all := missions()
+	return all[mini(mission_index, all.size() - 1)]
 
 
 ## The soldiers who will deploy on the next mission: ready ones, officers first, up to SQUAD_SIZE.
@@ -100,7 +78,8 @@ func deployable() -> Array[Dictionary]:
 	for soldier in roster:
 		if soldier["status"] == "ready":
 			ready.append(soldier)
-	ready.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a["role"] == "Officer" and b["role"] != "Officer")
+	var leads := func(soldier: Dictionary) -> bool: return theatre().role_def(0, soldier["role"]).get("leader", false)
+	ready.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return leads.call(a) and not leads.call(b))
 	return ready.slice(0, SQUAD_SIZE)
 
 
@@ -112,26 +91,36 @@ func living_soldiers() -> Array[Dictionary]:
 	return result
 
 
-static func display_name(soldier: Dictionary) -> String:
-	if soldier["role"] == "Officer":
-		return "Lt. " + soldier["name"]
+func display_name(soldier: Dictionary) -> String:
+	var prefix: String = theatre().role_def(0, soldier["role"]).get("name_prefix", "")
+	if prefix != "":
+		return prefix + soldier["name"]
 	return "%s %s" % [Unit.RANK_NAMES[soldier["rank"]], soldier["name"]]
+
+
+## The role as the theatre calls it.
+func role_name(role: String) -> String:
+	return theatre().role_name(0, role)
 
 
 ## The battle for the current mission, with our deployable squad (plus any support) against the enemy.
 func build_battle(seed: int) -> Battle:
 	var mission := current_mission()
-	var layout := NormandyScenario.layout() if mission["map"] is String else MapGenerator.generate(mission["map"]["seed"], mission["map"]["size"])
+	var layout := theatre().village_layout() if mission["map"] is String else theatre().generate_map(mission["map"]["seed"], mission["map"]["size"])
 	var allies := []
 	for soldier in deployable():
 		allies.append({"role": soldier["role"], "name": display_name(soldier), "rank": soldier["rank"], "record_id": soldier["id"]})
 	allies.append_array(mission.get("support", []))
 	var waves := []
 	for wave: Dictionary in mission.get("enemy_reinforcements", []):
-		waves.append({"round": wave["round"], "team": 1, "roster": wave["roster"]})
-	return BattleFactory.create(layout, [allies, mission["enemy"]], seed, {
-		"vp_to_win": mission["vp_to_win"], "max_rounds": mission["max_rounds"], "reinforcements": waves,
-	})
+		var copy := wave.duplicate()
+		copy["team"] = 1
+		waves.append(copy)
+	for wave: Dictionary in mission.get("reinforcements", []):
+		waves.append(wave.duplicate())
+	var options := {"theatre": theatre_id, "vp_to_win": mission["vp_to_win"], "max_rounds": mission["max_rounds"], "reinforcements": waves}
+	options.merge(theatre().battle_options())
+	return BattleFactory.create(layout, [allies, mission["enemy"]], seed, options)
 
 
 ## Applies a finished battle to the roster: deaths, wounds, experience, promotions and supplies.
@@ -149,13 +138,13 @@ func complete_mission(battle: Battle) -> Dictionary:
 		soldier["kills"] += u.kills
 		if not u.is_alive():
 			soldier["status"] = "dead"
-			lines.append("%s (%s) was killed in action." % [display_name(soldier), soldier["role"]])
+			lines.append("%s (%s) was killed in action." % [display_name(soldier), role_name(soldier["role"])])
 			continue
 		soldier["xp"] += 1 + u.kills
 		var new_rank := _rank_for(soldier["xp"])
 		if new_rank > soldier["rank"]:
 			soldier["rank"] = new_rank
-			lines.append("%s (%s) is promoted to %s." % [soldier["name"], soldier["role"], RANK_TITLES[new_rank]])
+			lines.append("%s (%s) is promoted to %s." % [soldier["name"], role_name(soldier["role"]), RANK_TITLES[new_rank]])
 		if u.hp * 2 <= u.max_hp:
 			soldier["status"] = "recovering"
 			soldier["out"] = 1
@@ -186,12 +175,13 @@ func recruit(role: String) -> Dictionary:
 
 
 func to_dict() -> Dictionary:
-	return {"roster": roster.duplicate(true), "mission_index": mission_index, "supplies": supplies,
+	return {"theatre": theatre_id, "roster": roster.duplicate(true), "mission_index": mission_index, "supplies": supplies,
 			"last_report": last_report.duplicate(true), "next_id": _next_id, "rng_state": _rng.state, "rng_seed": _rng.seed}
 
 
 static func from_dict(data: Dictionary) -> Campaign:
 	var campaign := Campaign.new()
+	campaign.theatre_id = data.get("theatre", Theatres.DEFAULT)
 	campaign.roster.assign(data["roster"].duplicate(true))
 	campaign.mission_index = data["mission_index"]
 	campaign.supplies = data["supplies"]
@@ -206,7 +196,7 @@ func _add_soldier(role: String) -> Dictionary:
 	var used := {}
 	for soldier in roster:
 		used[soldier["name"]] = true
-	var pool: Array = BattleFactory.SURNAMES[0]
+	var pool: Array = theatre().faction(0)["surnames"]
 	var surname: String = pool[_rng.randi_range(0, pool.size() - 1)]
 	for i in pool.size():
 		if not used.has(surname):

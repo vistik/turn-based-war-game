@@ -21,14 +21,13 @@ const TOOL_HINTS := [
 	"Clears objects, walls, units and spawns under the brush.",
 ]
 const PANEL_WIDTH := 360.0
-const TEAM_COLORS := [Color("9cc45a"), Color("b8c0c8")]
 const NEUTRAL := Color("e8e2cf")
 const MUTED := Color(1, 1, 1, 0.6)
 const BAD := Color("ff7a6a")
 const GOOD := Color("8fe08a")
 ## "mine" isn't an object: it buries a mine (hidden from both sides in play) instead.
-const OBJECT_KINDS := ["tree", "rock", "sandbags", "crate", "hay", "pew", "fuel", "oil_tank", "mine"]
-const EDGE_KINDS := ["hedge", "wall", "window", "stone", "fence"]
+const OBJECT_KINDS := ["tree", "rock", "sandbags", "crate", "hay", "pew", "fuel", "oil_tank", "palm", "bamboo", "rice_sacks", "car", "hesco", "jersey", "mine"]
+const EDGE_KINDS := ["hedge", "wall", "window", "stone", "fence", "dyke", "bamboo_wall", "bamboo_window", "mud_wall", "mud_window"]
 const BRUSHES := [1, 2, 3, 5, 9]
 const NEW_SIZES := [24, 32, 44, 48, 64, 84]
 const CHUNK := 8
@@ -101,6 +100,8 @@ var _briefing_edit: TextEdit
 var _wave_choice: OptionButton
 var _wave_box: VBoxContainer
 var _games_spin: SpinBox
+## The theatre new maps are made in.
+var _theatre_choice: OptionButton
 var _sim_button: Button
 var _sim_label: Label
 var _panel: PanelContainer
@@ -131,6 +132,7 @@ func _open(scenario: Scenario, path: String) -> void:
 	_s = scenario
 	edited = scenario
 	edited_path = path
+	TerrainPainter.use_theatre(scenario.theatre_id)
 	_selected_unit = -1
 	_selected_objective = -1
 	_wave = clampi(_wave, 0, maxi(0, _s.reinforcements.size() - 1))
@@ -273,14 +275,14 @@ func _paint_unit(c: CanvasItem, i: int) -> void:
 	if i >= _s.units.size():
 		return
 	var entry: Dictionary = _s.units[i]
-	var u := Unit.create(i, "", entry["role"], entry["team"], entry["pos"], entry["rank"])
+	var u := Unit.create(i, "", entry["role"], entry["team"], entry["pos"], entry["rank"], _s.theatre_id)
 	u.facing = entry["facing"]
 	var g := Vector2(u.pos) + Vector2(0.5, 0.5)
 	var pose := {"facing": Vector2(u.facing).normalized(), "walk": 0.0, "phase": 0.0, "crouch": false, "pinned": false,
 			"deployed": false, "wounded": false, "death": 0.0, "flash": 0.0, "breath": i * 1.7, "time": 0.0}
 	var radius := 0.6 if u.vehicle else 0.4
 	c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, g + TerrainPainter.LIGHT * 0.25, radius * 0.65, false), Color(0, 0, 0, 0.3))
-	c.draw_polyline(TerrainPainter.ground_circle(_proj, g, radius), Color.WHITE if i == _selected_unit else TEAM_COLORS[u.team], 3.0 if i == _selected_unit else 1.5)
+	c.draw_polyline(TerrainPainter.ground_circle(_proj, g, radius), Color.WHITE if i == _selected_unit else _team_color(u.team), 3.0 if i == _selected_unit else 1.5)
 	if u.vehicle:
 		VehiclePainter.draw(c, _proj, g, u, pose)
 	else:
@@ -295,7 +297,9 @@ func _paint_overlay(c: CanvasItem) -> void:
 	c.draw_polyline(border, Color(1, 1, 1, 0.5), 2.0)
 	# The editor shows every mine; in play each side only sees the ones it has spotted.
 	for p: Vector2i in _s.map.get_mines():
-		TerrainPainter.draw_mine(c, _proj, p)
+		TerrainPainter.draw_trap(c, _proj, p, _s.map.get_mine_kind(p))
+	for p: Vector2i in _s.map.get_tunnels():
+		TerrainPainter.draw_tunnel(c, _proj, p)
 	if _s.mirrored:
 		for y in h:
 			if y % 2 == 0:
@@ -306,7 +310,7 @@ func _paint_overlay(c: CanvasItem) -> void:
 		c.draw_polyline(TerrainPainter.ground_circle(_proj, objective["center"], objective["radius"]), Color.WHITE if selected else NEUTRAL, 3.0 if selected else 1.5)
 	for wi in _s.reinforcements.size():
 		var wave: Dictionary = _s.reinforcements[wi]
-		var color: Color = TEAM_COLORS[wave["team"]]
+		var color: Color = _team_color(wave["team"])
 		color.a = 0.75 if wi == _wave and _tool == Tool.SPAWN else 0.35
 		for p: Vector2i in wave["spawns"]:
 			c.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), color)
@@ -337,14 +341,14 @@ func _draw() -> void:
 		_label(top + Vector2(-80, -8), "%s (r %.1f)" % [objective["name"], objective["radius"]], NEUTRAL, 160)
 	for i in _s.units.size():
 		var entry: Dictionary = _s.units[i]
-		var at := _proj.project(Vector2(entry["pos"]) + Vector2(0.5, 0.5), 2.0 if entry["role"] == "Tank" else 1.6)
+		var at := _proj.project(Vector2(entry["pos"]) + Vector2(0.5, 0.5), 2.0 if _s.theatre().role_def(entry["team"], entry["role"]).get("vehicle", false) else 1.6)
 		var tag: String = entry["role"] if entry["name"] == "" else entry["name"]
 		if entry["rank"] > 0:
 			tag += " " + "*".repeat(entry["rank"])
-		_label(at + Vector2(-60, 0), tag, Color.WHITE if i == _selected_unit else TEAM_COLORS[entry["team"]], 120, 11)
+		_label(at + Vector2(-60, 0), tag, Color.WHITE if i == _selected_unit else _team_color(entry["team"]), 120, 11)
 	for wave in _s.reinforcements:
 		for p: Vector2i in wave["spawns"]:
-			_label(_proj.project(Vector2(p) + Vector2(0.5, 0.5), 0.3) + Vector2(-40, 0), "R%d" % wave["round"], TEAM_COLORS[wave["team"]], 80, 11)
+			_label(_proj.project(Vector2(p) + Vector2(0.5, 0.5), 0.3) + Vector2(-40, 0), "R%d" % wave["round"], _team_color(wave["team"]), 80, 11)
 
 
 func _label(at: Vector2, text: String, color: Color, width: float, size := 13) -> void:
@@ -444,7 +448,7 @@ func _show_hover_status() -> void:
 		text += ", %s" % _s.map.get_object_kind(_hover)
 	var i := _unit_index_at(_hover)
 	if i != -1:
-		text += ", %s %s" % [Battle.TEAM_NAMES[_s.units[i]["team"]], _s.units[i]["role"]]
+		text += ", " + _s._who(_s.units[i])
 	_status.text = text
 
 
@@ -897,7 +901,7 @@ func _build_ui() -> void:
 	var file_row := HBoxContainer.new()
 	box.add_child(file_row)
 	_button(file_row, "Save", _save).size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_button(file_row, "Start from the village", _load_builtin.bind("village")).size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_button(file_row, "Start from the hand-made map", _load_builtin.bind("village")).size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var load_row := HBoxContainer.new()
 	box.add_child(load_row)
 	_load_choice = OptionButton.new()
@@ -905,6 +909,14 @@ func _build_ui() -> void:
 	_load_choice.fit_to_longest_item = false
 	load_row.add_child(_load_choice)
 	_button(load_row, "Load", _load_selected)
+	var theatre_row := HBoxContainer.new()
+	box.add_child(theatre_row)
+	_text(theatre_row, "New maps in", MUTED, 13)
+	_theatre_choice = OptionButton.new()
+	for theatre in Theatres.all():
+		_theatre_choice.add_item(theatre.title)
+	_theatre_choice.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	theatre_row.add_child(_theatre_choice)
 	var new_row := HBoxContainer.new()
 	box.add_child(new_row)
 	_size_choice = OptionButton.new()
@@ -944,6 +956,7 @@ func _sync_panel() -> void:
 	_briefing_edit.text = _s.briefing
 	_file_edit.text = edited_path.get_file().get_basename() if edited_path.begins_with(Scenario.USER_DIR) else _slug(_s.title)
 	_syncing = false
+	_theatre_choice.select(maxi(0, Theatres.IDS.find(_s.theatre_id)))
 	_refresh_file_list()
 	_sync_waves()
 	_set_tool(_tool)
@@ -988,16 +1001,32 @@ func _brush_choice() -> void:
 
 
 ## Side, role and facing for new units; with a unit selected, they change that unit.
+func _team_names() -> Array:
+	return [_s.theatre().team_name(0), _s.theatre().team_name(1)]
+
+
+func _team_color(team: int) -> Color:
+	return _s.theatre().team_color(team)
+
+
 func _unit_options() -> void:
 	var entry: Variant = _s.units[_selected_unit] if _selected_unit >= 0 and _selected_unit < _s.units.size() else null
-	_choice(_options, "Side", Array(Battle.TEAM_NAMES), _team, func(i: int) -> void:
+	var theatre := _s.theatre()
+	var roles := theatre.role_ids(_team)
+	if not roles.has(_role):
+		_role = roles[0]
+	_choice(_options, "Side", _team_names(), _team, func(i: int) -> void:
 		_team = i
 		if entry != null:
 			_checkpoint()
 			entry["team"] = i
-			_rebuild_units())
-	_choice(_options, "Role", Scenario.ROLES, Scenario.ROLES.find(_role), func(i: int) -> void:
-		_role = Scenario.ROLES[i]
+			if not theatre.has_role(i, entry["role"]):
+				entry["role"] = theatre.role_ids(i)[0]
+			_rebuild_units()
+		# The other side has its own roles.
+		_set_tool.call_deferred(Tool.UNIT))
+	_choice(_options, "Role", roles.map(func(r: String) -> String: return theatre.role_name(_team, r)), roles.find(_role), func(i: int) -> void:
+		_role = roles[i]
 		if entry != null:
 			_checkpoint()
 			var twin: Variant = _mirror_twin(entry)
@@ -1014,7 +1043,7 @@ func _unit_options() -> void:
 	if entry == null:
 		_text(_options, "No unit selected: left click places a new one%s." % (" (and its mirror twin)" if _s.mirrored else ""), MUTED, 12, true)
 		return
-	_text(_options, "Selected: %s %s at %d, %d" % [Battle.TEAM_NAMES[entry["team"]], entry["role"], entry["pos"].x, entry["pos"].y], TEAM_COLORS[entry["team"]], 13)
+	_text(_options, "Selected: %s at %d, %d" % [_s._who(entry), entry["pos"].x, entry["pos"].y], _team_color(entry["team"]), 13)
 	_line(_options, "Name (empty = from the seed)", func(text: String) -> void:
 		entry["name"] = text.strip_edges()
 		queue_redraw()).text = entry["name"]
@@ -1045,7 +1074,7 @@ func _objective_options() -> void:
 func _sync_waves() -> void:
 	_wave_choice.clear()
 	for wave in _s.reinforcements:
-		_wave_choice.add_item("Round %d, %s: %d units" % [wave["round"], Battle.TEAM_NAMES[wave["team"]], wave["roster"].size()])
+		_wave_choice.add_item("Round %d, %s: %d units" % [wave["round"], _s.theatre().team_name(wave["team"]), wave["roster"].size()])
 	_wave = clampi(_wave, 0, maxi(0, _s.reinforcements.size() - 1))
 	if not _s.reinforcements.is_empty():
 		_wave_choice.select(_wave)
@@ -1065,18 +1094,18 @@ func _sync_wave() -> void:
 	_spin(row, 1, 99, func(v: float) -> void:
 		wave["round"] = int(v)
 		_update_wave_label()).value = wave["round"]
-	_choice(row, "", Array(Battle.TEAM_NAMES), wave["team"], func(i: int) -> void:
+	_choice(row, "", _team_names(), wave["team"], func(i: int) -> void:
 		wave["team"] = i
 		_update_wave_label()
 		_overlay.queue_redraw())
 	var roster := PackedStringArray(wave["roster"].map(func(e: Variant) -> String: return e["role"] if e is Dictionary else e))
-	var edit := _line(_wave_box, "Roster, e.g. Tank, Rifleman", func(text: String) -> void:
+	var edit := _line(_wave_box, "Roster, e.g. " + ", ".join(_s.theatre().role_ids(wave["team"]).slice(0, 2)), func(text: String) -> void:
 		var parsed := []
 		for part in text.split(",", false):
-			var role := part.strip_edges().capitalize()
-			role = "SMG" if role == "Smg" else ("MG" if role == "Mg" else ("AT" if role == "At" else role))
-			if Scenario.ROLES.has(role):
-				parsed.append(role)
+			# Role ids, matched ignoring case.
+			for role: String in _s.theatre().role_ids(wave["team"]):
+				if role.to_lower() == part.strip_edges().to_lower():
+					parsed.append(role)
 		wave["roster"] = parsed
 		_update_wave_label()
 		_after_edit())
@@ -1086,14 +1115,14 @@ func _sync_wave() -> void:
 
 func _update_wave_label() -> void:
 	var wave: Dictionary = _s.reinforcements[_wave]
-	_wave_choice.set_item_text(_wave, "Round %d, %s: %d units" % [wave["round"], Battle.TEAM_NAMES[wave["team"]], wave["roster"].size()])
+	_wave_choice.set_item_text(_wave, "Round %d, %s: %d units" % [wave["round"], _s.theatre().team_name(wave["team"]), wave["roster"].size()])
 	queue_redraw()
 
 
 func _add_wave() -> void:
 	_checkpoint()
 	var spawns: Array[Vector2i] = []
-	_s.reinforcements.append({"round": 4, "team": 0, "roster": ["Rifleman"], "spawns": spawns})
+	_s.reinforcements.append({"round": 4, "team": 0, "roster": [_s.theatre().role_ids(0)[0]], "spawns": spawns})
 	_wave = _s.reinforcements.size() - 1
 	_sync_waves()
 	_set_tool(Tool.SPAWN)
@@ -1155,12 +1184,16 @@ func _load_selected() -> void:
 	_flash("Loaded %s" % path)
 
 
-## Starts from a built-in map: the Normandy village, or a random map of the chosen size.
+## Starts from a built-in map of the chosen theatre: its hand-made map, or a random map of the chosen size.
 func _load_builtin(kind: String) -> void:
 	_checkpoint()
 	var seed := randi() % 10000 + 1
 	var size: int = NEW_SIZES[_size_choice.selected]
-	var built := GameSession.build_skirmish({"map": kind, "size": size, "seed": seed})
+	var theatre_id: String = Theatres.IDS[_theatre_choice.selected]
+	if kind == "village" and Theatres.get_theatre(theatre_id).village_layout().is_empty():
+		_flash("%s has no hand-made map" % Theatres.get_theatre(theatre_id).title)
+		return
+	var built := GameSession.build_skirmish({"theatre": theatre_id, "map": kind, "size": size, "seed": seed})
 	var scenario := Scenario.from_battle(built[0], built[1], false)
 	_open(scenario, "")
 	_flash("Started from %s" % built[1])
@@ -1169,7 +1202,7 @@ func _load_builtin(kind: String) -> void:
 func _new_map() -> void:
 	_checkpoint()
 	var size: int = NEW_SIZES[_size_choice.selected]
-	var scenario := Scenario.create(size, size)
+	var scenario := Scenario.create(size, size, Theatres.IDS[_theatre_choice.selected])
 	scenario.title = "New %dx%d scenario" % [size, size]
 	_open(scenario, "")
 

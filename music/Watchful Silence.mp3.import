@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://cyifhfjajalkc"
+path="res://.godot/imported/Watchful Silence.mp3-e1c70a7bfc60c17c810dd5453d0359f8.mp3str"
+
+[deps]
+
+source_file="res://music/Watchful Silence.mp3"
+dest_files=["res://.godot/imported/Watchful Silence.mp3-e1c70a7bfc60c17c810dd5453d0359f8.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

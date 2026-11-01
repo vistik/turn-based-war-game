@@ -10,6 +10,9 @@ const SPEED_NAMES := ["1x", "2x", "4x", "Instant"]
 ## Camera pan speed multipliers for the keyboard.
 const PAN_SPEEDS := [0.5, 1.0, 1.5, 2.0]
 const PAN_SPEED_NAMES := ["Slow", "Normal", "Fast", "Very fast"]
+## Music volume levels by index (0 = off), as linear gain.
+const MUSIC_VOLUMES := [0.0, 0.25, 0.5, 0.75, 1.0]
+const MUSIC_VOLUME_NAMES := ["Off", "Quiet", "Medium", "Loud", "Full"]
 
 ## Soldiers and tanks jump straight to their destination instead of walking there.
 static var instant_movement := false
@@ -25,6 +28,8 @@ static var show_hit_chance := true
 ## Ask before ending the turn while some units can still act.
 static var confirm_end_turn := false
 static var fullscreen := false
+## Index into MUSIC_VOLUMES.
+static var music_volume := 2
 
 static var _loaded := false
 
@@ -42,7 +47,7 @@ static func ensure_loaded() -> void:
 static func defaults() -> Dictionary:
 	return {
 		"instant_movement": false, "follow_opponent": true, "own_speed": 0, "opponent_speed": 0,
-		"pan_speed": 1, "show_hit_chance": true, "confirm_end_turn": false, "fullscreen": false,
+		"pan_speed": 1, "show_hit_chance": true, "confirm_end_turn": false, "fullscreen": false, "music_volume": 2,
 	}
 
 
@@ -50,7 +55,7 @@ static func to_dict() -> Dictionary:
 	return {
 		"instant_movement": instant_movement, "follow_opponent": follow_opponent, "own_speed": own_speed,
 		"opponent_speed": opponent_speed, "pan_speed": pan_speed, "show_hit_chance": show_hit_chance,
-		"confirm_end_turn": confirm_end_turn, "fullscreen": fullscreen,
+		"confirm_end_turn": confirm_end_turn, "fullscreen": fullscreen, "music_volume": music_volume,
 	}
 
 
@@ -70,6 +75,20 @@ static func from_dict(data: Dictionary) -> void:
 	show_hit_chance = values["show_hit_chance"]
 	confirm_end_turn = values["confirm_end_turn"]
 	fullscreen = values["fullscreen"]
+	music_volume = clampi(values["music_volume"], 0, MUSIC_VOLUMES.size() - 1)
+
+
+## Turns the music off, or back on at the volume it had before (Medium if it was never set). Saves.
+static func toggle_music() -> void:
+	if music_volume > 0:
+		_music_before_mute = music_volume
+		music_volume = 0
+	else:
+		music_volume = _music_before_mute
+	save_settings()
+
+
+static var _music_before_mute := 2
 
 
 static func reset() -> void:

@@ -16,6 +16,7 @@ extends SceneTree
 
 var _scenario_data := {}
 var _map := "village"
+var _theatre := Theatres.DEFAULT
 var _size := 0
 var _games := 20
 var _first_seed := 1
@@ -30,7 +31,7 @@ func _initialize() -> void:
 	if not _parse(OS.get_cmdline_user_args()):
 		quit(1)
 		return
-	var source := {"scenario": _scenario_data} if not _scenario_data.is_empty() else {"map": _map, "size": _size}
+	var source := {"scenario": _scenario_data} if not _scenario_data.is_empty() else {"map": _map, "size": _size, "theatre": _theatre}
 	var batch := BalanceSim.Batch.new(source, _games, _first_seed, _swap)
 	var total := batch.jobs.size()
 	print("Balance run: %s, %d games, seeds %d-%d, %d at a time%s" % [_describe_source(), total, _first_seed, _first_seed + _games - 1,
@@ -77,6 +78,12 @@ func _parse(args: PackedStringArray) -> bool:
 					print("Warning: " + problem)
 				_scenario_data = scenario.to_data()
 				i += 1
+			"--theatre":
+				if not Theatres.exists(value):
+					printerr("Unknown theatre: %s (%s)" % [value, ", ".join(Theatres.IDS)])
+					return false
+				_theatre = value
+				i += 1
 			"--map":
 				_map = value
 				i += 1
@@ -104,7 +111,7 @@ func _parse(args: PackedStringArray) -> bool:
 				_json_path = value
 				i += 1
 			"--help", "-h":
-				print("Usage: Godot --headless --path . -s tools/balance.gd -- [--scenario PATH | --map village|random --size N] [--games N] [--seed S] [--jobs N] [--swap] [--csv PATH] [--json PATH] [--quiet]")
+				print("Usage: Godot --headless --path . -s tools/balance.gd -- [--scenario PATH | [--theatre normandy|vietnam] --map village|random --size N] [--games N] [--seed S] [--jobs N] [--swap] [--csv PATH] [--json PATH] [--quiet]")
 				return false
 			_:
 				printerr("Unknown option: %s (try --help)" % arg)
@@ -118,7 +125,8 @@ func _parse(args: PackedStringArray) -> bool:
 func _describe_source() -> String:
 	if not _scenario_data.is_empty():
 		return "scenario \"%s\" (%dx%d)" % [_scenario_data["title"], _scenario_data["map"]["width"], _scenario_data["map"]["height"]]
-	return "Normandy village" if _map == "village" else "random %dx%d maps" % [_size, _size]
+	var theatre := Theatres.get_theatre(_theatre)
+	return theatre.village_title() if _map == "village" else "%s random %dx%d maps" % [theatre.title, _size, _size]
 
 
 func _write(path: String, text: String) -> void:

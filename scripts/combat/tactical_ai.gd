@@ -18,9 +18,8 @@ const FACING_COVER_WEIGHT := 9.0
 const OPEN_GROUND_PENALTY := 10.0
 ## Score lost per tile of distance from the goal when no enemy is in sight.
 const APPROACH_WEIGHT := 3.0
-## Score lost per tile away from the role's preferred range to the nearest seen enemy.
+## Score lost per tile away from the role's preferred range (its "range") to the nearest seen enemy.
 const RANGE_WEIGHT := 1.5
-const PREFERRED_RANGE := {"Officer": 5.0, "Rifleman": 7.0, "Medic": 6.0, "SMG": 3.0, "MG": 9.0, "Sniper": 12.0, "Mortar": 14.0, "AT": 4.0, "Tank": 8.0}
 ## Score per point of suppression a shot or blast adds to an enemy.
 const SUPPRESSION_VALUE := 0.15
 ## Standing on an objective we don't hold / already hold, and the pull toward the nearest one we don't hold.
@@ -62,6 +61,14 @@ const SUPPRESS_STATE_VALUE := 6.0
 const SUPPRESSIVE_AMMO_COST := 4.0
 ## Prone mortar and anti-tank teams can't use their weapon.
 const PRONE_WEAPON_PENALTY := 12.0
+## Going through the tunnels uses the whole turn; a hidden punji trap is worth this much (more on an
+## objective's approaches or a trail), but not with enemies close enough to see it being laid.
+const TUNNEL_COST := 4.0
+## Setting off an IED spends it (and the bomb maker's turn), so it should catch someone.
+const DETONATE_COST := 12.0
+const TRAP_VALUE := 6.0
+const TRAP_OBJECTIVE_BONUS := 6.0
+const TRAP_TRAIL_BONUS := 3.0
 ## Rounds without seeing an enemy before the AI is fully impatient and pushes forward.
 const PATIENCE_ROUNDS := 3.0
 
@@ -190,11 +197,12 @@ func _best_plan(u: Unit, seen: Array[Unit]) -> Dictionary:
 				var value := _grenade_value(u, tile, seen)
 				if value > 0.0:
 					plans.append(_plan(u, "grenade", stay + value - GRENADE_COST, null, tile))
-	if u.role == "Mortar" and u.mortar_rounds > 0 and u.actions >= Unit.ACTIONS_PER_TURN:
+	if not u.indirect.is_empty() and u.mortar_rounds > 0 and (u.actions >= Unit.ACTIONS_PER_TURN or not u.indirect["still"]):
+		var spec := u.indirect
 		for tile in _tiles_around(seen):
 			if battle.can_fire_mortar(u, tile, "he") == "":
-				var value := _blast_value(tile, CombatRules.MORTAR_RADIUS + Battle.mortar_scatter(u.pos, tile) * 0.5,
-						CombatRules.MORTAR_DAMAGE_MIN, CombatRules.MORTAR_DAMAGE_MAX, 0, seen)
+				var value := _blast_value(tile, spec["radius"] + Battle.mortar_scatter(u.pos, tile, spec) * 0.5,
+						spec["damage"][0], spec["damage"][1], 0, seen)
 				if value > 0.0:
 					plans.append(_plan(u, "mortar", stay + value * MORTAR_CERTAINTY - MORTAR_COST, null, tile))
 	if u.medkits > 0:
@@ -225,6 +233,27 @@ func _best_plan(u: Unit, seen: Array[Unit]) -> Dictionary:
 
 	if not u.vehicle:
 		plans.append_array(_stance_plans(u, seen))
+
+	# Down one tunnel entrance and up another.
+	if u.has_trait("tunnels") and map.tunnel_owner(here) == team and u.actions >= Unit.ACTIONS_PER_TURN:
+		for dest: Vector2i in map.get_tunnels():
+			if battle.can_tunnel(u, dest) == "":
+				plans.append(_plan(u, "tunnel", _position_score(u, dest, seen) - TUNNEL_COST, null, dest))
+	# Punji traps where the enemy will come, while nobody is watching.
+	if u.traps > 0 and u.has_trait("traps"):
+		var watched := seen.any(func(e: Unit) -> bool: return Vector2(e.pos).distance_to(Vector2(here)) <= 6.0)
+		if not watched:
+			for d: Vector2i in TacticalMap.DIRS8:
+				if battle.can_lay_trap(u, here + d) == "":
+					plans.append(_plan(u, "trap", stay + _trap_value(here + d), null, here + d))
+
+	# The bomb maker sets off an IED when enemies walk close to it.
+	if u.has_trait("detonator") and u.actions > 0:
+		for tile: Vector2i in battle.mines_known_to(team):
+			if battle.can_detonate(u, tile) == "":
+				var value := _blast_value(tile, CombatRules.IED_RADIUS, CombatRules.IED_DAMAGE_MIN, CombatRules.IED_DAMAGE_MAX, 0, seen)
+				if value > 0.0:
+					plans.append(_plan(u, "detonate", stay + value - DETONATE_COST, null, tile))
 
 	var reach := battle.reachable(u)
 	for tile: Vector2i in reach:
@@ -271,7 +300,7 @@ func _stance_plans(u: Unit, seen: Array[Unit]) -> Array[Dictionary]:
 			value += _stay_followup_value(u, seen)
 		if stance == Unit.Stance.PRONE:
 			value += mini(u.suppression, CombatRules.PRONE_RECOVERY_BONUS) * SUPPRESSION_VALUE * 2.0
-			if u.role in ["Mortar", "AT"]:
+			if not u.indirect.is_empty() or u.weapon.kind == "at":
 				value -= PRONE_WEAPON_PENALTY
 		if stance == Unit.Stance.STAND and u.actions > 0 and not u.is_pinned():
 			# Up, then a full-speed move with the action left.
@@ -306,13 +335,28 @@ func _command(plan: Dictionary) -> Dictionary:
 	var command := {"cmd": plan["kind"], "unit": plan["unit"].id}
 	if plan["target"] != null:
 		command["target"] = plan["target"].id
-	if plan["kind"] in ["move", "pivot", "grenade", "mortar", "shoot_object"]:
+	if plan["kind"] in ["move", "pivot", "grenade", "mortar", "shoot_object", "tunnel", "trap", "detonate"]:
 		command["tile"] = plan["tile"]
 	if plan["kind"] == "stance":
 		command["stance"] = plan["stance"]
 	if plan["kind"] == "mortar":
 		command["kind"] = "he"
 	return command
+
+
+## What a punji trap on the tile is worth: more on the way into an objective (from the enemy's side) or on a trail.
+func _trap_value(tile: Vector2i) -> float:
+	var value := TRAP_VALUE
+	for objective in battle.objectives:
+		var center: Vector2 = objective["center"]
+		var distance := (Vector2(tile) + Vector2(0.5, 0.5)).distance_to(center)
+		var enemy_side := (tile.x < center.x) == (team == 1)
+		if distance <= float(objective["radius"]) + 3.0 and enemy_side:
+			value += TRAP_OBJECTIVE_BONUS
+			break
+	if battle.map.get_terrain(tile) == TacticalMap.Terrain.ROAD:
+		value += TRAP_TRAIL_BONUS
+	return value
 
 
 ## How good it is to stand on a tile at the end of an action: cover, danger, objectives, range and approach.
@@ -357,8 +401,8 @@ func _position_score(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 		var nearest := INF
 		for e in seen:
 			nearest = minf(nearest, Vector2(tile).distance_to(Vector2(e.pos)))
-		score -= absf(nearest - PREFERRED_RANGE.get(u.role, 6.0)) * RANGE_WEIGHT
-		if nearest_open < INF and u.role != "Mortar" and u.role != "Sniper":
+		score -= absf(nearest - float(u.def.get("range", 6.0)) * Weapon.RANGE_SCALE) * RANGE_WEIGHT
+		if nearest_open < INF and not u.def.get("holds_back", false):
 			score -= nearest_open * OBJECTIVE_PULL * (1.0 + 2.0 * _urgency)
 
 	for ally in battle.alive_units(team):
@@ -395,9 +439,8 @@ func _danger(u: Unit, tile: Vector2i, seen: Array[Unit]) -> Array[float]:
 		var weight: float = threat[2]
 		if not _can_see(from, tile, e.sight):
 			continue
-		if u.stance == Unit.Stance.PRONE and not u.fired and battle.map.get_terrain(tile) == TacticalMap.Terrain.WHEAT \
-				and Vector2(from).distance_to(Vector2(tile)) > CombatRules.WHEAT_CONCEALMENT_RANGE:
-			# Lying in the wheat, out of their sight.
+		if Battle.hidden_at(battle.map, from, u, tile):
+			# Lying in the wheat (or hidden in the grass or jungle), out of their sight.
 			continue
 		var outcome := _expected_damage(e, from, u, tile)
 		danger += (outcome[0] * 10.0 + outcome[1] * KILL_BONUS * 0.5) * weight
@@ -405,7 +448,7 @@ func _danger(u: Unit, tile: Vector2i, seen: Array[Unit]) -> Array[float]:
 		if cover != Cover.NONE:
 			hunker_gain += CombatRules.COVER_DEFENSE[cover] / 100.0 * _average_damage(e) * 10.0 * weight
 	for strike in battle.strikes:
-		if strike["kind"] == "he" and Vector2(tile).distance_to(Vector2(strike["target"])) <= CombatRules.MORTAR_RADIUS + float(strike["scatter"]) + 0.5:
+		if strike["kind"] != "smoke" and Vector2(tile).distance_to(Vector2(strike["target"])) <= battle.strike_reach(strike) + 0.5:
 			danger += STRIKE_DANGER
 	return [danger, hunker_gain]
 
@@ -674,7 +717,7 @@ func _expected_damage(shooter: Unit, from: Vector2i, target: Unit, at: Vector2i,
 			return [0.0, 0.0]
 		var saved_pos := target.pos
 		target.pos = at
-		armor = CombatRules.VEHICLE_ARMOR[CombatRules.armor_side(target, from)]
+		armor = CombatRules.armor_value(target, CombatRules.armor_side(target, from))
 		target.pos = saved_pos
 	var hit: float = odds["hit"] / 100.0
 	var crit: float = odds["crit"] / 100.0

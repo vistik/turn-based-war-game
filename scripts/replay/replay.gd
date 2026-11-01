@@ -81,7 +81,7 @@ func finish(battle: Battle) -> void:
 	rounds = battle.round_number
 	head = battle.checksum()
 	var points := "%d to %d" % [battle.victory_points[0], battle.victory_points[1]]
-	result = "Draw, %s" % points if winner == Battle.DRAW else "%s win, %s" % [Battle.TEAM_NAMES[winner], points]
+	result = "Draw, %s" % points if winner == Battle.DRAW else "%s win, %s" % [battle.team_name(winner), points]
 	detach()
 
 
@@ -110,7 +110,8 @@ func verify() -> String:
 ## Title, date, sides and result: what a list of replays shows.
 func meta() -> Dictionary:
 	return {"version": VERSION, "title": title, "date": date, "mode": mode, "sides": sides.duplicate(), "result": result,
-			"winner": winner, "rounds": rounds, "from_start": from_start, "orders": commands.size()}
+			"winner": winner, "rounds": rounds, "from_start": from_start, "orders": commands.size(),
+			"theatre": snapshot.get("theatre", Theatres.DEFAULT)}
 
 
 func to_dict() -> Dictionary:

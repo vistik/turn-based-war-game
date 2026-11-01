@@ -1,16 +1,58 @@
 # Normandy 1944
 
-Turn-based WW2 squad tactics in the Normandy bocage, June 1944: the Allies against Germany on an isometric
-grid, inspired by UFO: Enemy Unknown and XCOM 2. Built with Godot 4.7 in GDScript; all art is drawn in code.
+Turn-based squad tactics on an isometric grid, inspired by UFO: Enemy Unknown and XCOM 2, in three theatres
+of war that share one engine: the Normandy bocage in June 1944 (the Allies against Germany), Vietnam in 1967
+(the US Army against the Viet Cong) and Afghanistan and Iraq in 2004-2010 (the Coalition against insurgents).
+Built with Godot 4.7 in GDScript; all art is drawn in code.
 
 The rules and architecture are in [docs/DESIGN.md](docs/DESIGN.md), the agent link in [docs/MCP.md](docs/MCP.md),
 and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 
 ## Features
 
+**Theatres**
+- Pick the war on the main menu; every way to play (campaign, two-player campaign, skirmish, online, the map
+  editor) then starts in it. Saves, replays, scenarios and online games remember their theatre.
+- The engine (movement, shooting, cover, suppression, AI, online, replays) is shared. Each theatre brings its own
+  sides, units, weapons, uniforms and vehicles, maps, campaign and a few rules of its own
+  (`scripts/theatres/`).
+- **Normandy 1944**: everything below. Allies and Germany field the same kinds of soldier with their own weapons.
+- **Vietnam 1967**: lopsided on purpose.
+  - The **US Army** has few soldiers. They are tough, good shots and slow under heavy loads: squad leader,
+    riflemen, an M60 gunner, an M79 grenadier who lobs grenades far, a medic, a sniper, an M113 carrier, and an
+    **RTO** whose radio calls **artillery** or **napalm** onto anything he can see. Napalm burns jungle and grass
+    away. Reinforcements **fly in by Huey** to a landing zone.
+  - The **Viet Cong** have many soldiers. They are cheap, fast and poorly armed: cadres, guerrillas with SKS
+    rifles, AK-47 assault troops, RPD gunners, RPG teams (the warhead tears cover apart), a mortar, and
+    **sappers** who hide **punji traps** (hard to spot, wound whoever steps in, tanks crush them). They move
+    through **tunnels**: from one of their entrances to another in a turn. Their reinforcements come up out of
+    the ground. Americans find entrances by walking past or seeing them used, and blow them in with G.
+  - New ground: **jungle** (slow, hides anyone in it beyond 3 tiles, and sight reaches only one tile into it),
+    **rice paddies** behind low dykes (slow, bog vehicles down) and **elephant grass** (hides crouching soldiers).
+    Maps have a hamlet of bamboo huts, a trail crossing and a landing zone cut out of the jungle.
+  - The Americans score for **ground**; the Viet Cong score for **every American killed**.
+- **Afghanistan & Iraq**: Helmand's walled compounds, wheat fields and irrigation ditches, or an Iraqi town of
+  stone houses, wrecked cars and concrete barriers (the map's seed picks one).
+  - The **Coalition** wears **body armour** (a point off every hit until grenades shred it). It has an **EOD
+    tech** who spots IEDs nearly every time, a **JTAC** who calls precise **air strikes** on what he sees, a SAW
+    gunner, a marksman, a medic and an **MRAP**.
+  - The **insurgents** are many and light: fighters with AKs, PKM gunners, RPG-7s, a Dragunov sniper, a mortar
+    and **bomb makers**. Bomb makers plant **IEDs** (a big blast that cuts through armour) and **set them off
+    remotely** (K) when they can see them. IEDs are already buried along the road in.
+  - The Coalition scores for ground, the insurgents 1.75 times as much for every Coalition soldier killed (shown multiplied by 4: 4 per objective per round, 7 per kill).
+
+**Music**
+- The tracks in `music/` (MP3, OGG or WAV) play as one playlist, in name order, looping round all of them
+  through menus and battles. Tracks added to the save folder's `music/` join the playlist.
+- Turn it off with the Music button on the main menu or M in battle, or set the volume in Settings.
+- With no tracks at all, the game falls back to themes composed in code for each theatre (a menu and a battle
+  theme each).
+
 **Battles**
 - Two actions per soldier per turn: move, dash, or move and act. Path cost depends on terrain, hedgerows, walls
   and stance. The exact hit chance is shown, with every modifier itemised.
+- Soldiers see 18 tiles (snipers further) and rifles stay accurate to about 9-10, so a unit can shoot about as
+  far as it can run.
 - Directional half and full cover, flanking and line of sight that steps out around corners. Fog of war,
   overwatch, and destructible cover with craters.
 - Fog of war hides what the enemy does out of sight: no turning, stance changes, reloading, healing or damage
@@ -121,7 +163,8 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 | T | Turn a tank on the spot |
 | C / Z | Crouch / go prone (press again to stand up) |
 | X / B | Aimed shot / suppressive fire |
-| G | Clear a spotted mine next to the soldier |
+| G | Clear a spotted mine next to the soldier, or blow in an enemy tunnel entrance (Vietnam) |
+| U / J / K | Vietnam: go through the tunnels / lay a punji trap. Afghanistan & Iraq: plant an IED / K set one off |
 | 1 on drums / an oil tank | In shoot mode, click fuel drums or an oil tank to blow them up |
 | H / Shift+H | Suggest a move / suggest for the selected soldier |
 | Tab / Enter | Next soldier / end turn |
@@ -129,6 +172,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 | Wheel / F | Zoom / focus the selected soldier |
 | Q / E / V | Rotate the view / switch isometric and top-down |
 | + / - | Playback speed |
+| M | Music on / off |
 
 While watching a replay: Space play / pause, N next action, Enter next turn, R restart, 1 / 2 / 3 the Allies'
 view, Germany's view, the whole map. Camera keys and + / - work as in battle.
@@ -145,14 +189,22 @@ Godot --path .                 # play from the project
 Godot --path . --editor        # open in the Godot editor
 ```
 
-**macOS app:**
+**macOS and Windows builds, and GitHub releases:**
 
 ```sh
-Godot --headless --path . --export-release "macOS" "build/Normandy 1944.app"
-codesign --force --deep -s - "build/Normandy 1944.app"
+tools/release.sh --build-only   # build/Normandy 1944.app, build/windows/Normandy 1944.exe and both zips in build/release/
+tools/release.sh --draft        # build, then create a draft GitHub release v<version> with both zips
+tools/release.sh                # build, then publish the release
 ```
 
-Run the export command once first so the export templates for 4.7 are installed. To try online play on one
+The version is `config/version` in `project.godot`: bump it and commit before releasing. To publish, the
+commit has to be pushed, the tree clean, and the [GitHub CLI](https://cli.github.com) logged in. The script
+finds Godot in `~/Downloads` or `/Applications` (or set `GODOT=`) and downloads the export templates it's
+missing the first time (about 1 GB). The Mac app is universal and ad-hoc signed but not notarized, so first
+open it with right-click > Open. The Windows build is one 64-bit `.exe` with the game inside, unsigned, so
+SmartScreen asks once (More info > Run anyway).
+
+To try online play on one
 computer, open the app twice (`open -n "build/Normandy 1944.app"`), type the same password in both, host in
 one and join `127.0.0.1` in the other. Players behind the same router always use the "On your network"
 address: most routers won't pass a connection to their own internet address back inside, and the joining
@@ -166,14 +218,18 @@ UDP port 24944 on the host's router, or both use a VPN such as Tailscale.
 Godot --headless --path . -s tests/run_tests.gd         # engine, AI, saves, replays, scenarios, settings
 Godot --headless --path . -s tests/advisor_tests.gd     # move suggestions and the MCP tools
 Godot --headless --path . -s tests/terrain_tests.gd     # fuel drums, oil tanks, fire, mines, wheat and wire
+Godot --headless --path . -s tests/theatre_tests.gd     # theatres: Normandy as data, Vietnam and Afghanistan & Iraq rules and maps
 Godot --headless --path . -s tests/agent_play.gd        # an agent plays a whole battle over the agent link (HTTP)
-Godot --path . -s tools/soldier_preview.gd -- out.png 3 detail   # soldier art sheet (needs a window; add "german", "lying")
+Godot --path . -s tools/soldier_preview.gd -- out.png 3 detail   # soldier art sheet (needs a window; add "german", "lying", "vietnam", "modern")
 GODOT=Godot sh tests/net_resume.sh 26000 44             # two copies online: save, quit, resume, desync checks
 GODOT=Godot sh tests/net_auth.sh 26100                  # passwords, wrong passwords, joining from a punched port
 
 # AI vs AI balance: win rates with confidence intervals, endings, kills per role, objective control
 Godot --headless --path . -s tools/balance.gd -- --scenario res://scenarios/village.json --games 50 --seed 1
 Godot --headless --path . -s tools/balance.gd -- --map random --size 64 --games 20 --csv results.csv
+Godot --headless --path . -s tools/balance.gd -- --theatre vietnam --map random --size 44 --games 20
+# Unit against unit: every role against every enemy role, 1v1 and 2v2, on a small arena (win rates per matchup)
+Godot --headless --path . -s tools/matchups.gd -- --theatre normandy --games 8 --sizes 1,2 --out matchups.md
 ```
 
 A single online match between two processes, with the AI on both sides:
@@ -183,7 +239,8 @@ A single online match between two processes, with the AI on both sides:
 
 | Path | Contents |
 |---|---|
-| `scripts/combat/` | The rules engine: battle, map, line of sight, pathfinding, units, weapons, AI, map generator, scenarios |
+| `scripts/theatres/` | The theatres: each one's sides, units, weapons, looks, skirmish forces, campaign and map generator choice |
+| `scripts/combat/` | The rules engine: battle, map, line of sight, pathfinding, units, weapons, AI, map generators, scenarios |
 | `scripts/view/` | Battle scene, isometric projection and procedural painters for terrain, soldiers and tanks |
 | `scripts/ui/` | Main menu and campaign screens, settings, theme, map editor |
 | `scripts/campaign/` | The campaign |

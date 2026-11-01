@@ -22,18 +22,18 @@ const COVER_SPOTS := 8
 const MAX_SPOTS := 30
 ## Most commands in one execute_command call.
 const MAX_BATCH := 20
-const TERRAIN_GLYPHS := [".", ",", ";", "_", "=", "\"", "o", "~", "x"]
+const TERRAIN_GLYPHS := [".", ",", ";", "_", "=", "\"", "o", "~", "x", "&", "%", "'"]
 const LEGEND := {
-	"tiles": ". grass  , rough ground  ; rubble  _ indoor floor  = road  \" wheat (hides you beyond 4 tiles; trampled when walked through)  ~ trampled wheat  x barbed wire (slow on foot)  o shell crater (half cover all round)",
+	"tiles": ". grass  , rough ground  ; rubble  _ indoor floor  = road  \" wheat (hides you beyond 4 tiles; trampled when walked through)  ~ trampled wheat  x barbed wire (slow on foot)  o shell crater (half cover all round)  & jungle (slow, hides anyone in it beyond 3 tiles, sight only reaches 1 tile into it)  % rice paddy (slow, no cover)  ' elephant grass (hides crouching and prone soldiers beyond 3 tiles)",
 	"objects": "T tree (full cover)  # rock or other full cover  W burning wreck (full cover)  + crate/sandbags/hay (half cover)  F fuel drums (half cover, explode)  O oil tank (full cover, big explosion). Objects block movement. Shoot drums/tanks with shoot_object",
-	"hazards": "^ fire (impassable, burns whoever stands in it)  M a mine your side has spotted (clear it with clear_mine from next to it). Unspotted mines are hidden",
+	"hazards": "^ fire (impassable, burns whoever stands in it)  M a mine or punji trap your side knows of (clear it with clear_mine from next to it). Unspotted mines are hidden  U a tunnel entrance your side knows of",
 	"units": "A-Z your units, a-z enemies in sight (see the unit lists for which is which), ? where an enemy was last seen",
 	"smoke": "* smoke (blocks sight)",
 	"edges": "Each tile is two characters: the tile, then its east edge. Between tile rows, a line shows each tile's south edge. | or - wall/hedge (full cover, blocks sight), ! or : fence/low wall/window (half cover)",
 }
 const COMMAND_HELP := "Commands: {\"cmd\": \"move\", \"unit\": id, \"tile\": [x, y]} | {\"cmd\": \"shoot\", \"unit\": id, \"target\": enemy id} | " \
 		+ "{\"cmd\": \"overwatch\"|\"hunker\"|\"reload\"|\"set_up\"|\"rally\", \"unit\": id} | {\"cmd\": \"grenade\"|\"smoke\", \"unit\": id, \"tile\": [x, y]} | " \
-		+ "{\"cmd\": \"mortar\", \"unit\": id, \"tile\": [x, y], \"kind\": \"he\"|\"smoke\"} | {\"cmd\": \"medkit\", \"unit\": id, \"target\": ally id} | " \
+		+ "{\"cmd\": \"mortar\", \"unit\": id, \"tile\": [x, y], \"kind\": \"he\"|\"smoke\"|\"napalm\"} | {\"cmd\": \"tunnel\"|\"trap\"|\"detonate\", \"unit\": id, \"tile\": [x, y]} | {\"cmd\": \"medkit\", \"unit\": id, \"target\": ally id} | " \
 		+ "{\"cmd\": \"aimed_shot\"|\"suppress\", \"unit\": id, \"target\": enemy id} | {\"cmd\": \"stance\", \"unit\": id, \"stance\": 0 stand, 1 crouch, 2 prone} | " \
 		+ "{\"cmd\": \"shoot_object\"|\"clear_mine\", \"unit\": id, \"tile\": [x, y]} | " \
 		+ "{\"cmd\": \"pivot\", \"unit\": tank id, \"tile\": heading such as [1, 0] or [1, -1]} | {\"cmd\": \"end_turn\"}"
@@ -79,12 +79,16 @@ const RULES := "Rules in brief: 2 actions per turn; a move within the unit's mob
 		+ "The mortar needs both actions (it can't fire after moving), a target 5-22 tiles away that someone on your side can see, and its round lands at the start of your NEXT turn, with some scatter; enemy strikes show in get_state as incoming_mortar_strikes, so move out of their radius. " \
 		+ "A medkit treats an adjacent ally or the unit carrying it. Hunkering needs cover. A machine gun must set up (1 action) before it can shoot or overwatch, and moving packs it up again. " \
 		+ "Enemies out of sight may be on overwatch: moving across open ground in front of unscouted positions draws fire. Small arms can't hurt tanks; tanks take more damage from the side and rear. " \
+		+ "Vietnam: the Viet Cong move between their tunnel entrances (tunnel: both actions, from one of your entrances to another) and sappers lay punji traps next to them (trap); " \
+		+ "an enemy tunnel entrance you have found can be blown in from next to it with clear_mine. The radio operator's artillery (mortar command, he or napalm) needs no setting up but he must see the target himself. " \
+		+ "There the Americans score for objectives and the Viet Cong for every American killed. " \
+		+ "Afghanistan and Iraq: insurgent bomb makers plant IEDs (trap) and set them off when they can see them (detonate); the Coalition's EOD tech spots them far more often, and its JTAC calls air strikes (mortar command) on what he sees. Coalition score for objectives, insurgents for kills. " \
 		+ "You only know what your side can see."
 
 
 func instructions() -> String:
 	if host != null and host.agent_plays():
-		return "You are playing %s in Normandy 1944, a turn-based WW2 squad tactics game (like XCOM) on a square grid, against an opponent. " % Battle.TEAM_NAMES[player_team()] \
+		return "You are playing %s in %s, a turn-based squad tactics game (like XCOM) on a square grid, against an opponent. " % [battle.team_name(player_team()), battle.theatre().title] \
 			+ "Loop until the battle ends: call wait_for_turn, which returns the battle state once it's your turn; weigh moves with get_unit_options (its filters find tiles in an objective, " \
 			+ "in cover from an enemy, or with a shot at a target) and preview (suggest_move gives the game's own AI opinion). " \
 			+ "Then give your orders with execute_command: send several at once as a commands list; it plays them in order and stops early if something unexpected happens " \
@@ -101,8 +105,8 @@ func tool_list() -> Array:
 	var command_arg := {
 		"type": "object", "description": COMMAND_HELP,
 		"properties": {
-			"cmd": {"type": "string", "enum": ["move", "shoot", "aimed_shot", "suppress", "stance", "shoot_object", "clear_mine", "overwatch", "hunker", "reload", "set_up", "rally", "grenade", "smoke", "mortar", "medkit", "pivot", "end_turn"]},
-			"unit": {"type": "integer"}, "target": {"type": "integer"}, "tile": tile_arg, "kind": {"type": "string", "enum": ["he", "smoke"]},
+			"cmd": {"type": "string", "enum": ["move", "shoot", "aimed_shot", "suppress", "stance", "shoot_object", "clear_mine", "overwatch", "hunker", "reload", "set_up", "rally", "grenade", "smoke", "mortar", "medkit", "pivot", "tunnel", "trap", "detonate", "end_turn"]},
+			"unit": {"type": "integer"}, "target": {"type": "integer"}, "tile": tile_arg, "kind": {"type": "string", "enum": ["he", "smoke", "napalm"]},
 			"stance": {"type": "integer", "enum": [0, 1, 2], "description": "0 stand, 1 crouch, 2 prone"},
 		},
 		"required": ["cmd"],
@@ -222,11 +226,11 @@ func get_state(args := {}) -> Dictionary:
 				"radius": objective["radius"], "held_by": _team_name(objective["owner"])})
 	var strikes := []
 	for strike in battle.strikes:
-		strikes.append({"kind": strike["kind"], "target": _tile(strike["target"]), "radius": snappedf((CombatRules.MORTAR_RADIUS if strike["kind"] == "he" else CombatRules.SMOKE_RADIUS) + float(strike["scatter"]), 0.1),
+		strikes.append({"kind": strike["kind"], "target": _tile(strike["target"]), "radius": snappedf(battle.strike_reach(strike), 0.1),
 				"fired_by": _team_name(strike.get("team", -1))})
 	var state := {
-		"you_are": Battle.TEAM_NAMES[side], "your_turn": battle.current_team == side and battle.winner == -1 and not _host_busy(),
-		"current_side": Battle.TEAM_NAMES[battle.current_team], "round": battle.round_number, "max_rounds": battle.max_rounds,
+		"you_are": battle.team_name(side), "your_turn": battle.current_team == side and battle.winner == -1 and not _host_busy(),
+		"current_side": battle.team_name(battle.current_team), "round": battle.round_number, "max_rounds": battle.max_rounds,
 		"winner": _team_name(battle.winner) if battle.winner >= 0 and battle.winner < Battle.TEAM_COUNT else ("draw" if battle.winner == Battle.DRAW else null),
 		"score": {"you": battle.victory_points[side], "enemy": battle.victory_points[1 - side], "to_win": battle.vp_to_win},
 		"objectives": objectives, "your_units": mine, "enemies_in_sight": enemies, "enemies_last_seen": remembered,
@@ -362,6 +366,8 @@ func _glyph(p: Vector2i, glyphs: Dictionary, last_seen: Dictionary) -> String:
 		return "^"
 	if map.has_mine(p) and battle.mines_known_to(player_team()).has(p):
 		return "M"
+	if battle.tunnels_known_to(player_team()).has(p):
+		return "U"
 	if map.is_explosive(p):
 		return "O" if map.get_object_kind(p) == "oil_tank" else "F"
 	if object == Cover.FULL:
@@ -468,8 +474,8 @@ func unit_options(id: int, all_tiles := false, filters := {}) -> Dictionary:
 	actions["grenade"] = battle.can_act(u) if u.grenades > 0 else "No grenades"
 	actions["smoke"] = battle.can_act(u) if u.smoke_grenades > 0 else "No smoke grenades"
 	actions["medkit"] = battle.can_act(u) if u.medkits > 0 else "No medkits"
-	if u.role == "Mortar":
-		actions["mortar"] = battle.can_act(u) if u.actions >= Unit.ACTIONS_PER_TURN else "The mortar can't fire after moving"
+	if not u.indirect.is_empty():
+		actions["mortar"] = battle.can_act(u) if u.actions >= Unit.ACTIONS_PER_TURN or not u.indirect["still"] else "The %s can't fire after moving" % u.indirect["name"]
 	if u.vehicle:
 		actions["pivot"] = battle.can_act(u)
 	else:
@@ -488,7 +494,9 @@ func unit_options(id: int, all_tiles := false, filters := {}) -> Dictionary:
 	if filtered and spots.is_empty():
 		moves["note"] = "No reachable tile matches those filters this turn"
 	var result := {"unit": _own_unit(u), "allowed": allowed, "not_allowed": blocked, "targets": targets, "moves": moves,
-			"ranges": {"grenade": CombatRules.GRENADE_RANGE, "smoke": CombatRules.SMOKE_RANGE, "mortar": [CombatRules.MORTAR_MIN_RANGE, CombatRules.MORTAR_MAX_RANGE]}}
+			"ranges": {"grenade": CombatRules.GRENADE_RANGE, "smoke": CombatRules.SMOKE_RANGE, "mortar": [u.indirect.get("min", 0.0), u.indirect.get("max", 0.0)]}}
+	if u.def.get("throw_range", CombatRules.GRENADE_RANGE) != CombatRules.GRENADE_RANGE:
+		result["ranges"]["grenade"] = u.def["throw_range"]
 	if u.medkits > 0:
 		var patients := []
 		for ally in battle.alive_units(side):
@@ -735,7 +743,7 @@ func _turn_summary() -> Dictionary:
 	var side := player_team()
 	var summary := {
 		"your_turn": battle.winner == -1 and battle.current_team == side and not _host_busy(),
-		"current_side": Battle.TEAM_NAMES[battle.current_team], "round": battle.round_number,
+		"current_side": battle.team_name(battle.current_team), "round": battle.round_number,
 		"score": {"you": battle.victory_points[side], "enemy": battle.victory_points[1 - side], "to_win": battle.vp_to_win},
 	}
 	if battle.winner != -1:
@@ -838,11 +846,11 @@ func _event_line(e: Dictionary, side: int) -> String:
 			if e["team"] == side:
 				return "Mines spotted at %s." % ", ".join(e["tiles"].map(func(t: Vector2i) -> String: return str(_tile(t))))
 		"objective":
-			return "%s took the %s." % [Battle.TEAM_NAMES[e["owner"]], battle.objectives[e["index"]]["name"]]
+			return "%s took the %s." % [battle.team_name(e["owner"]), battle.objectives[e["index"]]["name"]]
 		"reinforcements":
-			return "%s reinforcements arrived." % Battle.TEAM_NAMES[e["team"]]
+			return "%s reinforcements arrived." % battle.team_name(e["team"])
 		"turn":
-			return "Round %d: %s's turn." % [e["round"], Battle.TEAM_NAMES[e["team"]]]
+			return "Round %d: %s's turn." % [e["round"], battle.team_name(e["team"])]
 		"game_over":
 			var winner: int = e["winner"]
 			return "The battle is over: %s." % ("a draw" if winner == Battle.DRAW else ("you won" if winner == side else "you lost"))
@@ -902,7 +910,7 @@ func validate(command: Dictionary) -> String:
 		return "No such unit on your side"
 	var tile: Vector2i = command.get("tile", Vector2i(-1, -1))
 	var target := battle.get_unit(command.get("target", -1))
-	if cmd in ["move", "grenade", "smoke", "mortar", "shoot_object", "clear_mine"] and not command.has("tile"):
+	if cmd in ["move", "grenade", "smoke", "mortar", "shoot_object", "clear_mine", "tunnel", "trap", "detonate"] and not command.has("tile"):
 		return "%s needs a tile" % cmd
 	match cmd:
 		"move":
@@ -939,6 +947,12 @@ func validate(command: Dictionary) -> String:
 			return battle.can_shoot_object(u, tile)
 		"clear_mine":
 			return battle.can_clear_mine(u, tile)
+		"tunnel":
+			return battle.can_tunnel(u, tile)
+		"trap":
+			return battle.can_lay_trap(u, tile)
+		"detonate":
+			return battle.can_detonate(u, tile)
 	return "Unknown command: %s" % cmd
 
 
@@ -1043,5 +1057,5 @@ static func _parse_tile(value: Variant) -> Variant:
 	return null
 
 
-static func _team_name(team: int) -> Variant:
-	return Battle.TEAM_NAMES[team] if team >= 0 and team < Battle.TEAM_COUNT else null
+func _team_name(team: int) -> Variant:
+	return battle.team_name(team) if team >= 0 and team < Battle.TEAM_COUNT else null

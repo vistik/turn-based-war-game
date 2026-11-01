@@ -457,7 +457,8 @@ func _draw() -> void:
 			label = ["STAND UP", "CROUCH", "GO PRONE"][command.get("stance", 0)]
 		"grenade", "smoke", "mortar":
 			var tile: Vector2i = command["tile"]
-			var radius := CombatRules.GRENADE_RADIUS if command["cmd"] == "grenade" else (CombatRules.SMOKE_RADIUS if command["cmd"] == "smoke" else CombatRules.MORTAR_RADIUS)
+			var shooter := battle.get_unit(command.get("unit", -1))
+			var radius: float = CombatRules.GRENADE_RADIUS if command["cmd"] == "grenade" else (CombatRules.SMOKE_RADIUS if command["cmd"] == "smoke" or command.get("kind", "he") == "smoke" else (shooter.indirect.get("radius", 1.5) if shooter != null else 1.5))
 			var at: Vector2 = view._center(tile)
 			draw_line(proj.project(from, 0.6), proj.project(at), Color(color, 0.8), 2.0)
 			draw_polyline(TerrainPainter.ground_circle(proj, at, radius), color, 3.0)

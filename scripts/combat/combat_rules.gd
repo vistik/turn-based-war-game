@@ -12,7 +12,7 @@ const REACTION_AIM_FACTOR := 0.7
 const FLANK_CRIT_BONUS := 40
 ## Rolls just above the hit chance still graze for half damage.
 const GRAZE_BAND := 10
-## Targets in a wheat field further than this are partly hidden.
+## Targets in a wheat field further than this are partly hidden (other terrain: TacticalMap.CONCEALMENT).
 const WHEAT_CONCEALMENT := 10
 const WHEAT_CONCEALMENT_RANGE := 4.0
 
@@ -50,23 +50,18 @@ const SMOKE_RANGE := 8.0
 const SMOKE_RADIUS := 1.5
 ## Smoke lasts this many turns (both sides' turns count, so 4 = two rounds).
 const SMOKE_TURNS := 4
-const MORTAR_MIN_RANGE := 5.0
-const MORTAR_MAX_RANGE := 22.0
-const MORTAR_RADIUS := 1.5
-const MORTAR_DAMAGE_MIN := 3
-const MORTAR_DAMAGE_MAX := 5
-## Shells land up to this many tiles off target per tile of distance.
-const MORTAR_SCATTER := 0.08
+## Mortar ranges, blast and scatter are per role: see Theatre.INDIRECT_DEFAULTS and Unit.indirect.
 const MEDKIT_HEAL := 4
 
 # --- Terrain hazards ---
 ## Fuel drums and oil tanks: the blast when they go up, and how far around it the fire spreads.
 const EXPLOSIVES := {
+	"car": {"radius": 1.5, "damage_min": 3, "damage_max": 5, "fire": 1.0},
 	"fuel": {"radius": 1.5, "damage_min": 3, "damage_max": 5, "fire": 1.0},
 	"oil_tank": {"radius": 2.5, "damage_min": 4, "damage_max": 6, "fire": 2.0},
 }
 ## Aim bonus for shooting at an explosive object: it doesn't duck, and an oil tank is hard to miss.
-const OBJECT_SHOT_BONUS := {"fuel": 10, "oil_tank": 30}
+const OBJECT_SHOT_BONUS := {"fuel": 10, "oil_tank": 30, "car": 20}
 ## Fires burn for this many turns (both sides' turns count), and burn anyone still in them at the start of their turn.
 const FIRE_TURNS := 4
 const FIRE_DAMAGE := 2
@@ -77,6 +72,27 @@ const MINE_DAMAGE_MIN := 4
 const MINE_DAMAGE_MAX := 6
 ## Chance (%) a soldier spots each hidden mine next to him as he moves. Tank crews never do.
 const MINE_SPOT_CHANCE := 50
+## Punji traps: a camouflaged pit of sharpened stakes. Harder to spot than a mine; hurts (and wounds) only
+## whoever steps in it; tanks crush them harmlessly.
+const TRAP_SPOT_CHANCE := 35
+const TRAP_DAMAGE_MIN := 2
+const TRAP_DAMAGE_MAX := 4
+## IEDs: a buried shell with a pressure plate, or set off by the bomb maker who can see it. A big blast that
+## shaped charges drive through armour (vehicles lose only IED_VS_ARMOR of it). Hard to spot.
+const IED_SPOT_CHANCE := 25
+const IED_RADIUS := 1.5
+const IED_DAMAGE_MIN := 4
+const IED_DAMAGE_MAX := 7
+const IED_VS_ARMOR := 1
+## How far a bomb maker can be from an IED he sets off (he must see it).
+const DETONATE_RANGE := 14.0
+## Chance (%) a soldier spots each hidden enemy tunnel entrance next to him as he moves.
+const TUNNEL_SPOT_CHANCE := 50
+## Napalm: everyone within the radius burns, the ground catches fire, and jungle and grass burn away.
+const NAPALM_RADIUS := 1.5
+const NAPALM_DAMAGE_MIN := 3
+const NAPALM_DAMAGE_MAX := 5
+const NAPALM_SUPPRESSION := 60
 ## Thrown grenades (frag and smoke) land up to this many tiles off target per tile thrown, plus more for
 ## throwers with aim below THROW_STEADY_AIM and for throwers under fire. They bounce back off walls.
 const THROW_SCATTER := 0.12
@@ -127,7 +143,7 @@ const SUPPRESSIVE_FIRE_RADIUS := 1.5
 const SUPPRESSIVE_FIRE_AMMO := 2
 
 # --- Tanks ---
-## Damage each armour side stops from anti-tank hits.
+## Damage each armour side stops from anti-tank hits, unless the vehicle's role says otherwise (Unit.hull_armor).
 const VEHICLE_ARMOR := {"front": 3, "side": 1, "rear": 0}
 const LARGE_TARGET_BONUS := 10
 ## Explosions lose this much damage against tanks.
@@ -148,6 +164,11 @@ static func armor_side(target: Unit, from: Vector2i) -> String:
 	return "side"
 
 
+## The damage a vehicle's armour stops on that side ("front", "side" or "rear").
+static func armor_value(target: Unit, side: String) -> int:
+	return target.hull_armor.get(side, VEHICLE_ARMOR[side])
+
+
 ## How far (in tiles) a grenade thrown from `from` at `tile` may land off target.
 static func throw_scatter(thrower: Unit, from: Vector2i, tile: Vector2i) -> float:
 	var scatter := Vector2(from).distance_to(Vector2(tile)) * THROW_SCATTER
@@ -166,7 +187,7 @@ static func can_hurt(weapon: Weapon, target: Unit, from: Vector2i) -> bool:
 		return true
 	if not weapon.anti_tank:
 		return false
-	return weapon.damage_max + weapon.crit_damage > VEHICLE_ARMOR[armor_side(target, from)]
+	return weapon.damage_max + weapon.crit_damage > armor_value(target, armor_side(target, from))
 
 
 ## Whether a weapon's misses can hit something else: machine guns, rockets and tank guns.
@@ -233,9 +254,10 @@ static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction :=
 	if target.vehicle:
 		modifiers.append(["Large target", LARGE_TARGET_BONUS])
 		hit += LARGE_TARGET_BONUS
-	elif map.get_terrain(target.pos) == TacticalMap.Terrain.WHEAT and distance > WHEAT_CONCEALMENT_RANGE:
-		modifiers.append(["In the wheat", -WHEAT_CONCEALMENT])
-		hit -= WHEAT_CONCEALMENT
+	elif not map.concealment(target.pos).is_empty() and distance > map.concealment(target.pos)["range"]:
+		var hidden := map.concealment(target.pos)
+		modifiers.append([hidden["label"], -hidden["defense"]])
+		hit -= hidden["defense"]
 
 	if target.defense != 0:
 		modifiers.append(["Defense", -target.defense])

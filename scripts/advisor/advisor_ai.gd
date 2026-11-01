@@ -159,7 +159,7 @@ func _reasons(u: Unit, plan: Dictionary, seen: Array[Unit]) -> Array[String]:
 			reasons.append("the blast catches %s" % _enemies(caught))
 		"grenade", "mortar":
 			var names := PackedStringArray()
-			var radius := CombatRules.GRENADE_RADIUS if plan["kind"] == "grenade" else CombatRules.MORTAR_RADIUS
+			var radius: float = CombatRules.GRENADE_RADIUS if plan["kind"] == "grenade" else u.indirect.get("radius", 1.5)
 			for e in seen:
 				if Vector2(e.pos).distance_to(Vector2(plan["tile"])) <= radius:
 					names.append(e.name)

@@ -4,8 +4,11 @@ extends RefCounted
 ## smoke, fires and buried mines. Objects and edges also carry a kind ("tree", "hedge", ...) that changes
 ## how they look, and for hedges, how they're crossed. Fuel drums and oil tanks are objects that explode.
 
-## TRAMPLED is wheat flattened by soldiers or tanks moving through it; WIRE is a barbed-wire entanglement.
-enum Terrain { FLOOR, ROUGH, RUBBLE, INDOOR, ROAD, WHEAT, CRATER, TRAMPLED, WIRE }
+## TRAMPLED is wheat (or tall grass) flattened by soldiers or tanks moving through it; WIRE is a barbed-wire
+## entanglement. JUNGLE is dense undergrowth: slow, hides whoever is in it and blocks sight through it.
+## PADDY is a flooded rice field: slow, open, and it bogs vehicles down. TALL_GRASS is elephant grass: it
+## hides crouching soldiers as well as prone ones, and is trampled like wheat.
+enum Terrain { FLOOR, ROUGH, RUBBLE, INDOOR, ROAD, WHEAT, CRATER, TRAMPLED, WIRE, JUNGLE, PADDY, TALL_GRASS }
 
 ## North, east, south, west.
 const DIRS4 := [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
@@ -13,10 +16,29 @@ const DIRS8 := [
 	Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0),
 	Vector2i(1, -1), Vector2i(1, 1), Vector2i(-1, 1), Vector2i(-1, -1),
 ]
-const TERRAIN_NAMES := ["Grass", "Rough ground", "Rubble", "Indoor floor", "Road", "Wheat field", "Shell crater", "Trampled wheat", "Barbed wire"]
-const TERRAIN_COST := [1.0, 2.0, 2.0, 1.0, 0.75, 1.5, 1.5, 1.0, 4.0]
+const TERRAIN_NAMES := ["Grass", "Rough ground", "Rubble", "Indoor floor", "Road", "Wheat field", "Shell crater", "Trampled wheat", "Barbed wire",
+		"Jungle", "Rice paddy", "Elephant grass"]
+const TERRAIN_COST := [1.0, 2.0, 2.0, 1.0, 0.75, 1.5, 1.5, 1.0, 4.0, 2.0, 2.0, 1.5]
+## What a tank pays where it differs from TERRAIN_COST: it rolls over wire, ploughs through undergrowth and
+## bogs down in flooded paddies.
+const VEHICLE_TERRAIN_COST := {Terrain.WIRE: 1.0, Terrain.JUNGLE: 3.0, Terrain.PADDY: 3.0, Terrain.TALL_GRASS: 1.0}
+## What a tank leaves behind it.
+const VEHICLE_FLATTENS := {Terrain.WIRE: Terrain.FLOOR, Terrain.WHEAT: Terrain.TRAMPLED, Terrain.TALL_GRASS: Terrain.TRAMPLED, Terrain.JUNGLE: Terrain.ROUGH}
+## Crops and grass a standing or crouching soldier tramples flat as he walks out of it.
+const TRAMPLES := {Terrain.WHEAT: Terrain.TRAMPLED, Terrain.TALL_GRASS: Terrain.TRAMPLED}
+## Terrain that hides those in it from anyone further than "range" tiles away, in the listed stances, unless
+## they have fired; and makes them harder to hit beyond that range ("defense", shown as "label").
+const CONCEALMENT := {
+	Terrain.WHEAT: {"range": 4.0, "stances": [2], "defense": 10, "label": "In the wheat"},
+	Terrain.TALL_GRASS: {"range": 3.0, "stances": [1, 2], "defense": 10, "label": "In the tall grass"},
+	Terrain.JUNGLE: {"range": 3.0, "stances": [0, 1, 2], "defense": 15, "label": "In the jungle"},
+}
+## Sight passes through at most this many jungle tiles (not counting the two ends).
+const JUNGLE_SIGHT_TILES := 1
+## Objects a tank can knock down and drive through (at TREE_COST).
+const FELLABLE_KINDS := ["tree", "palm", "bamboo"]
 ## Objects that blow up when shot, caught in a blast or run over: fuel drums (half cover) and oil tanks (full).
-const EXPLOSIVE_KINDS := ["fuel", "oil_tank"]
+const EXPLOSIVE_KINDS := ["fuel", "oil_tank", "car"]
 const DIAGONAL_FACTOR := 1.5
 ## Extra cost for climbing over a half-height wall, and for pushing through a hedgerow.
 const VAULT_COST := 1.0
@@ -27,7 +49,7 @@ const TREE_COST := 2.0
 ## What driving over fuel drums costs a tank on its path, so it only does it when there's no other way.
 const FUEL_CRUSH_COST := 6.0
 ## Low obstacles and hedges a tank can drive through (and destroys on the way).
-const CRUSHABLE_EDGES := ["fence", "stone", "hedge"]
+const CRUSHABLE_EDGES := ["fence", "stone", "hedge", "dyke", "bamboo_wall", "bamboo_window"]
 
 var width: int
 var height: int
@@ -47,8 +69,11 @@ var _smoke := {}
 var _vehicles := {}
 ## Tile -> battle turn index at which the fire there burns out. Nobody can enter a burning tile.
 var _fires := {}
-## Tiles with a mine buried in them. Which side knows about which mine is kept by the Battle.
+## Tiles with a mine buried in them: true for a mine, or the kind of trap ("punji"). Which side knows about
+## which mine is kept by the Battle.
 var _mines := {}
+## Tunnel entrances: tile -> the team whose tunnels they are (Vietnam). The enemy has to find them.
+var _tunnels := {}
 
 
 func _init(p_width: int, p_height: int) -> void:
@@ -79,7 +104,8 @@ func get_object(p: Vector2i) -> int:
 	return _objects[_index(p)] if in_bounds(p) else Cover.NONE
 
 
-## Kinds: full cover "rock", "tree", "oil_tank"; half cover "crate", "sandbags", "hay", "pew", "fuel".
+## Kinds: full cover "rock", "tree", "palm", "bamboo", "oil_tank", "car" (a wreck that burns when hit), "hesco";
+## half cover "crate", "sandbags", "hay", "pew", "fuel", "rice_sacks", "jersey" (a concrete barrier).
 func get_object_kind(p: Vector2i) -> String:
 	return _object_kinds.get(p, "rock" if get_object(p) == Cover.FULL else "crate")
 
@@ -99,7 +125,8 @@ func get_edge(a: Vector2i, b: Vector2i) -> int:
 	return _edges.get(_edge_key(a, b), Cover.NONE)
 
 
-## Kinds: full cover "wall", "hedge"; half cover "window", "fence", "stone".
+## Kinds: full cover "wall", "hedge", "bamboo_wall", "mud_wall"; half cover "window", "fence", "stone", "dyke",
+## "bamboo_window", "mud_window".
 func get_edge_kind(a: Vector2i, b: Vector2i) -> String:
 	return edge_kind(_edge_key(a, b))
 
@@ -196,11 +223,34 @@ func get_mines() -> Dictionary:
 	return _mines
 
 
-func set_mine(p: Vector2i, present: bool) -> void:
+func set_mine(p: Vector2i, present: bool, kind := "mine") -> void:
 	if present:
-		_mines[p] = true
+		_mines[p] = true if kind == "mine" else kind
 	else:
 		_mines.erase(p)
+	revision += 1
+
+
+## "mine", or the kind of trap ("punji") buried on the tile.
+func get_mine_kind(p: Vector2i) -> String:
+	var value: Variant = _mines.get(p, true)
+	return value if value is String else "mine"
+
+
+## The team whose tunnel entrance is on the tile, or -1.
+func tunnel_owner(p: Vector2i) -> int:
+	return _tunnels.get(p, -1)
+
+
+func get_tunnels() -> Dictionary:
+	return _tunnels
+
+
+func set_tunnel(p: Vector2i, team: int) -> void:
+	if team < 0:
+		_tunnels.erase(p)
+	else:
+		_tunnels[p] = team
 	revision += 1
 
 
@@ -248,8 +298,9 @@ func step_cost(a: Vector2i, b: Vector2i) -> float:
 func vehicle_step_cost(a: Vector2i, b: Vector2i) -> float:
 	if not in_bounds(b) or not _tank_can_enter(b) or _fires.has(b):
 		return INF
-	# Tanks roll straight over barbed wire.
-	var cost: float = CRUSH_COST if get_terrain(b) == Terrain.WIRE else TERRAIN_COST[get_terrain(b)]
+	# Tanks roll straight over barbed wire, but bog down in paddies.
+	var terrain := get_terrain(b)
+	var cost: float = VEHICLE_TERRAIN_COST.get(terrain, TERRAIN_COST[terrain])
 	if get_object_kind(b) == "fuel" and get_object(b) != Cover.NONE:
 		# Possible, but the drums go up under the tank.
 		cost += FUEL_CRUSH_COST
@@ -275,7 +326,16 @@ func vehicle_step_cost(a: Vector2i, b: Vector2i) -> float:
 
 
 func _tank_can_enter(p: Vector2i) -> bool:
-	return get_object(p) != Cover.FULL or get_object_kind(p) == "tree"
+	return get_object(p) != Cover.FULL or FELLABLE_KINDS.has(get_object_kind(p))
+
+
+## The concealment of a tile's terrain (see CONCEALMENT), or {}.
+func concealment(p: Vector2i) -> Dictionary:
+	return CONCEALMENT.get(get_terrain(p), {})
+
+
+func is_jungle(p: Vector2i) -> bool:
+	return get_terrain(p) == Terrain.JUNGLE
 
 
 ## Cover a unit standing on p gets on the side facing direction dir.
@@ -335,8 +395,9 @@ func destroy_cover(center: Vector2i, radius: float) -> int:
 	var destroyed := 0
 	for p in tiles_in_radius(center, radius):
 		area[p] = true
-		# Blasts set off buried mines and tear up barbed wire.
+		# Blasts set off buried mines, cave in tunnel entrances and tear up barbed wire.
 		_mines.erase(p)
+		_tunnels.erase(p)
 		if get_terrain(p) == Terrain.WIRE:
 			set_terrain(p, Terrain.FLOOR)
 			destroyed += 1
@@ -358,11 +419,15 @@ func destroy_cover(center: Vector2i, radius: float) -> int:
 
 
 func to_dict() -> Dictionary:
-	return {
+	var data := {
 		"width": width, "height": height, "terrain": _terrain.duplicate(), "objects": _objects.duplicate(),
 		"object_kinds": _object_kinds.duplicate(), "edges": _edges.duplicate(), "edge_kinds": _edge_kinds.duplicate(),
 		"smoke": _smoke.duplicate(), "vehicles": _vehicles.duplicate(), "fires": _fires.duplicate(), "mines": _mines.duplicate(),
 	}
+	# Only maps with tunnels say so, so maps without read (and checksum) as they always have.
+	if not _tunnels.is_empty():
+		data["tunnels"] = _tunnels.duplicate()
+	return data
 
 
 static func from_dict(data: Dictionary) -> TacticalMap:
@@ -376,6 +441,7 @@ static func from_dict(data: Dictionary) -> TacticalMap:
 	map._vehicles = data["vehicles"].duplicate()
 	map._fires = data.get("fires", {}).duplicate()
 	map._mines = data.get("mines", {}).duplicate()
+	map._tunnels = data.get("tunnels", {}).duplicate()
 	return map
 
 

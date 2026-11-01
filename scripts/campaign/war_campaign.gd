@@ -7,6 +7,9 @@ extends RefCounted
 ## further back, behind sandbags, crouched). Supply spent on a map is gone; whatever isn't spent stays for
 ## the maps to come. Winning a map scores its points (a draw splits them), and the most points wins.
 ##
+## Unit prices, AI shopping lists and map names come from the theatre (Theatre.cost, the faction's
+## "ai_wishes", "ai_heavy" and "fill_roles", Theatre.places).
+##
 ## Orders are {"roster": Array of role names, "flank": "balanced"|"left"|"right",
 ## "posture": "offensive"|"defensive"}. Left and right are seen from each side's own edge, facing the enemy.
 
@@ -16,28 +19,13 @@ const MIN_SPEND := 12
 const MAX_SPEND := 45
 const MAX_UNITS := 14
 const MAP_COUNTS := [3, 4, 5]
-const UNIT_COSTS := {
-	"Rifleman": 3, "SMG": 4, "Medic": 4, "Officer": 5, "MG": 6, "Sniper": 6, "AT": 6, "Mortar": 7, "Tank": 15,
-}
-const UNIT_NOTES := {
-	"Rifleman": "Reliable all-rounder with a grenade",
-	"SMG": "Fast, deadly up close",
-	"Medic": "Heals and treats wounds",
-	"Officer": "Rallies and steadies nearby soldiers",
-	"MG": "Heavy suppression once set up",
-	"Sniper": "Long sight, best at range",
-	"AT": "Bazooka: the answer to tanks",
-	"Mortar": "Indirect fire over cover",
-	"Tank": "Armoured, rifles can't hurt it",
-}
 const FLANKS := ["balanced", "left", "right"]
 const POSTURES := ["offensive", "defensive"]
-const PLACES := ["Carentan", "Sainte-Mère-Église", "Villers-Bocage", "Hill 112", "Saint-Lô", "Tilly-sur-Seulles",
-		"Cheux", "Caumont", "Le Mesnil", "Hottot"]
 const SIZES := [36, 40, 44, 48]
 
 ## Each: {"name", "seed", "size", "points", "orders": [Allied, German] (or {} until given), "result": {} or
 ## {"winner": team or Battle.DRAW, "vp": [a, b], "spent": [a, b]}}.
+var theatre_id := Theatres.DEFAULT
 var maps: Array[Dictionary] = []
 var supply := [SUPPLY, SUPPLY]
 var scores := [0, 0]
@@ -47,14 +35,15 @@ var ai_sides := [false, true]
 var _rng := RandomNumberGenerator.new()
 
 
-static func create(map_count: int, seed: int, p_ai_sides := [false, true]) -> WarCampaign:
+static func create(map_count: int, seed: int, p_ai_sides := [false, true], p_theatre := Theatres.DEFAULT) -> WarCampaign:
 	var war := WarCampaign.new()
+	war.theatre_id = p_theatre
 	war._rng.seed = seed
 	war.ai_sides = p_ai_sides.duplicate()
 	# Every map is worth a different number of points, from 1 up to 5.
 	var values := [1, 2, 3, 4, 5]
 	_shuffle(values, war._rng)
-	var places := PLACES.duplicate()
+	var places := war.theatre().places().duplicate()
 	_shuffle(places, war._rng)
 	for i in map_count:
 		war.maps.append({
@@ -62,6 +51,10 @@ static func create(map_count: int, seed: int, p_ai_sides := [false, true]) -> Wa
 			"points": values[i], "orders": [{}, {}], "result": {},
 		})
 	return war
+
+
+func theatre() -> Theatre:
+	return Theatres.get_theatre(theatre_id)
 
 
 func is_over() -> bool:
@@ -97,11 +90,14 @@ func spend_limits(side: int) -> Array[int]:
 	return [least, maxi(least, most)]
 
 
-static func cost_of(roster: Array) -> int:
-	var total := 0
-	for role: String in roster:
-		total += UNIT_COSTS[role]
-	return total
+## Most units the side may field on one map.
+func max_units(side: int) -> int:
+	return theatre().faction(side).get("max_units", MAX_UNITS)
+
+
+## What a side pays for a roster.
+func cost_of(side: int, roster: Array) -> int:
+	return theatre().cost_of(side, roster)
 
 
 ## Why these orders can't be given for the current map ("" if they can).
@@ -111,12 +107,12 @@ func check_orders(side: int, orders: Dictionary) -> String:
 	var roster: Array = orders.get("roster", [])
 	if roster.is_empty():
 		return "Buy at least one unit"
-	if roster.size() > MAX_UNITS:
-		return "At most %d units" % MAX_UNITS
+	if roster.size() > max_units(side):
+		return "At most %d units" % max_units(side)
 	for role in roster:
-		if not UNIT_COSTS.has(role):
+		if not theatre().has_role(side, role):
 			return "Unknown unit: %s" % role
-	var cost := cost_of(roster)
+	var cost := cost_of(side, roster)
 	var limits := spend_limits(side)
 	if cost < limits[0]:
 		return "Commit at least %d supply to this map" % limits[0]
@@ -154,33 +150,33 @@ func ai_orders(side: int) -> Dictionary:
 	var roster: Array = []
 	var cost := 0
 	# An officer and a core of riflemen first, then support weapons, then more riflemen.
-	var wishes := ["Officer", "Rifleman", "Rifleman", "MG", "Rifleman", "AT", "Medic", "SMG", "Sniper", "Rifleman",
-			"Mortar", "Rifleman", "SMG", "Rifleman"]
-	if budget >= 36 and _rng.randf() < 0.6:
-		wishes.insert(1, "Tank")
+	var faction := theatre().faction(side)
+	var wishes: Array = faction["ai_wishes"].duplicate()
+	if budget >= 36 and _rng.randf() < 0.6 and faction.get("ai_heavy", "") != "":
+		wishes.insert(1, faction["ai_heavy"])
 	for role: String in wishes:
-		if roster.size() >= MAX_UNITS:
+		if roster.size() >= max_units(side):
 			break
-		if cost + UNIT_COSTS[role] <= budget:
+		if cost + theatre().cost(side, role) <= budget:
 			roster.append(role)
-			cost += UNIT_COSTS[role]
+			cost += theatre().cost(side, role)
 	# Top up to the minimum with whatever fits, handing units back until something does.
 	while cost < limits[0]:
-		var extra := _fill(limits[0] - cost, limits[1] - cost)
+		var extra := _fill(side, limits[0] - cost, limits[1] - cost)
 		if not extra.is_empty() or roster.is_empty():
 			roster.append_array(extra)
 			break
-		cost -= UNIT_COSTS[roster.pop_back()]
+		cost -= theatre().cost(side, roster.pop_back())
 	return {"roster": roster, "flank": FLANKS[_rng.randi_range(0, 2)], "posture": POSTURES[_rng.randi_range(0, 1)]}
 
 
 ## Cheap units costing between `least` and `most` supply in total, or [] if no mix does.
-static func _fill(least: int, most: int) -> Array:
+func _fill(side: int, least: int, most: int) -> Array:
 	# Fewest units for each total, built up from the cheapest roles.
 	var best := {0: []}
 	for amount in range(1, most + 1):
-		for role: String in ["Rifleman", "SMG", "Officer", "MG", "Mortar"]:
-			var rest: int = amount - UNIT_COSTS[role]
+		for role: String in theatre().faction(side)["fill_roles"]:
+			var rest: int = amount - theatre().cost(side, role)
 			if best.has(rest) and (not best.has(amount) or best[rest].size() + 1 < best[amount].size()):
 				best[amount] = best[rest] + [role]
 	for amount in range(least, most + 1):
@@ -192,11 +188,13 @@ static func _fill(least: int, most: int) -> Array:
 ## The battle for the current map, both sides deployed as ordered.
 func build_battle() -> Battle:
 	var m := current_map()
-	var layout := MapGenerator.generate(m["seed"], Vector2i(m["size"], m["size"]))
+	var layout := theatre().generate_map(m["seed"], Vector2i(m["size"], m["size"]))
 	var deployments: Array = m["orders"]
 	var rosters := deploy(layout, [m["orders"][0]["roster"], m["orders"][1]["roster"]], deployments)
 	var size: int = m["size"]
-	var battle := BattleFactory.create(layout, rosters, m["seed"], {"vp_to_win": 8 + size / 8, "max_rounds": 12 + size / 8})
+	var options := {"theatre": theatre_id, "vp_to_win": 8 + size / 8, "max_rounds": 12 + size / 8}
+	options.merge(theatre().battle_options())
+	var battle := BattleFactory.create(layout, rosters, m["seed"], options)
 	brace(battle, deployments)
 	return battle
 
@@ -293,7 +291,7 @@ static func _free_near(map: TacticalMap, want: Vector2i, side: int, depth: Array
 ## both sides pay what they committed, and the campaign moves on. Returns the map's result.
 func complete_map(battle: Battle) -> Dictionary:
 	var m := current_map()
-	var spent := [cost_of(m["orders"][0]["roster"]), cost_of(m["orders"][1]["roster"])]
+	var spent := [cost_of(0, m["orders"][0]["roster"]), cost_of(1, m["orders"][1]["roster"])]
 	for side in 2:
 		supply[side] -= spent[side]
 	var won: int = battle.winner
@@ -309,12 +307,13 @@ func complete_map(battle: Battle) -> Dictionary:
 
 
 func to_dict() -> Dictionary:
-	return {"maps": maps.duplicate(true), "supply": supply.duplicate(), "scores": scores.duplicate(), "current": current,
+	return {"theatre": theatre_id, "maps": maps.duplicate(true), "supply": supply.duplicate(), "scores": scores.duplicate(), "current": current,
 			"ai_sides": ai_sides.duplicate(), "rng_seed": _rng.seed, "rng_state": _rng.state}
 
 
 static func from_dict(data: Dictionary) -> WarCampaign:
 	var war := WarCampaign.new()
+	war.theatre_id = data.get("theatre", Theatres.DEFAULT)
 	war.maps.assign(data["maps"].duplicate(true))
 	war.supply = data["supply"].duplicate()
 	war.scores = data["scores"].duplicate()

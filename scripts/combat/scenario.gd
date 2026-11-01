@@ -8,6 +8,7 @@ extends RefCounted
 ## [codeblock]
 ## {
 ##   "format": "normandy-1944-scenario", "version": 1,
+##   "theatre": "normandy" (optional, see Theatres; Normandy if left out),
 ##   "title": "Hedgerow ambush", "briefing": "Hold the crossroads.",
 ##   "vp_to_win": 12, "max_rounds": 20, "mirrored": true,
 ##   "map": {
@@ -16,14 +17,15 @@ extends RefCounted
 ##     "terrain": ["..=.", "..=.", "ww=."],                   (one string per row, one char per tile)
 ##     "objects": [[1, 0, "tree"], [2, 2, "sandbags"]],      ([x, y, kind], cover comes from the kind)
 ##     "edges": [[0, 1, "E", "hedge"], [3, 0, "S", "wall"]], ([x, y, side N/E/S/W of that tile, kind])
-##     "mines": [[2, 0]]                                      (buried mines, hidden from both sides; optional)
+##     "mines": [[2, 0], [3, 1, "punji"]]                     (buried mines or punji traps; optional)
+##     "tunnels": [[5, 2, "Viet Cong"]]                       (tunnel entrances and whose they are; optional)
 ##   },
 ##   "objectives": [{"name": "Crossroads", "center": [2, 1.5], "radius": 2.5}],
 ##   "units": [{"team": "Allies", "role": "Officer", "pos": [0, 1], "facing": "E", "name": "Lt. Adams", "rank": 1}],
 ##   "reinforcements": [{"round": 4, "team": "Germany", "roster": ["Tank", "Rifleman"], "spawns": [[3, 1]]}]
 ## }
 ## [/codeblock]
-## "team" is "Allies"/"Germany" (or 0/1), "facing" one of N, NE, E, SE, S, SW, W, NW. Units without a name
+## "team" is the side's name in its theatre, "Allies"/"Germany" in Normandy (or 0/1), "facing" one of N, NE, E, SE, S, SW, W, NW. Units without a name
 ## get one from the battle seed. Roster entries may also be {"role", "name", "rank"}. "mirrored" tells the
 ## editor to keep the east half a mirror image of the west half; the file always holds the whole map.
 
@@ -32,18 +34,20 @@ const VERSION := 1
 const BUNDLED_DIR := "res://scenarios/"
 const USER_DIR := "user://scenarios/"
 ## One character per TacticalMap.Terrain value, in enum order.
-const TERRAIN_CHARS := ".,:#=wotx"
+const TERRAIN_CHARS := ".,:#=wotxj~g"
 ## Object and edge kinds and the cover they give.
 const OBJECT_COVER := {"rock": Cover.FULL, "tree": Cover.FULL, "crate": Cover.HALF, "sandbags": Cover.HALF, "hay": Cover.HALF, "pew": Cover.HALF, "wreck": Cover.FULL,
-		"fuel": Cover.HALF, "oil_tank": Cover.FULL}
-const EDGE_COVER := {"wall": Cover.FULL, "hedge": Cover.FULL, "window": Cover.HALF, "stone": Cover.HALF, "fence": Cover.HALF}
-const ROLES := ["Officer", "Rifleman", "SMG", "MG", "AT", "Medic", "Sniper", "Mortar", "Tank"]
+		"fuel": Cover.HALF, "oil_tank": Cover.FULL, "palm": Cover.FULL, "bamboo": Cover.FULL, "rice_sacks": Cover.HALF,
+		"car": Cover.FULL, "hesco": Cover.FULL, "jersey": Cover.HALF}
+const EDGE_COVER := {"wall": Cover.FULL, "hedge": Cover.FULL, "window": Cover.HALF, "stone": Cover.HALF, "fence": Cover.HALF,
+		"dyke": Cover.HALF, "bamboo_wall": Cover.FULL, "bamboo_window": Cover.HALF, "mud_wall": Cover.FULL, "mud_window": Cover.HALF}
 const FACINGS := {
 	"N": Vector2i(0, -1), "NE": Vector2i(1, -1), "E": Vector2i(1, 0), "SE": Vector2i(1, 1),
 	"S": Vector2i(0, 1), "SW": Vector2i(-1, 1), "W": Vector2i(-1, 0), "NW": Vector2i(-1, -1),
 }
 const SIDES := {"N": Vector2i(0, -1), "E": Vector2i(1, 0), "S": Vector2i(0, 1), "W": Vector2i(-1, 0)}
 
+var theatre_id := Theatres.DEFAULT
 var title := "Untitled scenario"
 var briefing := ""
 var vp_to_win := 12
@@ -62,10 +66,20 @@ static var last_error := ""
 
 
 ## An empty grass map.
-static func create(width: int, height: int) -> Scenario:
+static func create(width: int, height: int, p_theatre := Theatres.DEFAULT) -> Scenario:
 	var s := Scenario.new()
+	s.theatre_id = p_theatre
 	s.map = TacticalMap.new(width, height)
 	return s
+
+
+func theatre() -> Theatre:
+	return Theatres.get_theatre(theatre_id)
+
+
+## "Allies Rifleman": a side and role, for messages.
+func _who(u: Dictionary) -> String:
+	return "%s %s" % [theatre().team_name(u["team"]), theatre().role_name(u["team"], u["role"])]
 
 
 ## A unit entry with the defaults filled in.
@@ -92,7 +106,9 @@ func build_battle(seed := 0) -> Battle:
 			spawns = [_default_spawn(wave["team"])]
 		waves.append({"round": wave["round"], "team": wave["team"], "roster": wave["roster"].duplicate(true), "spawns": spawns.duplicate()})
 	var layout := {"map": copy_map(map), "objectives": objectives.duplicate(true), "spawns": [], "reinforcement_spawns": []}
-	return BattleFactory.create(layout, rosters, seed, {"vp_to_win": vp_to_win, "max_rounds": max_rounds, "reinforcements": waves})
+	var options := {"theatre": theatre_id, "vp_to_win": vp_to_win, "max_rounds": max_rounds, "reinforcements": waves}
+	options.merge(theatre().battle_options())
+	return BattleFactory.create(layout, rosters, seed, options)
 
 
 ## A start tile for a wave without spawns: the team's first unit, or the middle of its map edge.
@@ -107,6 +123,7 @@ func _default_spawn(team: int) -> Vector2i:
 ## waves still to come and rules. Without keep_names, units get fresh names from each battle's seed.
 static func from_battle(battle: Battle, p_title := "", keep_names := true) -> Scenario:
 	var s := Scenario.new()
+	s.theatre_id = battle.theatre_id
 	s.title = p_title if p_title != "" else "Exported battle"
 	s.map = copy_map(battle.map)
 	s.vp_to_win = battle.vp_to_win
@@ -141,7 +158,9 @@ static func copy_map(source: TacticalMap) -> TacticalMap:
 			if source.get_object(p) != Cover.NONE:
 				copy.set_object(p, source.get_object(p), source.get_object_kind(p))
 			if source.has_mine(p):
-				copy.set_mine(p, true)
+				copy.set_mine(p, true, source.get_mine_kind(p))
+			if source.tunnel_owner(p) != -1:
+				copy.set_tunnel(p, source.tunnel_owner(p))
 	for key in _sorted_edges(source):
 		var pair := TacticalMap.edge_tiles(key)
 		copy.set_edge(pair[0], pair[1], source.get_edges()[key], source.edge_kind(key))
@@ -203,7 +222,7 @@ func mirror_west_to_east() -> void:
 				var m := mirror_tile(p)
 				map.set_terrain(m, map.get_terrain(p))
 				map.set_object(m, map.get_object(p), map.get_object_kind(p) if map.get_object(p) != Cover.NONE else "")
-				map.set_mine(m, map.has_mine(p))
+				map.set_mine(m, map.has_mine(p), map.get_mine_kind(p))
 	for key: Vector3i in map.get_edges().keys():
 		if _edge_half(key) > 0:
 			var pair := TacticalMap.edge_tiles(key)
@@ -289,34 +308,34 @@ func validate() -> PackedStringArray:
 		var p: Vector2i = u["pos"]
 		counts[u["team"]] += 1
 		if not map.in_bounds(p):
-			problems.append("%s %s at %s is off the map" % [Battle.TEAM_NAMES[u["team"]], u["role"], p])
+			problems.append("%s at %s is off the map" % [_who(u), p])
 		elif not map.is_passable(p):
-			problems.append("%s %s at %s stands on an object" % [Battle.TEAM_NAMES[u["team"]], u["role"], p])
+			problems.append("%s at %s stands on an object" % [_who(u), p])
 		if taken.has(p):
 			problems.append("Two units share tile %s" % p)
 		taken[p] = true
 	for team in 2:
 		if counts[team] == 0:
-			problems.append("%s have no units" % Battle.TEAM_NAMES[team])
+			problems.append("%s have no units" % theatre().team_name(team))
 	if objectives.is_empty():
 		problems.append("No objectives: the battle can only end by elimination, never on the round limit")
 	for wave in reinforcements:
 		for p: Vector2i in wave["spawns"]:
 			if not map.is_passable(p):
-				problems.append("Round %d %s reinforcement spawn %s is blocked" % [wave["round"], Battle.TEAM_NAMES[wave["team"]], p])
+				problems.append("Round %d %s reinforcement spawn %s is blocked" % [wave["round"], theatre().team_name(wave["team"]), p])
 		if wave["roster"].is_empty():
-			problems.append("Round %d %s reinforcement wave is empty" % [wave["round"], Battle.TEAM_NAMES[wave["team"]]])
+			problems.append("Round %d %s reinforcement wave is empty" % [wave["round"], theatre().team_name(wave["team"])])
 	# Each side's infantry must be able to walk to every objective.
 	var checked := {}
 	for u in units:
-		if checked.has(u["team"]) or not map.in_bounds(u["pos"]) or not map.is_passable(u["pos"]) or u["role"] == "Tank":
+		if checked.has(u["team"]) or not map.in_bounds(u["pos"]) or not map.is_passable(u["pos"]) or theatre().role_def(u["team"], u["role"]).get("vehicle", false):
 			continue
 		checked[u["team"]] = true
 		var reach := Pathfinder.search(map, u["pos"], 100000.0)
 		for objective in objectives:
 			var target := Vector2i(objective["center"])
 			if not reach.has(target) and map.is_passable(target):
-				problems.append("%s %s at %s can't reach %s" % [Battle.TEAM_NAMES[u["team"]], u["role"], u["pos"], objective["name"]])
+				problems.append("%s at %s can't reach %s" % [_who(u), u["pos"], objective["name"]])
 	return problems
 
 
@@ -354,10 +373,10 @@ func to_data() -> Dictionary:
 	for y in map.height:
 		for x in map.width:
 			if map.has_mine(Vector2i(x, y)):
-				mines.append([x, y])
+				mines.append([x, y] if map.get_mine_kind(Vector2i(x, y)) == "mine" else [x, y, map.get_mine_kind(Vector2i(x, y))])
 	var unit_data := []
 	for u in units:
-		var entry := {"team": Battle.TEAM_NAMES[u["team"]], "role": u["role"], "pos": _pair(u["pos"]), "facing": facing_name(u["facing"])}
+		var entry := {"team": theatre().team_name(u["team"]), "role": u["role"], "pos": _pair(u["pos"]), "facing": facing_name(u["facing"])}
 		if u["name"] != "":
 			entry["name"] = u["name"]
 		if u["rank"] != 0:
@@ -365,12 +384,19 @@ func to_data() -> Dictionary:
 		unit_data.append(entry)
 	var wave_data := []
 	for wave in reinforcements:
-		wave_data.append({"round": wave["round"], "team": Battle.TEAM_NAMES[wave["team"]], "roster": wave["roster"].duplicate(true),
+		wave_data.append({"round": wave["round"], "team": theatre().team_name(wave["team"]), "roster": wave["roster"].duplicate(true),
 				"spawns": wave["spawns"].map(func(p: Vector2i) -> Array: return _pair(p))})
 	var map_data := {"width": map.width, "height": map.height, "legend": legend, "terrain": rows, "objects": objects, "edges": edges}
 	if not mines.is_empty():
 		map_data["mines"] = mines
-	return {
+	var tunnels := []
+	for y in map.height:
+		for x in map.width:
+			if map.tunnel_owner(Vector2i(x, y)) != -1:
+				tunnels.append([x, y, theatre().team_name(map.tunnel_owner(Vector2i(x, y)))])
+	if not tunnels.is_empty():
+		map_data["tunnels"] = tunnels
+	var data := {
 		"format": FORMAT, "version": VERSION,
 		"title": title, "briefing": briefing,
 		"vp_to_win": vp_to_win, "max_rounds": max_rounds, "mirrored": mirrored,
@@ -379,6 +405,9 @@ func to_data() -> Dictionary:
 		"units": unit_data,
 		"reinforcements": wave_data,
 	}
+	if theatre_id != Theatres.DEFAULT:
+		data["theatre"] = theatre_id
+	return data
 
 
 ## Reads JSON data. Returns null (and sets last_error) if it isn't a usable scenario.
@@ -396,7 +425,11 @@ static func from_data(data: Variant) -> Scenario:
 	if width < 4 or height < 4 or width > 256 or height > 256:
 		last_error = "Map size %dx%d is out of range" % [width, height]
 		return null
-	var s := Scenario.create(width, height)
+	var theatre_name := str(data.get("theatre", Theatres.DEFAULT))
+	if not Theatres.exists(theatre_name):
+		last_error = "Unknown theatre: %s" % theatre_name
+		return null
+	var s := Scenario.create(width, height, theatre_name)
 	s.title = str(data.get("title", s.title))
 	s.briefing = str(data.get("briefing", ""))
 	s.vp_to_win = int(data.get("vp_to_win", s.vp_to_win))
@@ -440,15 +473,19 @@ static func from_data(data: Variant) -> Scenario:
 	for entry in m.get("mines", []):
 		var p := Vector2i(int(entry[0]), int(entry[1]))
 		if s.map.in_bounds(p):
-			s.map.set_mine(p, true)
+			s.map.set_mine(p, true, str(entry[2]) if entry.size() > 2 else "mine")
+	for entry in m.get("tunnels", []):
+		var p := Vector2i(int(entry[0]), int(entry[1]))
+		if s.map.in_bounds(p) and entry.size() > 2:
+			s.map.set_tunnel(p, s._team(entry[2]))
 	for o in data.get("objectives", []):
 		s.objectives.append({"name": str(o.get("name", "Objective")), "center": _vec2(o.get("center", [0, 0])), "radius": float(o.get("radius", 2.5))})
 	for u in data.get("units", []):
-		var role := str(u.get("role", "Rifleman"))
-		if not ROLES.has(role):
+		var team := s._team(u.get("team", 0))
+		var role := str(u.get("role", s.theatre().role_ids(team)[0]))
+		if not s.theatre().has_role(team, role):
 			last_error = "Unknown role: %s" % role
 			return null
-		var team := _team(u.get("team", 0))
 		s.units.append(unit_entry(team, role, _vec2i(u.get("pos", [0, 0])), FACINGS.get(str(u.get("facing", "")), Vector2i.ZERO),
 				str(u.get("name", "")), int(u.get("rank", 0))))
 	for w in data.get("reinforcements", []):
@@ -456,15 +493,16 @@ static func from_data(data: Variant) -> Scenario:
 		for e in w.get("roster", []):
 			roster.append({"role": str(e["role"]), "name": str(e["name"]), "rank": int(e.get("rank", 0))} if e is Dictionary and e.has("name")
 					else ({"role": str(e["role"]), "rank": int(e.get("rank", 0))} if e is Dictionary else str(e)))
+		var wave_team := s._team(w.get("team", 0))
 		for e in roster:
 			var role: String = e["role"] if e is Dictionary else e
-			if not ROLES.has(role):
+			if not s.theatre().has_role(wave_team, role):
 				last_error = "Unknown role in reinforcements: %s" % role
 				return null
 		var spawns: Array[Vector2i] = []
 		for p in w.get("spawns", []):
 			spawns.append(_vec2i(p))
-		s.reinforcements.append({"round": int(w.get("round", 4)), "team": _team(w.get("team", 0)), "roster": roster, "spawns": spawns})
+		s.reinforcements.append({"round": int(w.get("round", 4)), "team": wave_team, "roster": roster, "spawns": spawns})
 	return s
 
 
@@ -494,7 +532,7 @@ static func load_file(path: String) -> Scenario:
 	return from_data(json.data)
 
 
-## Scenario files to offer: bundled ones first, then the player's. Each: {"path", "title", "user": bool}.
+## Scenario files to offer: bundled ones first, then the player's. Each: {"path", "title", "user": bool, "theatre"}.
 static func list_files() -> Array[Dictionary]:
 	var found: Array[Dictionary] = []
 	for dir_path in [BUNDLED_DIR, USER_DIR]:
@@ -508,15 +546,17 @@ static func list_files() -> Array[Dictionary]:
 			var path: String = dir_path + file
 			var json := JSON.new()
 			var label := file.get_basename()
+			var theatre_name := Theatres.DEFAULT
 			if json.parse(FileAccess.get_file_as_string(path)) == OK and json.data is Dictionary:
 				label = str(json.data.get("title", label))
-			found.append({"path": path, "title": label, "user": dir_path == USER_DIR})
+				theatre_name = str(json.data.get("theatre", theatre_name))
+			found.append({"path": path, "title": label, "user": dir_path == USER_DIR, "theatre": theatre_name})
 	return found
 
 
-static func _team(value: Variant) -> int:
+func _team(value: Variant) -> int:
 	if value is String:
-		return 1 if Battle.TEAM_NAMES.find(value) == 1 or value.to_lower() == "germany" else 0
+		return 1 if value.to_lower() == theatre().team_name(1).to_lower() else 0
 	return clampi(int(value), 0, 1)
 
 

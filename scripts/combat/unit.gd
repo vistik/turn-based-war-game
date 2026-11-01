@@ -1,6 +1,7 @@
 class_name Unit
 extends RefCounted
-## One soldier on the battlefield. Team 0 is the Allies, team 1 is Germany.
+## One soldier (or vehicle) on the battlefield. Which side a team is, and what a role can do, comes from the
+## battle's theatre (Theatres): team 0 is the Allies in Normandy, the US Army in Vietnam.
 
 const ACTIONS_PER_TURN := 2
 ## Suppression levels (0-100) at which a unit is suppressed or pinned down.
@@ -23,6 +24,9 @@ const STANCE_MOVE_COST := [1.0, 1.5, 3.0]
 const STANCE_SIGHT := [0.0, 1.0, 2.0]
 ## A crawling soldier always gets at least this far per action.
 const MIN_CRAWL := 1.0
+## Fields written to save files only when they differ from these defaults (newer abilities, so that units
+## without them save, and checksum, as they always have).
+const OPTIONAL_FIELDS := {"traps": 0}
 ## Fields written to save files.
 const SAVED_FIELDS := [
 	"id", "name", "role", "team", "pos", "max_hp", "hp", "armor", "aim", "defense", "mobility", "sight", "ammo",
@@ -49,6 +53,7 @@ var ammo: int
 var grenades := 0
 var smoke_grenades := 0
 var medkits := 0
+## Indirect fire rounds: high explosive, and the unit's second kind (smoke for a mortar; see Unit.rounds_left).
 var mortar_rounds := 0
 var mortar_smoke := 0
 var actions := 0
@@ -72,6 +77,27 @@ var stance := Stance.STAND
 var fired := false
 ## Caught by suppressive fire: keeps its head down and doesn't recover suppression at the start of its next turn.
 var under_fire := false
+## Punji traps left to lay (Vietnam sappers).
+var traps := 0
+## Not saved: rebuilt from the theatre, team and role when a unit is created or loaded.
+## The theatre id, and the role's definition (see Theatre.role).
+var theatre := Theatres.DEFAULT
+var def: Dictionary = {}
+## Rallies and steadies those around it; its death shakes the side.
+var leader := false
+## Indirect fire (mortar, artillery), as in Theatre.INDIRECT_DEFAULTS; {} if the unit has none.
+var indirect: Dictionary = {}
+## Vehicles: the damage each side of the armour stops {"front", "side", "rear"}.
+var hull_armor: Dictionary = {}
+
+
+func has_trait(trait_name: String) -> bool:
+	return def.get("traits", []).has(trait_name)
+
+
+## Rounds left for indirect fire of this kind: high explosive, or the second kind it fires (smoke, napalm).
+func rounds_left(kind: String) -> int:
+	return mortar_rounds if kind == "he" else mortar_smoke
 
 
 func is_alive() -> bool:
@@ -114,70 +140,55 @@ func to_dict() -> Dictionary:
 	var data := {}
 	for field: String in SAVED_FIELDS:
 		data[field] = get(field)
+	for field: String in OPTIONAL_FIELDS:
+		if get(field) != OPTIONAL_FIELDS[field]:
+			data[field] = get(field)
 	return data
 
 
-static func from_dict(data: Dictionary) -> Unit:
-	var u := Unit.create(data["id"], data["name"], data["role"], data["team"], data["pos"])
+static func from_dict(data: Dictionary, p_theatre := Theatres.DEFAULT) -> Unit:
+	var u := Unit.create(data["id"], data["name"], data["role"], data["team"], data["pos"], 0, p_theatre)
 	for field: String in SAVED_FIELDS:
 		# Saves from before a field existed keep its default.
 		if data.has(field):
 			u.set(field, data[field])
+	for field: String in OPTIONAL_FIELDS:
+		u.set(field, data.get(field, OPTIONAL_FIELDS[field]))
 	return u
 
 
-static func create(p_id: int, p_name: String, p_role: String, p_team: int, p_pos: Vector2i, p_rank := 0) -> Unit:
+## A fresh unit of the role, as its theatre defines it for that team.
+static func create(p_id: int, p_name: String, p_role: String, p_team: int, p_pos: Vector2i, p_rank := 0, p_theatre := Theatres.DEFAULT) -> Unit:
 	var u := Unit.new()
 	u.id = p_id
 	u.name = p_name
 	u.role = p_role
 	u.team = p_team
 	u.pos = p_pos
+	u.theatre = p_theatre
 	u.facing = Vector2i(1, 0) if p_team == 0 else Vector2i(-1, 0)
-	u.max_hp = 7
-	u.aim = 65
-	u.mobility = 7.0
-	match p_role:
-		"Officer":
-			u.sight = 13.0
-			u.grenades = 1
-			u.smoke_grenades = 2
-		"Rifleman":
-			u.grenades = 1
-		"Medic":
-			u.max_hp = 6
-			u.aim = 55
-			u.medkits = 3
-			u.smoke_grenades = 1
-		"SMG":
-			u.aim = 60
-			u.mobility = 8.0
-			u.grenades = 2
-		"MG":
-			u.max_hp = 8
-			u.aim = 60
-			u.mobility = 6.0
-		"Sniper":
-			u.max_hp = 6
-			u.aim = 75
-			u.mobility = 6.0
-			u.sight = 16.0
-		"Mortar":
-			u.max_hp = 6
-			u.aim = 55
-			u.mobility = 6.0
-			u.mortar_rounds = 4
-			u.mortar_smoke = 2
-		"AT":
-			u.aim = 60
-		"Tank":
-			u.vehicle = true
-			u.max_hp = 18
-			u.aim = 60
-			u.sight = 11.0
-		_:
-			push_error("Unknown role: %s" % p_role)
-	u.weapon = Weapon.for_role(p_role, p_team)
+	var theatre_def := Theatres.get_theatre(p_theatre)
+	u.def = theatre_def.role_def(p_team, p_role)
+	if u.def.is_empty():
+		push_error("Unknown role for %s: %s" % [theatre_def.team_name(p_team), p_role])
+		u.def = theatre_def.role_def(p_team, theatre_def.role_ids(p_team)[0])
+	var d := u.def
+	u.max_hp = d["hp"]
+	u.aim = d["aim"]
+	u.mobility = d["mobility"]
+	u.sight = d["sight"]
+	u.grenades = d["grenades"]
+	u.smoke_grenades = d["smoke"]
+	u.medkits = d["medkits"]
+	u.mortar_rounds = d["mortar_rounds"]
+	u.mortar_smoke = d["mortar_smoke"]
+	u.vehicle = d["vehicle"]
+	u.hull_armor = d["hull_armor"]
+	u.leader = d["leader"]
+	u.indirect = d["indirect"]
+	u.traps = d.get("traps", 0)
+	u.armor = d.get("body_armor", 0)
+	u.weapon = Weapon.from_spec(d["weapon"])
 	if not u.vehicle:
 		u.rank = p_rank
 		u.aim += RANK_AIM * p_rank

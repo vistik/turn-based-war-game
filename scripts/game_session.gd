@@ -46,8 +46,8 @@ static func start_battle(p_battle: Battle, p_ai_teams: Array, title: String) -> 
 	watching = null
 
 
-## A skirmish from a setup {"map": "village" or "random", "size": side length, "seed": int}, or
-## {"map": "scenario", "scenario": Scenario.to_data(), "seed": int}: the same setup
+## A skirmish from a setup {"theatre": id (Normandy if left out), "map": "village" or "random", "size": side
+## length, "seed": int}, or {"map": "scenario", "scenario": Scenario.to_data(), "seed": int}: the same setup
 ## always builds the same battle, which is how both online players start identical games.
 ## Bigger maps bring bigger forces, need more points to win and allow more rounds. Returns [battle, title].
 static func build_skirmish(setup: Dictionary) -> Array:
@@ -56,33 +56,26 @@ static func build_skirmish(setup: Dictionary) -> Array:
 		# A scenario file's data travels in the setup, so an online opponent needs no copy of the file.
 		var scenario := Scenario.from_data(setup["scenario"])
 		return [scenario.build_battle(seed), scenario.title]
+	var theatre := Theatres.get_theatre(setup.get("theatre", Theatres.DEFAULT))
 	# Where each side deploys: {"flank", "posture"} as in the two-player campaign, or {} for the usual spawns.
 	var deployments: Array = setup.get("deployment", [{}, {}])
-	if setup["map"] == "village":
-		return [NormandyScenario.build(seed, deployments), "Normandy village"]
-	var size: int = setup["size"]
-	var roster := NormandyScenario.ROSTER.duplicate()
-	var wave := NormandyScenario.REINFORCEMENTS.duplicate()
-	var rounds := 20
-	var points := 12
-	if size >= 60:
-		roster.append_array(["Rifleman", "Rifleman", "SMG", "AT"])
-		wave.append("Rifleman")
-		rounds = 24
-		points = 16
-	if size >= 80:
-		roster.append_array(["Tank", "MG", "Medic"])
-		wave.append_array(["Tank", "SMG"])
-		rounds = 28
-		points = 20
-	var waves := []
-	for team in Battle.TEAM_COUNT:
-		waves.append({"round": NormandyScenario.REINFORCEMENT_ROUND, "team": team, "roster": wave})
-	var layout := MapGenerator.generate(seed, Vector2i(size, size))
-	var battle := BattleFactory.create(layout, WarCampaign.deploy(layout, [roster, roster], deployments), seed,
-			{"reinforcements": waves, "max_rounds": rounds, "vp_to_win": points})
+	var layout: Dictionary
+	var forces: Dictionary
+	var title: String
+	if setup["map"] == "village" and not theatre.village_layout().is_empty():
+		layout = theatre.village_layout()
+		forces = theatre.village_forces()
+		title = theatre.village_title()
+	else:
+		var size: int = setup.get("size", 44)
+		layout = theatre.generate_map(seed, Vector2i(size, size))
+		forces = theatre.skirmish_forces(size)
+		title = "Random %dx%d map #%d" % [size, size, seed % 10000]
+	var options := {"theatre": theatre.id, "reinforcements": forces["waves"], "max_rounds": forces["max_rounds"], "vp_to_win": forces["vp_to_win"]}
+	options.merge(theatre.battle_options())
+	var battle := BattleFactory.create(layout, WarCampaign.deploy(layout, forces["rosters"], deployments), seed, options)
 	WarCampaign.brace(battle, deployments)
-	return [battle, "Random %dx%d map #%d" % [size, size, seed % 10000]]
+	return [battle, title]
 
 
 static func current_slot() -> String:
@@ -184,7 +177,7 @@ static func new_game_id() -> String:
 ## `opponent` a hint for finding them again (the address used) and `hosted` whether this computer hosts.
 static func start_online(p_battle: Battle, title: String, team: int, game_id: String, opponent: String, hosted: bool) -> void:
 	campaign = null
-	start_battle(p_battle, [false, false], "%s, online as %s" % [title, Battle.TEAM_NAMES[team]])
+	start_battle(p_battle, [false, false], "%s, online as %s" % [title, p_battle.team_name(team)])
 	online = {"game_id": game_id, "title": title, "opponent": opponent, "hosted": hosted}
 
 
@@ -233,9 +226,15 @@ static func online_offer() -> Dictionary:
 
 ## How the host's offer differs from our own online save, for the joining player to confirm: "" when the
 ## two are identical.
+## A side's name in a saved battle (Battle.to_dict()), whichever theatre it is from.
+static func side_name(battle_data: Variant, team: int) -> String:
+	var theatre_id: String = battle_data.get("theatre", Theatres.DEFAULT) if battle_data is Dictionary else Theatres.DEFAULT
+	return Theatres.get_theatre(theatre_id).team_name(team)
+
+
 static func compare_online(offer: Dictionary) -> String:
 	var own := peek("online")
-	var theirs := "The host's save is from round %d, %s to move." % [int(offer.get("round", 0)), Battle.TEAM_NAMES[clampi(int(offer.get("current_team", 0)), 0, 1)]]
+	var theirs := "The host's save is from round %d, %s to move." % [int(offer.get("round", 0)), side_name(offer.get("battle", {}), clampi(int(offer.get("current_team", 0)), 0, 1))]
 	if own.is_empty():
 		return "You have no saved online game. " + theirs
 	if own["game_id"] != offer.get("game_id"):
@@ -245,7 +244,7 @@ static func compare_online(offer: Dictionary) -> String:
 	if own["turn_index"] == offer.get("turn_index"):
 		return "Both saves are from round %d, but they differ." % own["round"]
 	var when := "older" if own["turn_index"] < int(offer.get("turn_index", 0)) else "newer"
-	return "Your save is %s: round %d, %s to move. " % [when, own["round"], Battle.TEAM_NAMES[own["current_team"]]] + theirs
+	return "Your save is %s: round %d, %s to move. " % [when, own["round"], side_name(own["battle"], own["current_team"])] + theirs
 
 
 ## Loads an offered online battle to play as `team`. Returns false (and loads nothing) if the offer is

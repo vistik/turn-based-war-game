@@ -8,19 +8,15 @@ extends RefCounted
 ## Scenarios add "pos" (an exact start tile) and "facing" to entries, and "spawns" (exact tiles, not
 ## mirrored) to reinforcement waves.
 
-const SURNAMES := [
-	["Adams", "Baker", "Collins", "Dawson", "Ellis", "Fisher", "Garcia", "Hughes", "Kowalski", "Lewis",
-	"Murphy", "Novak", "O'Brien", "Parker", "Reyes", "Sullivan", "Turner", "Walsh", "Young", "Zimmer"],
-	["Bauer", "Braun", "Frank", "Hartmann", "Huber", "Jung", "Keller", "Koch", "Krause", "Lehmann",
-	"Maier", "Neumann", "Otto", "Peters", "Richter", "Schulz", "Schwarz", "Vogt", "Weber", "Wolff"],
-]
-const TANK_NAMES := [["Sherman \"Lucky\"", "Sherman \"Bulldog\"", "Sherman \"Ironside\""], ["Panzer IV 412", "Panzer IV 427", "Panzer IV 433"]]
-
-
-## options: vp_to_win, max_rounds, reinforcements: [{"round", "team", "roster"}].
+## options: theatre (an id, Normandy if left out), vp_to_win, max_rounds, kill_points and objective_points
+## ([team 0, team 1], see Battle), reinforcements: [{"round", "team", "roster", "air"?, "tunnels"?}]. A wave that is "air"
+## is flown in to the side's landing zone (the layout's "landing_zones"); one that comes by "tunnels" comes up
+## at the side's tunnel entrances (the layout's "tunnels": [team 0 tiles, team 1 tiles]).
 static func create(layout: Dictionary, rosters: Array, seed := 0, options := {}) -> Battle:
 	var map: TacticalMap = layout["map"]
-	var names := _NameBook.new(seed)
+	var theatre_id: String = options.get("theatre", Theatres.DEFAULT)
+	var theatre := Theatres.get_theatre(theatre_id)
+	var names := _NameBook.new(seed, theatre)
 	var units: Array[Unit] = []
 	var taken := {}
 	for team in 2:
@@ -33,32 +29,49 @@ static func create(layout: Dictionary, rosters: Array, seed := 0, options := {})
 			else:
 				var spawn: Vector2i = layout["spawns"][i % layout["spawns"].size()]
 				pos = _free_tile(map, _side(map, spawn, team), taken)
-			units.append(_make_unit(units.size(), roster[i], team, pos, names))
+			units.append(_make_unit(units.size(), roster[i], team, pos, names, theatre_id))
 	var battle := Battle.new(map, units, seed)
+	battle.theatre_id = theatre_id
 	for objective: Dictionary in layout["objectives"]:
 		var copy := objective.duplicate()
 		copy["owner"] = -1
 		battle.objectives.append(copy)
 	battle.vp_to_win = options.get("vp_to_win", battle.vp_to_win)
+	battle.kill_points = options.get("kill_points", [0, 0]).duplicate()
+	battle.objective_points = options.get("objective_points", [1, 1]).duplicate()
+	# The side that lays punji traps knows where every trap on the map is; its tunnels it knows anyway.
+	var trap_team := theatre.trap_team()
+	if trap_team != -1:
+		for p: Vector2i in map.get_mines():
+			if map.get_mine_kind(p) != "mine":
+				battle.known_mines[trap_team][p] = true
 	battle.max_rounds = options.get("max_rounds", battle.max_rounds)
 	var next_id := units.size()
 	for wave: Dictionary in options.get("reinforcements", []):
 		var team: int = wave["team"]
 		var wave_units: Array[Unit] = []
 		var spawns: Array = wave.get("spawns", layout["reinforcement_spawns"])
+		# Exact tiles (not mirrored for the second side): scenario spawns, a landing zone, tunnel entrances.
+		var exact: bool = wave.has("spawns")
+		if wave.get("air", false) and layout.has("landing_zones"):
+			spawns = [layout["landing_zones"][team]]
+			exact = true
+		elif wave.get("tunnels", false) and not layout.get("tunnels", [[], []])[team].is_empty():
+			spawns = layout["tunnels"][team]
+			exact = true
 		for i in wave["roster"].size():
-			var pos: Vector2i = spawns[i % spawns.size()] if wave.has("spawns") else _side(map, spawns[i % spawns.size()], team)
-			wave_units.append(_make_unit(next_id, wave["roster"][i], team, pos, names))
+			var pos: Vector2i = spawns[i % spawns.size()] if exact else _side(map, spawns[i % spawns.size()], team)
+			wave_units.append(_make_unit(next_id, wave["roster"][i], team, pos, names, theatre_id))
 			next_id += 1
-		battle.reinforcements.append({"round": wave["round"], "team": team, "units": wave_units})
+		battle.reinforcements.append({"round": wave["round"], "team": team, "units": wave_units, "air": wave.get("air", false)})
 	return battle
 
 
-static func _make_unit(id: int, entry: Variant, team: int, pos: Vector2i, names: _NameBook) -> Unit:
+static func _make_unit(id: int, entry: Variant, team: int, pos: Vector2i, names: _NameBook, theatre_id: String) -> Unit:
 	var spec: Dictionary = entry if entry is Dictionary else {"role": entry}
 	var role: String = spec["role"]
 	var unit_name: String = spec.get("name", names.next(role, team))
-	var u := Unit.create(id, unit_name, role, team, pos, spec.get("rank", 0))
+	var u := Unit.create(id, unit_name, role, team, pos, spec.get("rank", 0), theatre_id)
 	u.record_id = spec.get("record_id", -1)
 	if spec.has("facing"):
 		u.facing = spec["facing"]
@@ -80,25 +93,29 @@ static func _free_tile(map: TacticalMap, p: Vector2i, taken: Dictionary) -> Vect
 	return p
 
 
-## Hands out unique soldier names per side.
+## Hands out unique soldier names per side, from the theatre's faction name lists.
 class _NameBook:
 	var _rng := RandomNumberGenerator.new()
 	var _used := {}
 	var _tanks := [0, 0]
+	var _theatre: Theatre
 
-	func _init(seed: int) -> void:
+	func _init(seed: int, theatre: Theatre) -> void:
 		_rng.seed = seed + 99
+		_theatre = theatre
 
 	func next(role: String, team: int) -> String:
-		if role == "Tank":
-			var options: Array = BattleFactory.TANK_NAMES[team]
+		var def := _theatre.role_def(team, role)
+		var faction := _theatre.faction(team)
+		if def.get("vehicle", false):
+			var options: Array = faction["vehicle_names"]
 			_tanks[team] += 1
 			return options[(_tanks[team] - 1) % options.size()]
-		var pool: Array = BattleFactory.SURNAMES[team]
+		var pool: Array = faction["surnames"]
 		var surname: String = pool[_rng.randi_range(0, pool.size() - 1)]
 		for i in pool.size():
 			if not _used.has(surname):
 				break
 			surname = pool[(pool.find(surname) + 1) % pool.size()]
 		_used[surname] = true
-		return ("Lt. " if role == "Officer" else "") + surname
+		return def.get("name_prefix", "") + surname

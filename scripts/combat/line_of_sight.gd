@@ -1,6 +1,7 @@
 class_name LineOfSight
 extends RefCounted
-## Grid line of sight. Full cover and smoke block sight, half cover does not.
+## Grid line of sight. Full cover and smoke block sight, half cover does not, and so does a thick stretch of
+## jungle (more than TacticalMap.JUNGLE_SIGHT_TILES jungle tiles between the two ends).
 ## A unit next to full cover can step out to either side of it to look around the corner.
 
 
@@ -12,6 +13,7 @@ static func has_line(map: TacticalMap, a: Vector2i, b: Vector2i) -> bool:
 	var ix := 0
 	var iy := 0
 	var current := a
+	var jungle := 0
 	while ix < nx or iy < ny:
 		# Which tile boundary does the line cross next: vertical (<0), horizontal (>0) or a corner (0)?
 		var cmp := (1 + 2 * ix) * ny - (1 + 2 * iy) * nx
@@ -37,6 +39,10 @@ static func has_line(map: TacticalMap, a: Vector2i, b: Vector2i) -> bool:
 		current = next
 		if current != b and map.blocks_sight(current):
 			return false
+		if current != b and map.is_jungle(current):
+			jungle += 1
+			if jungle > TacticalMap.JUNGLE_SIGHT_TILES:
+				return false
 	return true
 
 

@@ -82,7 +82,7 @@ const RULES := "Rules in brief: 2 actions per turn; a move within the unit's mob
 		+ "Vietnam: the Viet Cong move between their tunnel entrances (tunnel: both actions, from one of your entrances to another) and sappers lay punji traps next to them (trap); " \
 		+ "an enemy tunnel entrance you have found can be blown in from next to it with clear_mine. The radio operator's artillery (mortar command, he or napalm) needs no setting up but he must see the target himself. " \
 		+ "There the Americans score for objectives and the Viet Cong for every American killed. " \
-		+ "Afghanistan and Iraq: insurgent bomb makers plant IEDs (trap) and set them off when they can see them (detonate); the Coalition's EOD tech spots them far more often, and its JTAC calls air strikes (mortar command) on what he sees. Coalition score for objectives, insurgents for kills. " \
+		+ "Iraq 2004: insurgent bomb makers plant IEDs (trap) and set them off when they can see them (detonate); the Coalition's EOD tech spots them far more often, and its JTAC calls air strikes (mortar command) on what he sees. Coalition score for objectives, insurgents for kills. " \
 		+ "You only know what your side can see."
 
 

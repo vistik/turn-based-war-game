@@ -61,7 +61,7 @@ const MISSIONS := [
 
 func _init() -> void:
 	id = "modern"
-	title = "Afghanistan & Iraq"
+	title = "Iraq 2004"
 	tagline = "Compounds, poppy fields and city streets, 2004-2010. The Coalition against insurgents and their IEDs."
 	factions = [
 		{
@@ -191,7 +191,7 @@ func battle_options() -> Dictionary:
 
 
 func campaign_title() -> String:
-	return "Afghanistan & Iraq campaign"
+	return "Iraq campaign"
 
 
 func campaign_blurb() -> String:

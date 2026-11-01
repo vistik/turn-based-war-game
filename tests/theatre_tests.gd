@@ -329,7 +329,7 @@ func test_vietnam_scenarios_round_trip() -> void:
 	check_eq(rebuilt.kill_points, [0, 1], "with Vietnam's scoring")
 
 
-# --- Afghanistan & Iraq ---
+# --- Iraq 2004 ---
 
 func test_modern_maps_come_in_two_styles_with_ieds() -> void:
 	for style in ModernMapGenerator.STYLES:

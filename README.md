@@ -2,7 +2,7 @@
 
 Turn-based squad tactics on an isometric grid, inspired by UFO: Enemy Unknown and XCOM 2, in three theatres
 of war that share one engine: the Normandy bocage in June 1944 (the Allies against Germany), Vietnam in 1967
-(the US Army against the Viet Cong) and Afghanistan and Iraq in 2004-2010 (the Coalition against insurgents).
+(the US Army against the Viet Cong) and Iraq 2004 (the Coalition against insurgents).
 Built with Godot 4.7 in GDScript; all art is drawn in code.
 
 The rules and architecture are in [docs/DESIGN.md](docs/DESIGN.md), the agent link in [docs/MCP.md](docs/MCP.md),
@@ -31,7 +31,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
     **rice paddies** behind low dykes (slow, bog vehicles down) and **elephant grass** (hides crouching soldiers).
     Maps have a hamlet of bamboo huts, a trail crossing and a landing zone cut out of the jungle.
   - The Americans score for **ground**; the Viet Cong score for **every American killed**.
-- **Afghanistan & Iraq**: Helmand's walled compounds, wheat fields and irrigation ditches, or an Iraqi town of
+- **Iraq 2004**: Helmand's walled compounds, wheat fields and irrigation ditches, or an Iraqi town of
   stone houses, wrecked cars and concrete barriers (the map's seed picks one).
   - The **Coalition** wears **body armour** (a point off every hit until grenades shred it). It has an **EOD
     tech** who spots IEDs nearly every time, a **JTAC** who calls precise **air strikes** on what he sees, a SAW
@@ -164,7 +164,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 | C / Z | Crouch / go prone (press again to stand up) |
 | X / B | Aimed shot / suppressive fire |
 | G | Clear a spotted mine next to the soldier, or blow in an enemy tunnel entrance (Vietnam) |
-| U / J / K | Vietnam: go through the tunnels / lay a punji trap. Afghanistan & Iraq: plant an IED / K set one off |
+| U / J / K | Vietnam: go through the tunnels / lay a punji trap. Iraq 2004: plant an IED / K set one off |
 | 1 on drums / an oil tank | In shoot mode, click fuel drums or an oil tank to blow them up |
 | H / Shift+H | Suggest a move / suggest for the selected soldier |
 | Tab / Enter | Next soldier / end turn |
@@ -218,7 +218,7 @@ UDP port 24944 on the host's router, or both use a VPN such as Tailscale.
 Godot --headless --path . -s tests/run_tests.gd         # engine, AI, saves, replays, scenarios, settings
 Godot --headless --path . -s tests/advisor_tests.gd     # move suggestions and the MCP tools
 Godot --headless --path . -s tests/terrain_tests.gd     # fuel drums, oil tanks, fire, mines, wheat and wire
-Godot --headless --path . -s tests/theatre_tests.gd     # theatres: Normandy as data, Vietnam and Afghanistan & Iraq rules and maps
+Godot --headless --path . -s tests/theatre_tests.gd     # theatres: Normandy as data, Vietnam and Iraq 2004 rules and maps
 Godot --headless --path . -s tests/agent_play.gd        # an agent plays a whole battle over the agent link (HTTP)
 Godot --path . -s tools/soldier_preview.gd -- out.png 3 detail   # soldier art sheet (needs a window; add "german", "lying", "vietnam", "modern")
 GODOT=Godot sh tests/net_resume.sh 26000 44             # two copies online: save, quit, resume, desync checks

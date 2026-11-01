@@ -77,7 +77,7 @@ In the main menu's skirmish section, under the map and deployment choices:
 - **Agent vs AI**: the agent plays the first side (the Allies, the US Army or the Coalition, by theatre) against the game's AI. You watch, from the agent's side of the fog.
 - **Me vs agent**: you play the first side, the agent plays the second (Germany, the Viet Cong or the insurgents). The screen keeps your side's fog of war.
 
-In Vietnam and Afghanistan & Iraq the agent also has `tunnel`, `trap` and `detonate` commands and `napalm`
+In Vietnam and Iraq 2004 the agent also has `tunnel`, `trap` and `detonate` commands and `napalm`
 rounds (see the command help in `instructions`).
 
 The agent link starts by itself in these battles (the address and token are in the box in the top left), and the

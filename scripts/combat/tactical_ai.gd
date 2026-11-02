@@ -71,6 +71,25 @@ const TRAP_OBJECTIVE_BONUS := 6.0
 const TRAP_TRAIL_BONUS := 3.0
 ## Rounds without seeing an enemy before the AI is fully impatient and pushes forward.
 const PATIENCE_ROUNDS := 3.0
+## Missions (see Mission). Shots and blasts at the enemy VIP count this many times over; our own VIP is this
+## much more careful. Pulls are score per tile of distance.
+const VIP_TARGET_WEIGHT := 4.0
+const VIP_CAUTION := 3.0
+const VIP_ZONE_PULL := 6.0
+const RESCUE_PULL := 8.0
+const ESCORT_PULL := 2.0
+const HUNT_PULL := 1.5
+const TARGET_PULL := 1.5
+const GUARD_PULL := 1.0
+const ARMED_PULL := 4.0
+## Last stand defenders keep inside the objective (or just outside it), more so once the enemy holds it.
+const HOLD_PULL := 4.0
+## Standing next to a target: ready to plant (attacker) or to guard (defender).
+const NEXT_TO_TARGET := 10.0
+const PLANT_VALUE := 80.0
+const DEFUSE_VALUE := 90.0
+## Standing where our own charge will go off.
+const CHARGE_DANGER := 45.0
 
 var battle: Battle
 var team: int
@@ -90,6 +109,8 @@ var _aggression := 0.0
 var _urgency := 0.0
 ## Per-act cache of tile-to-tile sight, keyed by Vector4i(from, to).
 var _sight_cache := {}
+## Per-act cache of _exit_clear(): -1 unknown, else 0 or 1.
+var _exit_cache := -1
 
 
 func _init(p_battle: Battle, p_team: int) -> void:
@@ -135,6 +156,7 @@ func decide() -> Dictionary:
 	if battle.winner != -1 or battle.current_team != team:
 		return {"cmd": "end_turn"}
 	_sight_cache.clear()
+	_exit_cache = -1
 	_remember()
 	var seen := _seen_enemies()
 	if battle.round_number != _round:
@@ -144,6 +166,8 @@ func decide() -> Dictionary:
 		_quiet_rounds = 0
 	_aggression = clampf(_quiet_rounds / PATIENCE_ROUNDS, 0.0, 1.0)
 	_urgency = clampf((battle.victory_points[1 - team] - battle.victory_points[team]) / URGENCY_POINTS, 0.0, 2.0)
+	if not battle.mission.is_empty():
+		_urgency = _mission_urgency()
 	if _searching and seen.is_empty() and _last_seen.is_empty():
 		_search_goal = _fog_center()
 	var best := {}
@@ -255,6 +279,13 @@ func _best_plan(u: Unit, seen: Array[Unit]) -> Dictionary:
 				if value > 0.0:
 					plans.append(_plan(u, "detonate", stay + value - DETONATE_COST, null, tile))
 
+	# Demolition: a charge on a target next to us, or pulling one off.
+	for tile: Vector2i in battle.charge_tiles(u):
+		if battle.can_plant(u, tile) == "":
+			plans.append(_plan(u, "plant", stay + PLANT_VALUE, null, tile))
+		elif battle.can_defuse(u, tile) == "":
+			plans.append(_plan(u, "defuse", stay + DEFUSE_VALUE, null, tile))
+
 	var reach := battle.reachable(u)
 	for tile: Vector2i in reach:
 		if tile == here or reach[tile]["cost"] > u.current_mobility() + 0.001:
@@ -335,7 +366,7 @@ func _command(plan: Dictionary) -> Dictionary:
 	var command := {"cmd": plan["kind"], "unit": plan["unit"].id}
 	if plan["target"] != null:
 		command["target"] = plan["target"].id
-	if plan["kind"] in ["move", "pivot", "grenade", "mortar", "shoot_object", "tunnel", "trap", "detonate"]:
+	if plan["kind"] in ["move", "pivot", "grenade", "mortar", "shoot_object", "tunnel", "trap", "detonate", "plant", "defuse"]:
 		command["tile"] = plan["tile"]
 	if plan["kind"] == "stance":
 		command["stance"] = plan["stance"]
@@ -384,7 +415,10 @@ func _position_score(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 			score -= OPEN_GROUND_PENALTY * (1.0 if not seen.is_empty() else 0.5)
 
 	var caution := 2.0 - float(u.hp) / u.max_hp
+	if u.id == battle.mission.get("vip", -1):
+		caution *= VIP_CAUTION
 	score -= _danger(u, tile, seen)[0] * DANGER_WEIGHT * caution
+	score += _mission_score(u, tile)
 
 	var point := Vector2(tile) + Vector2(0.5, 0.5)
 	var nearest_open := INF
@@ -396,12 +430,19 @@ func _position_score(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 			nearest_open = minf(nearest_open, distance)
 
 	if seen.is_empty():
-		score -= Vector2(tile).distance_to(_goal(tile)) * APPROACH_WEIGHT * (1.0 + 2.0 * _aggression)
+		var goal := _mission_goal(u)
+		if goal == Vector2.INF:
+			goal = _goal(tile)
+		score -= Vector2(tile).distance_to(goal) * APPROACH_WEIGHT * (1.0 + 2.0 * _aggression)
 	else:
 		var nearest := INF
 		for e in seen:
 			nearest = minf(nearest, Vector2(tile).distance_to(Vector2(e.pos)))
-		score -= absf(nearest - float(u.def.get("range", 6.0)) * Weapon.RANGE_SCALE) * RANGE_WEIGHT
+		if u.id == battle.mission.get("vip", -1):
+			# The VIP keeps as far from the enemy as he can.
+			score += minf(nearest, u.sight) * RANGE_WEIGHT
+		else:
+			score -= absf(nearest - float(u.def.get("range", 6.0)) * Weapon.RANGE_SCALE) * RANGE_WEIGHT
 		if nearest_open < INF and not u.def.get("holds_back", false):
 			score -= nearest_open * OBJECTIVE_PULL * (1.0 + 2.0 * _urgency)
 
@@ -450,11 +491,18 @@ func _danger(u: Unit, tile: Vector2i, seen: Array[Unit]) -> Array[float]:
 	for strike in battle.strikes:
 		if strike["kind"] != "smoke" and Vector2(tile).distance_to(Vector2(strike["target"])) <= battle.strike_reach(strike) + 0.5:
 			danger += STRIKE_DANGER
+	if team == battle.mission_attacker():
+		for t: Dictionary in battle.mission.get("targets", []):
+			if t["state"] == "armed" and Vector2(tile).distance_to(Vector2(t["tile"])) <= Mission.CHARGE_RADIUS + 0.5:
+				danger += CHARGE_DANGER
 	return [danger, hunker_gain]
 
 
 ## Best thing to do with the second action after moving to a tile.
 func _followup_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
+	var charge := _charge_followup(u, tile)
+	if charge > 0.0:
+		return charge
 	if u.ammo == 0:
 		return RELOAD_EMPTY_VALUE
 	if u.weapon.needs_setup:
@@ -475,7 +523,7 @@ func _followup_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 
 func _shot_value(u: Unit, from: Vector2i, target: Unit, aimed := false) -> float:
 	var outcome := _expected_damage(u, from, target, target.pos, aimed)
-	var value := outcome[0] * 10.0 + outcome[1] * KILL_BONUS + (5.0 if target.overwatch else 0.0)
+	var value := (outcome[0] * 10.0 + outcome[1] * KILL_BONUS) * _target_weight(target) + (5.0 if target.overwatch else 0.0)
 	if CombatRules.misses_stray(u.weapon):
 		value -= _stray_cost(u, from, target)
 	if target.vehicle:
@@ -597,7 +645,7 @@ func _blast_value(tile: Vector2i, radius: float, damage_min: int, damage_max: in
 				kill = 1.0
 			elif damage_max - armor >= victim.hp:
 				kill = 0.5
-			victim_value += maxf(0.0, average - armor) * 10.0 + kill * KILL_BONUS
+			victim_value += (maxf(0.0, average - armor) * 10.0 + kill * KILL_BONUS) * _target_weight(victim)
 			if victim.team != team:
 				hits += 1
 				if battle.map.has_cover(victim.pos):
@@ -613,6 +661,171 @@ func _blast_value(tile: Vector2i, radius: float, damage_min: int, damage_max: in
 				if chain > 0.0:
 					hits += 1
 	return value if hits > 0 or not require_hit else 0.0
+
+
+# --- Missions ---
+
+## How hard to push: the attacker from the start, and more and more as the rounds run out; the Last stand
+## defender all out when the attacker holds the objective.
+func _mission_urgency() -> float:
+	if team == battle.mission_attacker():
+		return clampf(0.5 + 2.0 * float(battle.round_number) / maxi(1, battle.max_rounds), 0.0, 2.0)
+	if battle.mission_type() == Mission.HOLD and not battle.objectives.is_empty() and battle.objectives[0]["owner"] != team:
+		return 2.0
+	return 0.0
+
+
+## Where the enemy VIP is as far as we know: where we see him (or always, if he is known), else where we last
+## saw him; Vector2.INF if we have no idea.
+func _enemy_vip_at() -> Vector2:
+	var vip := battle.vip()
+	if vip == null or not vip.is_alive() or vip.team == team:
+		return Vector2.INF
+	if battle.team_sees(team, vip):
+		return Vector2(vip.pos)
+	if _last_seen.has(vip.id):
+		return Vector2(_last_seen[vip.id])
+	return Vector2.INF
+
+
+## Where a unit heads in a mission when no enemy is in sight, or Vector2.INF to go the usual way.
+func _mission_goal(u: Unit) -> Vector2:
+	var mission := battle.mission
+	var vip := battle.vip()
+	var attacking := team == battle.mission_attacker()
+	match battle.mission_type():
+		Mission.EXTRACT:
+			if attacking and vip != null and vip.is_alive():
+				if u == vip or mission.get("found", false):
+					return mission["zone"]["center"]
+				return Vector2(vip.pos)
+			if not attacking:
+				return _enemy_vip_at()
+		Mission.ASSASSINATE:
+			if not attacking and vip != null and vip.is_alive():
+				if u == vip:
+					# He stays where he is, among his own, until the exit is open and looks clear.
+					return mission["zone"]["center"] if _exit_clear() else Vector2(vip.pos)
+				return Vector2(vip.pos)
+			if attacking:
+				var at := _enemy_vip_at()
+				if at != Vector2.INF:
+					return at
+				# No idea where he is: half of us watch the exit, the rest search.
+				return mission["zone"]["center"] if u.id % 2 == 0 else Vector2.INF
+		Mission.DEMOLITION:
+			var nearest := _nearest_target(u.pos, ["intact", "armed"] if not attacking else ["intact"])
+			return Vector2(nearest) if nearest != Vector2i(-1, -1) else Vector2.INF
+	return Vector2.INF
+
+
+## A mission's pull on a unit standing on a tile (added to _position_score). The attacker's pulls grow as
+## the clock runs down.
+func _mission_score(u: Unit, tile: Vector2i) -> float:
+	var mission := battle.mission
+	if mission.is_empty():
+		return 0.0
+	var vip := battle.vip()
+	var attacking := team == battle.mission_attacker()
+	var p := Vector2(tile)
+	var push := 1.0 + 2.0 * _urgency if attacking else 1.0
+	match battle.mission_type():
+		Mission.HOLD:
+			if not attacking and not battle.objectives.is_empty() and not u.def.get("holds_back", false):
+				var objective: Dictionary = battle.objectives[0]
+				var outside := maxf(0.0, (p + Vector2(0.5, 0.5)).distance_to(objective["center"]) - float(objective["radius"]) - 1.0)
+				return -outside * HOLD_PULL * (1.0 + _urgency)
+		Mission.EXTRACT:
+			if attacking and vip != null and vip.is_alive():
+				var zone: Vector2 = mission["zone"]["center"]
+				if u == vip:
+					return -p.distance_to(zone) * VIP_ZONE_PULL
+				if not mission.get("found", false):
+					return -p.distance_to(Vector2(vip.pos)) * RESCUE_PULL * push
+				return -maxf(0.0, p.distance_to(Vector2(vip.pos)) - 2.0) * ESCORT_PULL - p.distance_to(zone) * 0.5 * push
+			if not attacking:
+				var at := _enemy_vip_at()
+				if at != Vector2.INF:
+					return -p.distance_to(at) * HUNT_PULL
+		Mission.ASSASSINATE:
+			if not attacking and vip != null and vip.is_alive():
+				if u == vip:
+					return -p.distance_to(mission["zone"]["center"]) * VIP_ZONE_PULL if _exit_clear() else 0.0
+				# The escort stays with him, and goes ahead of him to the exit once it opens.
+				var with_him := -maxf(0.0, p.distance_to(Vector2(vip.pos)) - 3.0) * ESCORT_PULL
+				if battle.round_number + 1 >= int(mission.get("opens", 1)):
+					with_him -= p.distance_to(mission["zone"]["center"]) * 0.5
+				return with_him
+			if attacking:
+				var at := _enemy_vip_at()
+				if at != Vector2.INF:
+					return -p.distance_to(at) * HUNT_PULL * push
+		Mission.DEMOLITION:
+			if attacking:
+				var nearest := _nearest_target(tile, ["intact"])
+				if nearest == Vector2i(-1, -1):
+					return 0.0
+				var d := p.distance_to(Vector2(nearest))
+				return -d * TARGET_PULL * push + (NEXT_TO_TARGET if d < 1.5 else 0.0)
+			var armed := _nearest_target(tile, ["armed"])
+			if armed != Vector2i(-1, -1):
+				return -maxf(0.0, p.distance_to(Vector2(armed)) - 1.0) * ARMED_PULL
+			var guarded := _nearest_target(tile, ["intact"])
+			if guarded != Vector2i(-1, -1):
+				return -maxf(0.0, p.distance_to(Vector2(guarded)) - 4.0) * GUARD_PULL
+	return 0.0
+
+
+## Assassination: whether our VIP should make for the exit: it opens next round or is open, our side can see
+## it, and no enemy we know of is near it.
+func _exit_clear() -> bool:
+	if _exit_cache == -1:
+		_exit_cache = 1 if _exit_looks_clear() else 0
+	return _exit_cache == 1
+
+
+func _exit_looks_clear() -> bool:
+	var mission := battle.mission
+	if battle.round_number + 1 < int(mission.get("opens", 1)):
+		return false
+	var center: Vector2 = mission["zone"]["center"]
+	if not battle.team_visible_tiles(team).has(Vector2i(center)):
+		return false
+	for threat: Array in _threats(_seen_enemies()):
+		if Vector2(threat[1]).distance_to(center) <= float(mission["zone"]["radius"]) + 6.0:
+			return false
+	return true
+
+
+## What planting or pulling a charge from a tile would be worth with the action left after moving there.
+func _charge_followup(u: Unit, tile: Vector2i) -> float:
+	if battle.mission_type() != Mission.DEMOLITION or u.vehicle:
+		return 0.0
+	var state := "intact" if team == battle.mission_attacker() else "armed"
+	for t: Dictionary in battle.mission["targets"]:
+		var at: Vector2i = t["tile"]
+		if t["state"] == state and maxi(absi(at.x - tile.x), absi(at.y - tile.y)) <= 1:
+			return PLANT_VALUE if state == "intact" else DEFUSE_VALUE
+	return 0.0
+
+
+## The nearest demolition target in one of these states, or (-1, -1).
+func _nearest_target(from: Vector2i, states: Array) -> Vector2i:
+	var best := Vector2i(-1, -1)
+	var best_distance := INF
+	for t: Dictionary in battle.mission.get("targets", []):
+		if not states.has(t["state"]):
+			continue
+		var d := Vector2(from).distance_to(Vector2(t["tile"]))
+		if d < best_distance:
+			best_distance = d
+			best = t["tile"]
+	return best
+
+
+## How much harm to an enemy counts: the VIP is worth the battle.
+func _target_weight(e: Unit) -> float:
+	return VIP_TARGET_WEIGHT if e.team != team and e.id == battle.mission.get("vip", -1) else 1.0
 
 
 # --- Knowledge ---
@@ -655,6 +868,8 @@ func _threats(seen: Array[Unit]) -> Array:
 ## else the nearest remembered enemy, else wherever we expect them to be.
 func _goal(from: Vector2i) -> Vector2:
 	var best := _search_goal if _searching else _objective
+	if battle.mission_type() == Mission.HOLD and team == battle.mission_defender() and not battle.objectives.is_empty():
+		return battle.objectives[0]["center"]
 	var best_distance := INF
 	for objective in battle.objectives:
 		var d := Vector2(from).distance_to(objective["center"])

@@ -5,10 +5,10 @@ extends RefCounted
 ## A layout is {"map": TacticalMap, "objectives": Array, "spawns": Array[Vector2i] (Allied, west),
 ## "reinforcement_spawns": Array[Vector2i]}; German positions are the mirror image.
 ## A roster entry is a role name, or {"role", "name", "rank", "record_id"} for campaign soldiers.
-## Scenarios add "pos" (an exact start tile) and "facing" to entries, and "spawns" (exact tiles, not
+## Scenarios add "pos" (an exact start tile), "facing" and "stance" to entries, and "spawns" (exact tiles, not
 ## mirrored) to reinforcement waves.
 
-## options: theatre (an id, Normandy if left out), vp_to_win, max_rounds, kill_points and objective_points
+## options: theatre (an id, Normandy if left out), mission (see Mission; "vip_team" names whose VIP unit it is), vp_to_win, max_rounds, kill_points and objective_points
 ## ([team 0, team 1], see Battle), points_scale (multiplies vp_to_win), reinforcements: [{"round", "team", "roster", "air"?, "tunnels"?}]. A wave that is "air"
 ## is flown in to the side's landing zone (the layout's "landing_zones"); one that comes by "tunnels" comes up
 ## at the side's tunnel entrances (the layout's "tunnels": [team 0 tiles, team 1 tiles]).
@@ -19,13 +19,17 @@ static func create(layout: Dictionary, rosters: Array, seed := 0, options := {})
 	var names := _NameBook.new(seed, theatre)
 	var units: Array[Unit] = []
 	var taken := {}
+	# Units on exact tiles first, so none of the others is put on one of them.
+	for team in 2:
+		for entry: Variant in rosters[team]:
+			if entry is Dictionary and entry.has("pos"):
+				taken[entry["pos"]] = true
 	for team in 2:
 		var roster: Array = rosters[team]
 		for i in roster.size():
 			var pos: Vector2i
 			if roster[i] is Dictionary and roster[i].has("pos"):
 				pos = roster[i]["pos"]
-				taken[pos] = true
 			else:
 				var spawn: Vector2i = layout["spawns"][i % layout["spawns"].size()]
 				pos = _free_tile(map, _side(map, spawn, team), taken)
@@ -36,6 +40,7 @@ static func create(layout: Dictionary, rosters: Array, seed := 0, options := {})
 		var copy := objective.duplicate()
 		copy["owner"] = -1
 		battle.objectives.append(copy)
+	_set_mission(battle, options.get("mission", {}))
 	# "points_scale" multiplies the points needed to win, so a theatre can score in halves (see ModernTheatre).
 	battle.vp_to_win = options.get("vp_to_win", battle.vp_to_win) * int(options.get("points_scale", 1))
 	battle.kill_points = options.get("kill_points", [0, 0]).duplicate()
@@ -68,6 +73,27 @@ static func create(layout: Dictionary, rosters: Array, seed := 0, options := {})
 	return battle
 
 
+## The mission (see Mission): the attacker moves first, the VIP is the first VIP unit on the side the mission
+## names, an Extraction VIP starts out hiding, and the Last stand objective starts out the defender's.
+static func _set_mission(battle: Battle, mission: Dictionary) -> void:
+	if Mission.type_of(mission) == Mission.POINTS:
+		return
+	battle.mission = mission.duplicate(true)
+	# The side that has to act moves first.
+	battle.first_team = int(mission.get("attacker", 0))
+	battle.current_team = battle.first_team
+	var vip_team: int = battle.mission.get("vip_team", -1)
+	battle.mission.erase("vip_team")
+	if vip_team != -1:
+		for u in battle.units:
+			if u.team == vip_team and u.role == Mission.VIP_ROLE:
+				battle.mission["vip"] = u.id
+				u.hiding = Mission.type_of(mission) == Mission.EXTRACT and not battle.mission.get("found", false)
+				break
+	if Mission.type_of(mission) == Mission.HOLD and not battle.objectives.is_empty():
+		battle.objectives[0]["owner"] = 1 - int(mission.get("attacker", 0))
+
+
 static func _make_unit(id: int, entry: Variant, team: int, pos: Vector2i, names: _NameBook, theatre_id: String) -> Unit:
 	var spec: Dictionary = entry if entry is Dictionary else {"role": entry}
 	var role: String = spec["role"]
@@ -76,6 +102,8 @@ static func _make_unit(id: int, entry: Variant, team: int, pos: Vector2i, names:
 	u.record_id = spec.get("record_id", -1)
 	if spec.has("facing"):
 		u.facing = spec["facing"]
+	if spec.has("stance") and not u.vehicle:
+		u.stance = spec["stance"]
 	return u
 
 

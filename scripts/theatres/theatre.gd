@@ -10,7 +10,9 @@ extends RefCounted
 ##  "look": {...} (uniform, see SoldierPainter), "surnames": [...], "vehicle_names": [...],
 ##  "roles": {role id: role definition, ...} (in display order),
 ##  "max_units": most units a side may field on a two-player campaign map (default 14),
-##  "ai_wishes": [...], "ai_heavy": role, "fill_roles": [...] (two-player campaign AI shopping lists)}
+##  "ai_wishes": [...], "ai_heavy": role, "fill_roles": [...] (two-player campaign AI shopping lists),
+##  "vip_name": what its mission VIP is called, "targets": names of what it defends in a Demolition mission,
+##  "target_object": the object kind those targets are drawn as}
 ## [/codeblock]
 ## A role definition is made by role() and holds everything Unit.create needs: stats, gear, the weapon spec
 ## (see Weapon.from_spec), traits and presentation keys. Role ids are what saves, scenarios and commands use.
@@ -45,6 +47,9 @@ const ROLE_DEFAULTS := {
 	## Chance (%) to spot each hidden mine, trap or IED it walks past, when better than the usual (EOD).
 	"spot_chance": 0,
 }
+## The VIP's sidearm, unless the faction names its own.
+const VIP_WEAPON := {"name": "Pistol", "kind": "carbine", "damage": [2, 3], "crit": 5, "crit_damage": 1, "clip": 7, "suppression": 8,
+	"range": [0, 15, 10, 5, 0, -5, -10, -20, -30, -40]}
 ## Indirect fire defaults: a light mortar.
 const INDIRECT_DEFAULTS := {
 	"name": "mortar", "min": 5.0, "max": 22.0, "radius": 1.5, "damage": [3, 5],
@@ -89,13 +94,24 @@ func team_color(team: int) -> Color:
 	return faction(team)["color"]
 
 
-## The role's definition for this team, or {} if the team has no such role.
+## The role's definition for this team, or {} if the team has no such role. Every side also has the mission
+## VIP (Mission.VIP_ROLE), who isn't in its role list: nobody buys or recruits him.
 func role_def(team: int, role_id: String) -> Dictionary:
+	if role_id == Mission.VIP_ROLE:
+		return vip_def(team)
 	return faction(team)["roles"].get(role_id, {})
 
 
 func has_role(team: int, role_id: String) -> bool:
-	return faction(team)["roles"].has(role_id)
+	return role_id == Mission.VIP_ROLE or faction(team)["roles"].has(role_id)
+
+
+## The VIP of an Extraction or Assassination mission: a downed pilot, a staff officer, an informant. Slow,
+## lightly armed and worth the battle. Called after the faction's "vip_name" (and "vip_weapon", a sidearm).
+func vip_def(team: int) -> Dictionary:
+	var f := faction(team)
+	return Theatre.role({"name": f.get("vip_name", "VIP"), "hp": 9, "aim": 45, "mobility": 6.0, "weapon": f.get("vip_weapon", VIP_WEAPON),
+		"range": 10.0, "holds_back": true, "cost": 0, "note": "Must be got out alive", "kit": "Officer", "icon": "VIP"})
 
 
 ## The team's role ids in display order.

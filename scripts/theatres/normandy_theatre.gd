@@ -112,6 +112,7 @@ func _init() -> void:
 				"Mortar", "Rifleman", "SMG", "Rifleman"],
 			"ai_heavy": "Tank",
 			"fill_roles": ["Rifleman", "SMG", "Officer", "MG", "Mortar"],
+			"vip_name": "Liaison Officer", "targets": ["Ammo dump", "Fuel depot", "Radio truck"], "target_object": "crate",
 		},
 		{
 			"name": "Germany", "adjective": "German", "color": Color("b8c0c8"),
@@ -127,6 +128,7 @@ func _init() -> void:
 				"Mortar", "Rifleman", "SMG", "Rifleman"],
 			"ai_heavy": "Tank",
 			"fill_roles": ["Rifleman", "SMG", "Officer", "MG", "Mortar"],
+			"vip_name": "Staff Officer", "targets": ["Ammo dump", "Flak gun", "Radio post"], "target_object": "crate",
 		},
 	]
 

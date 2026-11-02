@@ -7,8 +7,11 @@ extends RefCounted
 ## TRAMPLED is wheat (or tall grass) flattened by soldiers or tanks moving through it; WIRE is a barbed-wire
 ## entanglement. JUNGLE is dense undergrowth: slow, hides whoever is in it and blocks sight through it.
 ## PADDY is a flooded rice field: slow, open, and it bogs vehicles down. TALL_GRASS is elephant grass: it
-## hides crouching soldiers as well as prone ones, and is trampled like wheat.
-enum Terrain { FLOOR, ROUGH, RUBBLE, INDOOR, ROAD, WHEAT, CRATER, TRAMPLED, WIRE, JUNGLE, PADDY, TALL_GRASS }
+## hides crouching soldiers as well as prone ones, and is trampled like wheat. TRENCH is dug below the ground:
+## full cover against fire from outside it, none along it (fire down the trench line enfilades it), a little
+## slow to walk and slower to climb in or out of. From in it you see along it and TRENCH_SIGHT tiles beyond its
+## lip, and only from there (or from a level higher) can anyone see in.
+enum Terrain { FLOOR, ROUGH, RUBBLE, INDOOR, ROAD, WHEAT, CRATER, TRAMPLED, WIRE, JUNGLE, PADDY, TALL_GRASS, TRENCH }
 
 ## North, east, south, west.
 const DIRS4 := [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
@@ -17,11 +20,15 @@ const DIRS8 := [
 	Vector2i(1, -1), Vector2i(1, 1), Vector2i(-1, 1), Vector2i(-1, -1),
 ]
 const TERRAIN_NAMES := ["Grass", "Rough ground", "Rubble", "Indoor floor", "Road", "Wheat field", "Shell crater", "Trampled wheat", "Barbed wire",
-		"Jungle", "Rice paddy", "Elephant grass"]
-const TERRAIN_COST := [1.0, 2.0, 2.0, 1.0, 0.75, 1.5, 1.5, 1.0, 4.0, 2.0, 2.0, 1.5]
+		"Jungle", "Rice paddy", "Elephant grass", "Trench"]
+const TERRAIN_COST := [1.0, 2.0, 2.0, 1.0, 0.75, 1.5, 1.5, 1.0, 4.0, 2.0, 2.0, 1.5, 1.5]
+## Extra cost for climbing down into a trench or up out of it.
+const TRENCH_CLIMB_COST := 1.0
+## How many tiles past a trench's edge sight from inside it reaches (and from how far out anyone sees in).
+const TRENCH_SIGHT := 3
 ## What a tank pays where it differs from TERRAIN_COST: it rolls over wire, ploughs through undergrowth and
 ## bogs down in flooded paddies.
-const VEHICLE_TERRAIN_COST := {Terrain.WIRE: 1.0, Terrain.JUNGLE: 3.0, Terrain.PADDY: 3.0, Terrain.TALL_GRASS: 1.0}
+const VEHICLE_TERRAIN_COST := {Terrain.WIRE: 1.0, Terrain.JUNGLE: 3.0, Terrain.PADDY: 3.0, Terrain.TALL_GRASS: 1.0, Terrain.TRENCH: 3.0}
 ## What a tank leaves behind it.
 const VEHICLE_FLATTENS := {Terrain.WIRE: Terrain.FLOOR, Terrain.WHEAT: Terrain.TRAMPLED, Terrain.TALL_GRASS: Terrain.TRAMPLED, Terrain.JUNGLE: Terrain.ROUGH}
 ## Crops and grass a standing or crouching soldier tramples flat as he walks out of it.
@@ -84,6 +91,9 @@ var height: int
 var revision := 0
 ## Bumped only when terrain, objects or walls change (not smoke).
 var layout_revision := 0
+## LineOfSight's peek positions per (x, y, level), valid while revision equals peek_cache_revision.
+var peek_cache := {}
+var peek_cache_revision := -1
 var _terrain := PackedInt32Array()
 var _objects := PackedInt32Array()
 var _object_kinds := {}
@@ -114,6 +124,8 @@ var _tall := false
 ## the map revision it was worked out for (see tile_tops).
 var _tops := PackedFloat32Array()
 var _tops_revision := -1
+var _trench_distance := PackedByteArray()
+var _trench_revision := -1
 
 
 func _init(p_width: int, p_height: int) -> void:
@@ -147,7 +159,8 @@ func get_object(p: Vector2i) -> int:
 
 
 ## Kinds: full cover "rock", "tree", "palm", "bamboo", "oil_tank", "car" (a wreck that burns when hit), "hesco";
-## half cover "crate", "sandbags", "hay", "pew", "fuel", "rice_sacks", "jersey" (a concrete barrier).
+## half cover "crate", "sandbags", "hay", "pew", "fuel", "rice_sacks", "jersey" (a concrete barrier),
+## "howitzer" (a field gun behind its shield).
 func get_object_kind(p: Vector2i) -> String:
 	return _object_kinds.get(p, "rock" if get_object(p) == Cover.FULL else "crate")
 
@@ -475,7 +488,7 @@ func step_cost(a: Vector2i, b: Vector2i, level_a := 0, level_b := -1) -> float:
 		return INF
 	if level_b == 0 and (not is_passable(b) or _fires.has(b)):
 		return INF
-	var cost: float = TERRAIN_COST[get_terrain(b)] if level_b == 0 else 1.0
+	var cost: float = TERRAIN_COST[get_terrain(b)] + (trench_climb(a, b) if level_a == 0 else 0.0) if level_b == 0 else 1.0
 	if level_a == 0 and level_b == 0 and _level_open(a, b) and (a.x == b.x or a.y == b.y or (_level_open(a, Vector2i(b.x, a.y)) and _level_open(a, Vector2i(a.x, b.y)))):
 		# Level open ground: as on a flat map.
 		return _flat_step_cost(a, b)
@@ -502,6 +515,43 @@ func step_cost(a: Vector2i, b: Vector2i, level_a := 0, level_b := -1) -> float:
 	return cost
 
 
+## Whether p is in a trench or within TRENCH_SIGHT tiles of one (counting diagonals as one): as far as
+## sight from a trench reaches.
+func beside_trench(p: Vector2i) -> bool:
+	if not in_bounds(p):
+		return false
+	if _trench_revision != layout_revision:
+		_build_trench_distance()
+	return _trench_distance[_index(p)] <= TRENCH_SIGHT
+
+
+## Every tile's distance in steps (diagonals count one) to the nearest trench, capped at TRENCH_SIGHT + 1.
+func _build_trench_distance() -> void:
+	_trench_revision = layout_revision
+	_trench_distance.resize(width * height)
+	_trench_distance.fill(TRENCH_SIGHT + 1)
+	var frontier: Array[Vector2i] = []
+	for y in height:
+		for x in width:
+			if _terrain[y * width + x] == Terrain.TRENCH:
+				_trench_distance[y * width + x] = 0
+				frontier.append(Vector2i(x, y))
+	for step in range(1, TRENCH_SIGHT + 1):
+		var next: Array[Vector2i] = []
+		for p in frontier:
+			for d: Vector2i in DIRS8:
+				var q := p + d
+				if in_bounds(q) and _trench_distance[_index(q)] > step:
+					_trench_distance[_index(q)] = step
+					next.append(q)
+		frontier = next
+
+
+## What stepping from a to b costs on top of the ground for climbing into or out of a trench.
+func trench_climb(a: Vector2i, b: Vector2i) -> float:
+	return TRENCH_CLIMB_COST if (get_terrain(a) == Terrain.TRENCH) != (get_terrain(b) == Terrain.TRENCH) else 0.0
+
+
 ## Whether b is open ground (no building) level with open ground at a.
 func _level_open(a: Vector2i, b: Vector2i) -> bool:
 	if not in_bounds(b):
@@ -521,7 +571,7 @@ func stairs_cost(p: Vector2i, from_level: int, to_level: int) -> float:
 func _flat_step_cost(a: Vector2i, b: Vector2i) -> float:
 	if not is_passable(b) or _fires.has(b):
 		return INF
-	var cost: float = TERRAIN_COST[get_terrain(b)]
+	var cost: float = TERRAIN_COST[get_terrain(b)] + trench_climb(a, b)
 	if a.x != b.x and a.y != b.y:
 		# No cutting corners past objects or walls.
 		var side_x := Vector2i(b.x, a.y)
@@ -598,6 +648,7 @@ func is_jungle(p: Vector2i) -> bool:
 
 ## Cover a unit standing on p gets on the side facing direction dir.
 ## A crater covers every side; a tank alongside counts as half cover; a bank of higher ground is full cover.
+## A trench is full cover on every side except where it runs on into more trench.
 ## Upstairs, only the building's walls and windows count (an open doorway below is wall up there); on a
 ## roof, the parapet is half cover and a taller building alongside full cover.
 func cover_toward(p: Vector2i, dir: Vector2i, level := 0) -> int:
@@ -619,6 +670,8 @@ func cover_toward(p: Vector2i, dir: Vector2i, level := 0) -> int:
 		cover = maxi(cover, Cover.HALF)
 	if get_terrain(p) == Terrain.CRATER:
 		cover = maxi(cover, Cover.HALF)
+	elif get_terrain(p) == Terrain.TRENCH and get_terrain(q) != Terrain.TRENCH:
+		cover = Cover.FULL
 	if _tall and in_bounds(q) and get_elevation(q) > get_elevation(p):
 		cover = Cover.FULL
 	return cover
@@ -712,7 +765,7 @@ func destroy_cover(center: Vector2i, radius: float) -> int:
 			_edges.erase(key)
 			_edge_kinds.erase(key)
 			destroyed += 1
-	if in_bounds(center) and get_terrain(center) != Terrain.INDOOR:
+	if in_bounds(center) and get_terrain(center) not in [Terrain.INDOOR, Terrain.TRENCH]:
 		set_terrain(center, Terrain.CRATER)
 	revision += 1
 	layout_revision += 1

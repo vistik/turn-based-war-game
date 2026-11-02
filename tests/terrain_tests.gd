@@ -202,6 +202,39 @@ func test_barbed_wire_slows_soldiers_not_tanks() -> void:
 	check(map.get_terrain(Vector2i(3, 5)) != TacticalMap.Terrain.WIRE, "explosions blow gaps in it")
 
 
+func test_trenches_cover_from_outside_but_not_along_them() -> void:
+	var map := TacticalMap.new(16, 16)
+	for x in range(3, 10):
+		map.set_terrain(Vector2i(x, 6), TacticalMap.Terrain.TRENCH)
+	var inside := Vector2i(6, 6)
+	check_eq(map.cover_against(inside, Vector2i(6, 12)), Cover.FULL, "full cover from the front")
+	check_eq(map.cover_against(inside, Vector2i(6, 1)), Cover.FULL, "full cover from behind")
+	check_eq(map.cover_against(inside, Vector2i(14, 6)), Cover.NONE, "none from fire down the trench line")
+	check_eq(map.cover_against(Vector2i(9, 6), Vector2i(14, 6)), Cover.FULL, "the end of the trench is covered toward open ground")
+	check_eq(map.cover_against(Vector2i(6, 8), Vector2i(6, 12)), Cover.NONE, "no cover for the ground outside it")
+	# Walking: 1.5 along it, +1 to climb in or out.
+	check_eq(map.step_cost(Vector2i(5, 6), inside), 1.5, "a little slow along the trench")
+	check_eq(map.step_cost(Vector2i(6, 7), inside), 2.5, "climbing down into it costs more")
+	check_eq(map.step_cost(inside, Vector2i(6, 7)), 2.0, "and climbing out")
+	# Sight: along the trench and TRENCH_SIGHT tiles past its lip, both ways, nothing further.
+	var reach := TacticalMap.TRENCH_SIGHT
+	check(LineOfSight.can_see(map, inside, Vector2i(9, 6), 18.0), "sees along the trench")
+	check(LineOfSight.can_see(map, inside, Vector2i(6, 6 + reach), 18.0), "sees %d tiles out" % reach)
+	check(LineOfSight.can_see(map, inside, Vector2i(9 + reach, 6 + reach), 18.0), "and diagonally past its end")
+	check(not LineOfSight.can_see(map, inside, Vector2i(6, 7 + reach), 18.0), "but no further out")
+	check(not LineOfSight.can_see(map, Vector2i(6, 12), inside, 18.0), "and nobody further out sees in")
+	check(LineOfSight.can_see(map, Vector2i(6, 12), Vector2i(6, 8), 18.0), "sight outside the trench is untouched")
+	map.destroy_cover(inside, 1.0)
+	check_eq(map.get_terrain(inside), TacticalMap.Terrain.TRENCH, "a blast leaves a trench a trench")
+	# Scenario files keep it.
+	var s := Scenario.create(16, 16)
+	s.map = map
+	s.units.append(Scenario.unit_entry(0, "Rifleman", inside))
+	s.units.append(Scenario.unit_entry(1, "Rifleman", Vector2i(14, 14)))
+	var again := Scenario.from_data(JSON.parse_string(s.to_json()))
+	check_eq(again.map.get_terrain(inside), TacticalMap.Terrain.TRENCH, "trenches survive a scenario file")
+
+
 # --- AI, saves, scenarios and the generator ---
 
 func test_ai_blows_up_drums_next_to_enemies() -> void:

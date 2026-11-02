@@ -10,6 +10,7 @@ const GROUND := {
 	TacticalMap.Terrain.INDOOR: Color("8a5a46"), TacticalMap.Terrain.ROAD: Color("9a8a68"), TacticalMap.Terrain.WHEAT: Color("b8a050"),
 	TacticalMap.Terrain.CRATER: Color("3b342b"), TacticalMap.Terrain.TRAMPLED: Color("a08d4c"), TacticalMap.Terrain.WIRE: Color("5a5650"),
 	TacticalMap.Terrain.JUNGLE: Color("23401b"), TacticalMap.Terrain.PADDY: Color("5f8c86"), TacticalMap.Terrain.TALL_GRASS: Color("8f9c4e"),
+	TacticalMap.Terrain.TRENCH: Color("4a3b2a"),
 }
 const THEATRE_GROUND := {
 	"vietnam": {TacticalMap.Terrain.FLOOR: Color("568431"), TacticalMap.Terrain.ROAD: Color("a2563a")},

@@ -13,11 +13,6 @@ extends RefCounted
 ## Sight reaches this many tiles further for every level the viewer stands above the target's floor.
 const HEIGHT_SIGHT_BONUS := 2.0
 
-## peek_positions results for the map (by instance id) at the revision they were worked out for.
-static var _peeks := {}
-static var _peeks_map := 0
-static var _peeks_revision := -1
-
 
 ## Traces a line between the centres of a and b, tile by tile. Eye heights default to someone standing on
 ## the given levels.
@@ -113,6 +108,8 @@ static func can_see(map: TacticalMap, from: Vector2i, to: Vector2i, sight_range:
 		return false
 	if distance > 1.5 and (map.has_smoke(from) or map.has_smoke(to)):
 		return false
+	if _sunk_in_trench(map, from, from_level, to, to_level) or _sunk_in_trench(map, to, to_level, from, from_level):
+		return false
 	var targets: Array[Vector2i] = [to]
 	if target_peeks:
 		targets = _cached_peeks(map, to, to_level)
@@ -125,16 +122,27 @@ static func can_see(map: TacticalMap, from: Vector2i, to: Vector2i, sight_range:
 	return false
 
 
-## peek_positions, remembered until the map changes.
+## Whether someone in a trench on p and someone on other can't see each other over its lip: from a trench you
+## see along it and TacticalMap.TRENCH_SIGHT tiles past it, nothing further, unless the other stands a level or
+## more higher.
+static func _sunk_in_trench(map: TacticalMap, p: Vector2i, level: int, other: Vector2i, other_level: int) -> bool:
+	if level != 0 or map.get_terrain(p) != TacticalMap.Terrain.TRENCH or map.beside_trench(other):
+		return false
+	return not (map.has_height() and map.floor_height(other, other_level) >= map.floor_height(p) + 1.0)
+
+
+## peek_positions, remembered on the map until it changes. The cache lives on the map rather than in a static
+## so battles played at once on worker threads (tools/balance.gd) never share it.
 static func _cached_peeks(map: TacticalMap, p: Vector2i, level: int) -> Array[Vector2i]:
-	if map.get_instance_id() != _peeks_map or map.revision != _peeks_revision:
-		_peeks.clear()
-		_peeks_map = map.get_instance_id()
-		_peeks_revision = map.revision
+	if map.revision != map.peek_cache_revision:
+		map.peek_cache.clear()
+		map.peek_cache_revision = map.revision
 	var key := Vector3i(p.x, p.y, level)
-	if not _peeks.has(key):
-		_peeks[key] = peek_positions(map, p, level)
-	return _peeks[key]
+	var cached: Variant = map.peek_cache.get(key)
+	if cached == null:
+		cached = peek_positions(map, p, level)
+		map.peek_cache[key] = cached
+	return cached
 
 
 static func _flat_line(map: TacticalMap, a: Vector2i, b: Vector2i) -> bool:

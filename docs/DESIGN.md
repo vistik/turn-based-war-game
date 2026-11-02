@@ -12,14 +12,14 @@ or watch AI vs AI. Unless a row says otherwise, the rules below are shared, with
 | Grid | Square, 8-way movement, diagonals cost 1.5, no cutting corners past walls/objects |
 | View | Isometric by default (V toggles top-down), rotate in quarter turns (Q/E), pan/zoom camera. Props in front of soldiers or the cursor fade out |
 | Actions | 2 per turn. Move (1) / dash (2). Shoot, aimed shot (needs both), suppressive fire, overwatch, hunker, grenade and mortar end the turn. Reload, set up MG, rally, smoke, medkit, changing stance and turning a tank cost 1 |
-| Movement | Mobility = path-cost budget per action. Roads 0.75, rough ground/rubble 2, wheat/craters 1.5, vaulting a low wall +1, pushing through a hedgerow +3 |
+| Movement | Mobility = path-cost budget per action. Roads 0.75, rough ground/rubble 2, wheat/craters/trenches 1.5, climbing into or out of a trench +1, vaulting a low wall +1, pushing through a hedgerow +3 |
 | Stances | Stand, crouch or prone (C / Z), 1 action to change, kept until changed; moving keeps the stance. Tanks have none. **Crouched**: −10 to be hit (−20 behind half cover), +5 aim, moves cost ×1.5, sight −1. **Prone**: −20 to be hit at range (−30 behind half cover), +5 aim (+15 for a set-up MG), +10 suppression recovery, and hidden from anyone more than 4 tiles away while lying in wheat, until it fires (revealed until its next turn). But moves cost ×3 (crawl, at least 1 tile per action), sight −2, +15 to be hit within 2.5 tiles and +10 when flanked (a shooter from a side its cover doesn't face), and it can't throw grenades or smoke, fire a bazooka/Panzerschreck or work the mortar. Pinned soldiers can still change stance. Stance modifiers also apply to reaction shots, so crawling is the way past overwatch |
 | Aimed shot | X: both actions, +15 aim, ends the turn |
 | Suppressive fire | B: no damage roll. The target gets 1.5× the weapon's suppression and its allies within 1.5 tiles the full amount, and none of them recover suppression at the start of their next turn. Uses 2 rounds and ends the turn; not for tanks or rocket launchers, and tanks can't be targeted. An MG 42 pins a fresh target through their whole turn (83); a rifle only suppresses |
-| Cover | Half (−20) or full (−40), directional, from objects on neighbouring tiles or walls/hedges on tile edges. Shell craters give half cover on every side |
+| Cover | Half (−20) or full (−40), directional, from objects on neighbouring tiles or walls/hedges on tile edges. Shell craters give half cover on every side. A trench is full cover on every side except toward more trench, so fire along it (enfilade) gets no cover; blasts in a trench leave it a trench |
 | Flanking | No cover from the shooter's angle gives the shooter +40 crit |
 | Sight and range | Sight 18 tiles (officers 19, snipers 22-24, tanks and carriers 15-16, Vietnam's riflemen 16): further than a dash (14), so a unit can usually see and shoot about as far as it can run. Weapon range tables give a modifier per tile; `Weapon.range_modifier` reads them at distance / `Weapon.RANGE_SCALE` (1.5), so rifles shoot well to about 9-10 tiles and SMGs to 6-7. The AI's preferred ranges scale the same way |
-| Line of sight | Full cover and smoke block, half cover doesn't. Units beside full cover step out to the side. Wheat hides targets at range (−10 beyond 4 tiles) |
+| Line of sight | Full cover and smoke block, half cover doesn't. Units beside full cover step out to the side. Wheat hides targets at range (−10 beyond 4 tiles). From a trench, sight reaches along it and up to `TacticalMap.TRENCH_SIGHT` (3) tiles past it (diagonal steps count one), no further, and the same holds both ways; a viewer a level or more above the trench floor sees in (`LineOfSight._sunk_in_trench`) |
 | Hit chance | aim + weapon range table (+ aimed shot, + shooter's stance) − cover (×2 hunkered) − target's stance − suppression penalty − concealment, clamped 0–100. Shown exactly, line by line |
 | Results | Hit, crit, graze (10% band above the hit chance, half damage), miss |
 | Wounds | Surviving a hit slows the unit by 3 mobility for its next two turns. Medkits heal and treat wounds |
@@ -140,7 +140,7 @@ Godot --headless --path . -s tools/matchups.gd -- --theatre vietnam --games 8 --
 - Height: ladders and climbing walls, jumping down a level, collapsing floors, tank shots from above hitting thin top armour, units starting upstairs in scenario files, the AI using roofs more
 - Digging in and sprinting
 - More terrain: rivers with fords and bridges (tanks need a bridge), haystacks and wooden barns that catch fire,
-  hedgehog anti-tank obstacles, foxholes and slit trenches, booby-trapped doors, collapsing buildings under
+  hedgehog anti-tank obstacles, foxholes, booby-trapped doors, collapsing buildings under
   tank fire, mud that bogs tanks down after rain, Teller (anti-tank) vs S-mines (anti-personnel), engineers who
   lay and clear mines faster, minefield warning signs that may be fake
 - AI: clearing mines on its way, using smoke, luring enemies next to fuel drums

@@ -111,20 +111,25 @@ static func play(theatre_id: String, count: int, a: String, b: String, seed: int
 
 
 ## Open ground with cover scattered on the west half and mirrored: rocks, trees, sandbags, crates and low walls.
+## A test bench, not a battlefield: mirroring it keeps the ground out of the comparison between roles.
 static func arena(seed: int) -> TacticalMap:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed * 31 + 7
-	var b := MapBuilder.new(ARENA.x, ARENA.y)
+	var map := TacticalMap.new(ARENA.x, ARENA.y)
+	var mirror := func(p: Vector2i) -> Vector2i: return Vector2i(ARENA.x - 1 - p.x, p.y)
 	var kinds := [[Cover.FULL, "rock"], [Cover.FULL, "tree"], [Cover.HALF, "sandbags"], [Cover.HALF, "crate"]]
 	for i in 10:
 		var p := Vector2i(rng.randi_range(4, ARENA.x / 2 - 1), rng.randi_range(1, ARENA.y - 2))
-		if b.map.is_passable(p):
+		if map.is_passable(p):
 			var kind: Array = kinds[rng.randi_range(0, kinds.size() - 1)]
-			b.object(p, kind[0], kind[1])
+			map.set_object(p, kind[0], kind[1])
+			map.set_object(mirror.call(p), kind[0], kind[1])
 	for i in 3:
 		var p := Vector2i(rng.randi_range(4, ARENA.x / 2 - 2), rng.randi_range(1, ARENA.y - 2))
-		b.side(p, MapBuilder.E if rng.randf() < 0.5 else MapBuilder.S, Cover.HALF, "stone")
-	return b.map
+		var dir := MapBuilder.E if rng.randf() < 0.5 else MapBuilder.S
+		map.set_edge(p, p + dir, Cover.HALF, "stone")
+		map.set_edge(mirror.call(p), mirror.call(p + dir), Cover.HALF, "stone")
+	return map
 
 
 func _report(theatres: Array, sizes: Array) -> String:

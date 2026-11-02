@@ -248,9 +248,9 @@ func test_hazards_survive_saving_and_scenarios() -> void:
 	check_eq(loaded.map.get_terrain(Vector2i(4, 3)), TacticalMap.Terrain.TRAMPLED, "and trampled wheat")
 
 
-func test_generated_maps_have_hazards_on_both_sides() -> void:
+func test_generated_maps_have_hazards() -> void:
 	for size in [44, 64]:
-		var layout := MapGenerator.generate(808, Vector2i(size, size))
+		var layout := MapGenerator.generate(808, Vector2i(size, size), "bocage")
 		var map: TacticalMap = layout["map"]
 		var fuel := 0
 		var oil := 0
@@ -261,10 +261,8 @@ func test_generated_maps_have_hazards_on_both_sides() -> void:
 				fuel += int(map.get_object_kind(p) == "fuel" and map.get_object(p) != Cover.NONE)
 				oil += int(map.get_object_kind(p) == "oil_tank" and map.get_object(p) != Cover.NONE)
 				wire += int(map.get_terrain(p) == TacticalMap.Terrain.WIRE)
-		check(fuel >= 2 and fuel % 2 == 0, "%dx%d: fuel drums, mirrored (%d)" % [size, size, fuel])
-		check(oil == (2 if size >= 56 else 0), "%dx%d: an oil tank a side on big maps (%d)" % [size, size, oil])
-		check(wire >= 2 and wire % 2 == 0, "%dx%d: barbed wire, mirrored (%d)" % [size, size, wire])
-		check(map.get_mines().size() >= 2 and map.get_mines().size() % 2 == 0, "%dx%d: minefields, mirrored (%d)" % [size, size, map.get_mines().size()])
-		for p: Vector2i in map.get_mines():
-			check(map.has_mine(Vector2i(map.width - 1 - p.x, p.y)), "mine at %s has a twin" % p)
+		check(fuel >= 2, "%dx%d: fuel drums (%d)" % [size, size, fuel])
+		check(oil == (1 if size >= 56 else 0), "%dx%d: an oil tank on big maps (%d)" % [size, size, oil])
+		check(wire >= 2, "%dx%d: barbed wire (%d)" % [size, size, wire])
+		check(map.get_mines().size() >= 2, "%dx%d: minefields (%d)" % [size, size, map.get_mines().size()])
 		check(MapGenerator.is_playable(layout), "%dx%d: still playable" % [size, size])

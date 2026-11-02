@@ -10,7 +10,7 @@ extends RefCounted
 ##   "format": "normandy-1944-scenario", "version": 1,
 ##   "theatre": "normandy" (optional, see Theatres; Normandy if left out),
 ##   "title": "Hedgerow ambush", "briefing": "Hold the crossroads.",
-##   "vp_to_win": 12, "max_rounds": 20, "mirrored": true,
+##   "vp_to_win": 12, "max_rounds": 20,
 ##   "map": {
 ##     "width": 4, "height": 3,
 ##     "legend": {".": "Grass", ",": "Rough ground", ...},   (informative; see TERRAIN_CHARS)
@@ -32,8 +32,8 @@ extends RefCounted
 ## Extraction, the defender in an Assassination) and a zone; Demolition needs targets (drawn as the defender's
 ## target object unless something already stands there); Last stand needs exactly one objective.
 ## "team" is the side's name in its theatre, "Allies"/"Germany" in Normandy (or 0/1), "facing" one of N, NE, E, SE, S, SW, W, NW. Units without a name
-## get one from the battle seed. Roster entries may also be {"role", "name", "rank"}. "mirrored" tells the
-## editor to keep the east half a mirror image of the west half; the file always holds the whole map.
+## get one from the battle seed. Roster entries may also be {"role", "name", "rank"}. The file always holds the
+## whole map; a "mirrored" key left by older versions is ignored.
 
 const FORMAT := "normandy-1944-scenario"
 const VERSION := 1
@@ -58,8 +58,6 @@ var title := "Untitled scenario"
 var briefing := ""
 var vp_to_win := 12
 var max_rounds := 20
-## Whether the editor mirrors edits from one half onto the other.
-var mirrored := true
 var map: TacticalMap
 ## Each: {"name": String, "center": Vector2 (grid), "radius": float}.
 var objectives: Array[Dictionary] = []
@@ -114,7 +112,7 @@ func build_battle(seed := 0) -> Battle:
 		if spawns.is_empty():
 			spawns = [_default_spawn(wave["team"])]
 		waves.append({"round": wave["round"], "team": wave["team"], "roster": wave["roster"].duplicate(true), "spawns": spawns.duplicate()})
-	var layout := {"map": copy_map(map), "objectives": objectives.duplicate(true), "spawns": [], "reinforcement_spawns": []}
+	var layout := {"map": copy_map(map), "objectives": objectives.duplicate(true), "spawns": [[], []], "reinforcement_spawns": [[], []]}
 	var options := {"theatre": theatre_id, "vp_to_win": vp_to_win, "max_rounds": max_rounds, "reinforcements": waves}
 	options.merge(theatre().battle_options())
 	options["mission"] = battle_mission(layout["map"])
@@ -194,7 +192,6 @@ static func from_battle(battle: Battle, p_title := "", keep_names := true) -> Sc
 			roster.append({"role": u.role, "name": u.name, "rank": u.rank} if keep_names else (u.role if u.rank == 0 else {"role": u.role, "rank": u.rank}))
 			spawns.append(u.pos)
 		s.reinforcements.append({"round": wave["round"], "team": wave["team"], "roster": roster, "spawns": spawns})
-	s.mirrored = s.is_symmetric()
 	return s
 
 
@@ -229,91 +226,27 @@ static func _sorted_edges(source: TacticalMap) -> Array[Vector3i]:
 	return keys
 
 
-# --- Mirroring ---
+# --- Swapping sides ---
 
-func mirror_tile(p: Vector2i) -> Vector2i:
+## The tile across the map from p, east for west.
+func _flip_tile(p: Vector2i) -> Vector2i:
 	return Vector2i(map.width - 1 - p.x, p.y)
 
 
-func mirror_point(g: Vector2) -> Vector2:
+func _flip_point(g: Vector2) -> Vector2:
 	return Vector2(map.width - g.x, g.y)
 
 
-## -1 west of the centre line, 0 on it, 1 east of it.
-func half_of(p: Vector2i) -> int:
-	return signi(2 * p.x - (map.width - 1))
-
-
-func _edge_half(key: Vector3i) -> int:
-	var pair := TacticalMap.edge_tiles(key)
-	return signi(pair[0].x + pair[1].x - (map.width - 1))
-
-
-## Whether the map's east half is the mirror image of its west half.
-func is_symmetric() -> bool:
-	for y in map.height:
-		for x in map.width / 2:
-			var p := Vector2i(x, y)
-			var m := mirror_tile(p)
-			if map.get_terrain(p) != map.get_terrain(m) or map.get_object(p) != map.get_object(m) or map.get_object_kind(p) != map.get_object_kind(m) \
-					or map.has_mine(p) != map.has_mine(m):
-				return false
-	for key: Vector3i in map.get_edges():
-		var pair := TacticalMap.edge_tiles(key)
-		var a := mirror_tile(pair[0])
-		var b := mirror_tile(pair[1])
-		if map.get_edge(a, b) != map.get_edges()[key] or map.get_edge_kind(a, b) != map.edge_kind(key):
-			return false
-	return true
-
-
-## Rebuilds the east half as the mirror image of the west half: ground, cover, objectives east of the
-## centre line, German units (mirrored Allied ones) and German reinforcement waves.
-func mirror_west_to_east() -> void:
-	for y in map.height:
-		for x in map.width:
-			var p := Vector2i(x, y)
-			if half_of(p) < 0:
-				var m := mirror_tile(p)
-				map.set_terrain(m, map.get_terrain(p))
-				map.set_object(m, map.get_object(p), map.get_object_kind(p) if map.get_object(p) != Cover.NONE else "")
-				map.set_mine(m, map.has_mine(p), map.get_mine_kind(p))
-	for key: Vector3i in map.get_edges().keys():
-		if _edge_half(key) > 0:
-			var pair := TacticalMap.edge_tiles(key)
-			map.set_edge(pair[0], pair[1], Cover.NONE)
-	for key in _sorted_edges(map):
-		if _edge_half(key) < 0:
-			var pair := TacticalMap.edge_tiles(key)
-			map.set_edge(mirror_tile(pair[0]), mirror_tile(pair[1]), map.get_edges()[key], map.edge_kind(key))
-	var kept: Array[Dictionary] = []
-	for objective in objectives:
-		var x: float = objective["center"].x
-		if x <= map.width * 0.5 + 0.01:
-			kept.append(objective)
-			if x < map.width * 0.5 - 0.01:
-				kept.append({"name": objective["name"] + " (east)", "center": mirror_point(objective["center"]), "radius": objective["radius"]})
-	objectives = kept
-	var allied := units.filter(func(u: Dictionary) -> bool: return u["team"] == 0)
-	units.assign(allied)
-	for u: Dictionary in allied:
-		units.append(mirrored_unit(u))
-	var waves := reinforcements.filter(func(w: Dictionary) -> bool: return w["team"] == 0)
-	reinforcements.assign(waves)
-	for wave: Dictionary in waves:
-		reinforcements.append(_mirrored_wave(wave))
-
-
-## The other side's counterpart of a unit, on the mirror tile and facing the other way. Names aren't copied.
-func mirrored_unit(u: Dictionary) -> Dictionary:
+## A unit moved across to the flipped map and handed to the other side, facing the other way.
+func _flipped_unit(u: Dictionary) -> Dictionary:
 	var facing: Vector2i = u["facing"]
-	return unit_entry(1 - u["team"], u["role"], mirror_tile(u["pos"]), Vector2i(-facing.x, facing.y), "", u["rank"])
+	return unit_entry(1 - u["team"], u["role"], _flip_tile(u["pos"]), Vector2i(-facing.x, facing.y), u["name"], u["rank"])
 
 
-func _mirrored_wave(wave: Dictionary) -> Dictionary:
+func _flipped_wave(wave: Dictionary) -> Dictionary:
 	var spawns: Array[Vector2i] = []
 	for p: Vector2i in wave["spawns"]:
-		spawns.append(mirror_tile(p))
+		spawns.append(_flip_tile(p))
 	var roster: Array = wave["roster"].map(func(e: Variant) -> Variant: return e["role"] if e is Dictionary and e.get("rank", 0) == 0 else e)
 	return {"round": wave["round"], "team": 1 - wave["team"], "roster": roster, "spawns": spawns}
 
@@ -327,36 +260,38 @@ func swapped() -> Scenario:
 	s.briefing = briefing
 	s.vp_to_win = vp_to_win
 	s.max_rounds = max_rounds
-	s.mirrored = mirrored
+	s.theatre_id = theatre_id
 	s.map = TacticalMap.new(map.width, map.height)
 	for y in map.height:
 		for x in map.width:
 			var p := Vector2i(x, y)
-			var m := mirror_tile(p)
+			var m := _flip_tile(p)
 			s.map.set_terrain(m, map.get_terrain(p))
 			if map.get_object(p) != Cover.NONE:
 				s.map.set_object(m, map.get_object(p), map.get_object_kind(p))
+			if map.has_mine(p):
+				s.map.set_mine(m, true, map.get_mine_kind(p))
+			if map.tunnel_owner(p) != -1:
+				s.map.set_tunnel(m, 1 - map.tunnel_owner(p))
 	for key in _sorted_edges(map):
 		var pair := TacticalMap.edge_tiles(key)
-		s.map.set_edge(mirror_tile(pair[0]), mirror_tile(pair[1]), map.get_edges()[key], map.edge_kind(key))
+		s.map.set_edge(_flip_tile(pair[0]), _flip_tile(pair[1]), map.get_edges()[key], map.edge_kind(key))
 	for objective in objectives:
-		s.objectives.append({"name": objective["name"], "center": mirror_point(objective["center"]), "radius": objective["radius"]})
+		s.objectives.append({"name": objective["name"], "center": _flip_point(objective["center"]), "radius": objective["radius"]})
 	for team in 2:
 		for u in units:
 			if u["team"] == 1 - team:
-				var m := mirrored_unit(u)
-				m["name"] = u["name"]
-				s.units.append(m)
+				s.units.append(_flipped_unit(u))
 	for wave in reinforcements:
-		s.reinforcements.append(_mirrored_wave(wave))
+		s.reinforcements.append(_flipped_wave(wave))
 	# The forces change sides, and so does the mission.
 	if not mission.is_empty():
 		s.mission = mission.duplicate(true)
 		s.mission["attacker"] = 1 - int(mission.get("attacker", 0))
 		if mission.has("zone"):
-			s.mission["zone"]["center"] = mirror_point(mission["zone"]["center"])
+			s.mission["zone"]["center"] = _flip_point(mission["zone"]["center"])
 		if mission.has("targets"):
-			s.mission["targets"] = mission["targets"].map(func(t: Dictionary) -> Dictionary: return {"name": t["name"], "tile": mirror_tile(t["tile"])})
+			s.mission["targets"] = mission["targets"].map(func(t: Dictionary) -> Dictionary: return {"name": t["name"], "tile": _flip_tile(t["tile"])})
 	return s
 
 
@@ -498,7 +433,7 @@ func to_data() -> Dictionary:
 	var data := {
 		"format": FORMAT, "version": VERSION,
 		"title": title, "briefing": briefing,
-		"vp_to_win": vp_to_win, "max_rounds": max_rounds, "mirrored": mirrored,
+		"vp_to_win": vp_to_win, "max_rounds": max_rounds,
 		"map": map_data,
 		"objectives": objectives.map(func(o: Dictionary) -> Dictionary: return {"name": o["name"], "center": _pair(o["center"]), "radius": _number(o["radius"])}),
 		"units": unit_data,
@@ -544,7 +479,6 @@ static func from_data(data: Variant) -> Scenario:
 	s.briefing = str(data.get("briefing", ""))
 	s.vp_to_win = int(data.get("vp_to_win", s.vp_to_win))
 	s.max_rounds = int(data.get("max_rounds", s.max_rounds))
-	s.mirrored = bool(data.get("mirrored", false))
 	var chars := TERRAIN_CHARS
 	if m.get("legend") is Dictionary:
 		# A custom legend maps characters to terrain names.

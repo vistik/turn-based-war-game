@@ -267,8 +267,8 @@ static func summarize(results: Array) -> Dictionary:
 	}
 
 
-## Whether every swapped game played out exactly like the original of the same seed. Happens when the map
-## and both forces are mirror images: the engine and AI are mirror-symmetric, so the swap changes nothing.
+## Whether every swapped game played out exactly like the original of the same seed. Happens only when the
+## map and both forces are mirror images (the engine and AI are mirror-symmetric); the game's own maps never are.
 static func _swaps_identical(results: Array) -> bool:
 	var normal := {}
 	for r: Dictionary in results:
@@ -310,7 +310,7 @@ static func format_summary(s: Dictionary) -> String:
 	lines.append("First mover (the %s, or a mission's attacker): took %s of decided games (95%% CI %s). 50%% = no edge." % [
 			a, pct.call(s["first_mover_share"]), ci.call(s["first_mover_ci"])])
 	if s["swapped"] and s["swap_identical"]:
-		lines.append("Start side: every swapped game played out exactly like the original. Map and forces are mirror images, so the start side makes no difference; only the first move does.")
+		lines.append("Start side: every swapped game played out exactly like the original. This map and the forces are mirror images, so the start side makes no difference; only the first move does.")
 	elif s["swapped"]:
 		lines.append("Start side: the west start won %d of %d decided games, %s (95%% CI %s)." % [
 				s["west_wins"], s["decided"], pct.call(float(s["west_wins"]) / maxf(1.0, s["decided"])), ci.call(s["west_ci"])])

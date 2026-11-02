@@ -160,12 +160,16 @@ static func _vc_roles() -> Dictionary:
 	}
 
 
-func generate_map(seed: int, size: Vector2i) -> Dictionary:
-	return VietnamMapGenerator.generate(seed, size)
+func generate_map(seed: int, size: Vector2i, style := "") -> Dictionary:
+	return VietnamMapGenerator.generate(seed, size, style)
+
+
+func map_styles() -> Array:
+	return VietnamMapGenerator.STYLES
 
 
 func is_playable(layout: Dictionary) -> bool:
-	return MapGenerator.is_playable(layout)
+	return NaturalMap.is_playable(layout)
 
 
 ## More Viet Cong than Americans, and more of them the bigger the map. The Americans get men flown in.

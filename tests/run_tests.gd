@@ -42,19 +42,37 @@ func events_of(events: Array, type: String) -> Array:
 
 # --- Map and scenario ---
 
-func test_normandy_map_is_symmetric_and_connected() -> void:
-	var battle := NormandyScenario.build()
-	var map := battle.map
+## How many tiles differ from the tile across the map (east for west): 0 for a mirrored map.
+func mirror_mismatches(map: TacticalMap) -> int:
 	var mismatches := 0
 	for y in map.height:
-		for x in map.width:
+		for x in map.width / 2:
 			var p := Vector2i(x, y)
 			var m := Vector2i(map.width - 1 - x, y)
 			if map.get_terrain(p) != map.get_terrain(m) or map.get_object(p) != map.get_object(m) \
-					or map.get_edge(p, p + Vector2i(1, 0)) != map.get_edge(m, m + Vector2i(-1, 0)) \
 					or map.get_edge(p, p + Vector2i(0, 1)) != map.get_edge(m, m + Vector2i(0, 1)):
 				mismatches += 1
-	check_eq(mismatches, 0, "map mirrors left to right")
+	return mismatches
+
+
+## How much further one side walks to the objectives in all than the other, as a share of both walks:
+## 0 is even, 1 is all on one side.
+func walk_imbalance(layout: Dictionary) -> float:
+	var map: TacticalMap = layout["map"]
+	var totals := [0.0, 0.0]
+	for team in 2:
+		var reach := Pathfinder.search(map, layout["spawns"][team][0], 100000.0)
+		for objective: Dictionary in layout["objectives"]:
+			totals[team] += reach[Vector2i(objective["center"])]["cost"] if reach.has(Vector2i(objective["center"])) else 1000.0
+	return absf(totals[0] - totals[1]) / (totals[0] + totals[1])
+
+
+func test_normandy_village_is_lopsided_fair_and_connected() -> void:
+	var battle := NormandyScenario.build()
+	var map := battle.map
+	check(mirror_mismatches(map) > 100, "the village is not a mirror image (%d tiles differ)" % mirror_mismatches(map))
+	var imbalance := walk_imbalance(NormandyScenario.layout())
+	check(imbalance < 0.12, "but both sides walk about as far to the objectives (%.2f)" % imbalance)
 	check_eq(battle.alive_units(0).size(), 8, "allied squad")
 	check_eq(battle.alive_units(1).size(), 8, "german squad")
 	check_eq(battle.objectives.size(), 3, "three objectives")
@@ -75,7 +93,6 @@ func make_scenario() -> Scenario:
 	s.briefing = "Hold the barn.\nNo retreat."
 	s.vp_to_win = 7
 	s.max_rounds = 9
-	s.mirrored = false
 	s.map.set_terrain(Vector2i(2, 3), TacticalMap.Terrain.WHEAT)
 	s.map.set_terrain(Vector2i(5, 5), TacticalMap.Terrain.ROAD)
 	s.map.set_terrain(Vector2i(6, 1), TacticalMap.Terrain.INDOOR)
@@ -150,7 +167,6 @@ func test_scenario_round_trip() -> void:
 	check(same_map(rebuilt.map, original.map), "exported map matches the battle's")
 	check_eq(unit_rows(rebuilt), unit_rows(original), "exported units match the battle's")
 	check_eq(rebuilt.objectives, original.objectives, "exported objectives match")
-	check(exported.mirrored, "a generated map is recognised as mirrored")
 	check(exported.validate().is_empty(), "an exported generated map is valid: %s" % exported.validate())
 
 	# Swapping the sides twice gives back the original.
@@ -161,27 +177,12 @@ func test_scenario_round_trip() -> void:
 	check_eq(swapped.units[0]["team"], 0, "the German force now plays for the Allies")
 	check_eq(swapped.units[0]["pos"], Vector2i(1, 4), "from the other side of the map")
 
-	# Building half a map and mirroring it.
-	var half := Scenario.create(10, 8)
-	half.map.set_object(Vector2i(2, 2), Cover.FULL, "rock")
-	half.map.set_edge(Vector2i(3, 5), Vector2i(4, 5), Cover.HALF, "stone")
-	half.map.set_edge(Vector2i(4, 1), Vector2i(5, 1), Cover.FULL, "wall")
-	half.map.set_object(Vector2i(8, 7), Cover.HALF, "crate")
-	half.objectives.append({"name": "Mill", "center": Vector2(5, 4), "radius": 2.0})
-	half.objectives.append({"name": "Copse", "center": Vector2(2, 6), "radius": 1.5})
-	half.units.append(Scenario.unit_entry(0, "Rifleman", Vector2i(1, 3)))
-	half.units.append(Scenario.unit_entry(1, "SMG", Vector2i(8, 3)))
-	check(not half.is_symmetric(), "a half-built map isn't symmetric")
-	half.mirror_west_to_east()
-	check(half.is_symmetric(), "mirroring the west half makes it symmetric")
-	check_eq(half.map.get_object(Vector2i(7, 2)), Cover.FULL, "objects are mirrored")
-	check_eq(half.map.get_object(Vector2i(8, 7)), Cover.NONE, "the east half is replaced")
-	check_eq(half.map.get_edge(Vector2i(5, 5), Vector2i(6, 5)), Cover.HALF, "walls are mirrored")
-	check_eq(half.map.get_edge(Vector2i(4, 1), Vector2i(5, 1)), Cover.FULL, "a wall on the centre line stays")
-	check_eq(half.objectives.size(), 3, "objectives off the centre line are mirrored")
-	check_eq(half.units.size(), 2, "the Allied units are mirrored for Germany")
-	check_eq(half.units[1]["pos"], Vector2i(8, 3), "onto the mirror tile")
-	check_eq(half.units[1]["facing"], Vector2i(-1, 0), "facing west")
+	s.map.set_mine(Vector2i(3, 7), true)
+	check(s.swapped().map.has_mine(Vector2i(8, 7)), "swapping sides takes the mines across too")
+	check(not Scenario.from_data(s.to_data()).to_data().has("mirrored"), "scenario files no longer keep a mirror flag")
+	var old := s.to_data()
+	old["mirrored"] = true
+	check(Scenario.from_data(old) != null, "an old file with the mirror flag still loads")
 	check(Scenario.from_data({"map": {"width": 2}}) == null, "a bad file is refused")
 
 
@@ -191,7 +192,6 @@ func test_village_scenario_builds_the_village() -> void:
 	if scenario == null:
 		return
 	check(scenario.validate().is_empty(), "village scenario is valid: %s" % scenario.validate())
-	check(scenario.is_symmetric(), "village scenario is mirrored")
 	var battle := scenario.build_battle(7)
 	var village := NormandyScenario.build(7)
 	check(same_map(battle.map, village.map), "same map as the hand-built village")
@@ -730,13 +730,22 @@ func test_ai_prefers_cover_facing_the_enemy() -> void:
 	check(covered > behind + 10.0, "cover on the far side counts less (%.1f vs %.1f)" % [covered, behind])
 
 
+func test_skirmish_plays_the_previewed_map() -> void:
+	for theatre in Theatres.all():
+		var style: String = theatre.map_styles()[1]["id"]
+		var preview := theatre.generate_map(555, Vector2i(44, 44), style)
+		var built: Array = GameSession.build_skirmish({"theatre": theatre.id, "map": "random", "size": 44, "style": style, "seed": 555})
+		check(same_map(built[0].map, preview["map"]), "%s: the skirmish is fought on the map the menu showed" % theatre.id)
+		check(built[1].begins_with(theatre.map_styles()[1]["title"]), "%s: and is named for its kind (%s)" % [theatre.id, built[1]])
+
+
 func test_big_skirmish_maps() -> void:
 	for size in [64, 84]:
 		var built := GameSession.build_skirmish({"map": "random", "size": size, "seed": 4242})
 		var battle: Battle = built[0]
 		check_eq(battle.map.width, size, "map is %d wide" % size)
 		check(battle.units.size() >= (12 if size == 64 else 15) * 2, "bigger forces on %dx%d" % [size, size])
-		var layout := MapGenerator.generate(4242, Vector2i(size, size))
+		var layout := MapGenerator.generate(4242, Vector2i(size, size), "bocage")
 		check(MapGenerator.is_playable(layout), "%dx%d map is playable" % [size, size])
 		var walls := 0
 		for key: Vector3i in layout["map"].get_edges():
@@ -1102,24 +1111,28 @@ func test_saved_battles_keep_their_replay() -> void:
 
 # --- Map generator ---
 
-func test_generated_maps_are_fair_and_connected() -> void:
-	for seed in [1, 2, 3, 4, 5, 77, 1234]:
-		for size in [Vector2i(36, 36), Vector2i(46, 46)]:
-			var layout := MapGenerator.generate(seed, size)
-			var map: TacticalMap = layout["map"]
-			check(MapGenerator.is_playable(layout), "seed %d %s is connected" % [seed, size])
-			var mismatches := 0
-			for y in map.height:
-				for x in map.width:
-					var p := Vector2i(x, y)
-					var m := Vector2i(map.width - 1 - x, y)
-					if map.get_terrain(p) != map.get_terrain(m) or map.get_object(p) != map.get_object(m) \
-							or map.get_edge(p, p + Vector2i(0, 1)) != map.get_edge(m, m + Vector2i(0, 1)):
-						mismatches += 1
-			check_eq(mismatches, 0, "seed %d %s is mirrored" % [seed, size])
+func test_generated_maps_are_lopsided_but_fair_and_connected() -> void:
+	for theatre in Theatres.all():
+		for style: Dictionary in theatre.map_styles():
+			for seed in [1, 2, 77]:
+				for size in [Vector2i(36, 36), Vector2i(46, 46)]:
+					var layout := theatre.generate_map(seed, size, style["id"])
+					var what := "%s %s seed %d %s" % [theatre.id, style["id"], seed, size]
+					check_eq(layout["style"], style["id"], what + ": the style asked for")
+					check(theatre.is_playable(layout), what + " is connected")
+					check_eq(layout["objectives"].size(), 3, what + ": three objectives")
+					check(mirror_mismatches(layout["map"]) > size.x * 4, what + " is no mirror image")
+					var imbalance := walk_imbalance(layout)
+					check(imbalance < 0.2, what + ": both sides walk about as far to the objectives (%.2f)" % imbalance)
+					check(layout["spawns"][0].all(func(p: Vector2i) -> bool: return p.x < 4) and layout["spawns"][1].all(func(p: Vector2i) -> bool: return p.x >= size.x - 4),
+							what + ": each side starts on its own edge")
 	var a: Dictionary = MapGenerator.generate(9, Vector2i(40, 40))["map"].to_dict()
 	var b: Dictionary = MapGenerator.generate(9, Vector2i(40, 40))["map"].to_dict()
 	check_eq(a, b, "same seed, same map")
+	var styles := {}
+	for seed in 8:
+		styles[MapGenerator.generate(seed, Vector2i(40, 40))["style"]] = true
+	check_eq(styles.size(), MapGenerator.STYLES.size(), "with no style asked for, the seed picks among them all")
 
 
 # --- Campaign ---

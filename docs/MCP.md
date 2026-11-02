@@ -24,7 +24,7 @@ right targeting mode on), or press **Accept**. **Esc** or **Dismiss** clears it,
 
 The suggestions come from `AdvisorAI`, a `TacticalAI` with its own memory (separate from any AI opponent). It plays
 fair: it only knows what your side can see, plus where it last saw enemies. Unlike the opponent AI, it guesses where
-the enemy started from the mirrored map, not from their real positions, so asking mid-battle gives nothing away.
+the enemy started across the map from its own side, not from their real positions, so asking mid-battle gives nothing away.
 The reasons are read from the AI's own scoring (cover against known enemies, danger, kill chance, follow-up shot),
 without changing what it picks.
 

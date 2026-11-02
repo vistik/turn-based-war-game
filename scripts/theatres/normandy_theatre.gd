@@ -160,12 +160,16 @@ static func _roles(side: int) -> Dictionary:
 	}
 
 
-func generate_map(seed: int, size: Vector2i) -> Dictionary:
-	return MapGenerator.generate(seed, size)
+func generate_map(seed: int, size: Vector2i, style := "") -> Dictionary:
+	return MapGenerator.generate(seed, size, style)
+
+
+func map_styles() -> Array:
+	return MapGenerator.STYLES
 
 
 func is_playable(layout: Dictionary) -> bool:
-	return MapGenerator.is_playable(layout)
+	return NaturalMap.is_playable(layout)
 
 
 func village_layout() -> Dictionary:

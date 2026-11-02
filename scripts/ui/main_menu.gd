@@ -5,8 +5,8 @@ extends Control
 const MUTED := UITheme.PAPER_DIM
 const BAD := Color("ff7a6a")
 const GOOD := Color("8fe08a")
-## [label, size] of random maps. They are generated fresh each game; bigger ones bring bigger forces.
-const RANDOM_MAPS := [["standard", 44], ["large", 64], ["huge", 84]]
+## [label, size] of random maps; bigger ones bring bigger forces.
+const RANDOM_MAPS := [["Standard", 44], ["Large", 64], ["Huge", 84]]
 ## [label, flank, posture] for a skirmish side's deployment; "" flank keeps the map's usual spawns.
 const DEPLOYMENTS := [
 	["Usual spawns", "", ""],
@@ -32,8 +32,11 @@ static var _theatre_id := Theatres.DEFAULT
 
 var _page: Control
 var _map_choice: OptionButton
-## [label, setup "map", size] for the built-in maps in the map choice; scenario files are listed after them.
+## [label, setup "map", style] for the built-in maps in the map choice; scenario files are listed after them.
 var _builtin_maps: Array = []
+var _size_choice: OptionButton
+var _map_preview: MapPreview
+var _map_info: Label
 var _scenario_paths: Array[String] = []
 var _recruit_choice: OptionButton
 ## Per side, the skirmish deployment picked (an index into DEPLOYMENTS), kept while the game runs.
@@ -46,6 +49,9 @@ static var _last_attacker := 0
 static var _last_vip_known := false
 ## The map, skirmish mode and online port picked last, kept while the game runs.
 static var _last_map := 0
+static var _last_size := 0
+## The seed of the random map on show in the preview: the one a skirmish or online game started now is played on.
+static var _map_seed := randi() % 1000000000 + 1
 static var _last_mode := 0
 static var _last_port := Net.DEFAULT_PORT
 ## The orders being written on the two-player campaign's orders page.
@@ -193,15 +199,17 @@ func _show_campaign_menu() -> void:
 	_button(box, "Back", _show_main)
 
 
-## The map list: the theatre's hand-made map (if it has one) and random maps, then its scenarios on disk.
-func _add_map_choice(parent: Control) -> void:
+## The map picker: which map (the theatre's hand-made map, a kind of random map, or a scenario on disk), how
+## big, and a minimap of the very map that will be played, with a button for another one like it.
+func _add_map_choice(box: Control) -> void:
 	var theatre := _theatre()
 	_map_choice = OptionButton.new()
 	_builtin_maps.clear()
 	if not theatre.village_layout().is_empty():
-		_builtin_maps.append(["%s (48x48, %s)" % [theatre.village_title(), _force_size(theatre.village_forces())], "village", 48])
-	for spec: Array in RANDOM_MAPS:
-		_builtin_maps.append(["Random map, %s (%dx%d, %s)" % [spec[0], spec[1], spec[1], _force_size(theatre.skirmish_forces(spec[1]))], "random", spec[1]])
+		_builtin_maps.append(["%s (48x48, %s)" % [theatre.village_title(), _force_size(theatre.village_forces())], "village", ""])
+	for style: Dictionary in theatre.map_styles():
+		_builtin_maps.append(["Random: " + style["title"], "random", style["id"]])
+	_builtin_maps.append(["Random: any kind", "random", ""])
 	for map_spec: Array in _builtin_maps:
 		_map_choice.add_item(map_spec[0])
 	_scenario_paths.clear()
@@ -211,10 +219,81 @@ func _add_map_choice(parent: Control) -> void:
 		_map_choice.add_item("Scenario: %s" % entry["title"])
 		_scenario_paths.append(entry["path"])
 	_map_choice.selected = clampi(_last_map, 0, _map_choice.item_count - 1)
-	_map_choice.item_selected.connect(func(index: int) -> void: _last_map = index)
+	_map_choice.item_selected.connect(func(index: int) -> void:
+		_last_map = index
+		_refresh_map_preview())
 	_map_choice.custom_minimum_size = Vector2(0, 40)
-	_map_choice.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	parent.add_child(_map_choice)
+	_field(box, "Map", _map_choice)
+
+	_size_choice = OptionButton.new()
+	for spec: Array in RANDOM_MAPS:
+		_size_choice.add_item("%s, %dx%d (%s)" % [spec[0], spec[1], spec[1], _force_size(theatre.skirmish_forces(spec[1]))])
+	_size_choice.selected = _last_size
+	_size_choice.item_selected.connect(func(index: int) -> void:
+		_last_size = index
+		_refresh_map_preview())
+	_field(box, "Size", _size_choice)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	box.add_child(row)
+	_map_preview = MapPreview.new()
+	_map_preview.custom_minimum_size = Vector2(230, 230)
+	row.add_child(_map_preview)
+	var side := VBoxContainer.new()
+	side.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	side.add_theme_constant_override("separation", 8)
+	row.add_child(side)
+	_map_info = _text(side, "", MUTED, 13, true)
+	_map_info.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_button(side, "Another map", func() -> void:
+		_map_seed = randi() % 1000000000 + 1
+		_refresh_map_preview())
+	_refresh_map_preview()
+
+
+## The chosen built-in map's [label, "village"/"random", style], or [] for a scenario file.
+func _chosen_builtin() -> Array:
+	var index := maxi(0, _map_choice.selected)
+	return _builtin_maps[index] if index < _builtin_maps.size() else []
+
+
+## Redraws the minimap and its notes for the map as chosen.
+func _refresh_map_preview() -> void:
+	if _map_preview == null or not is_instance_valid(_map_preview):
+		return
+	var theatre := _theatre()
+	var spec := _chosen_builtin()
+	var random: bool = not spec.is_empty() and spec[1] == "random"
+	_size_choice.disabled = not random
+	var layout := {}
+	var lines := PackedStringArray()
+	if spec.is_empty():
+		var scenario := Scenario.load_file(_scenario_paths[_map_choice.selected - _builtin_maps.size()])
+		if scenario == null:
+			_map_info.text = Scenario.last_error
+			_map_preview.texture = null
+			return
+		var spawns := [[], []]
+		for u: Dictionary in scenario.units:
+			spawns[u["team"]].append(u["pos"])
+		layout = {"map": scenario.map, "objectives": scenario.objectives, "spawns": spawns}
+		lines.append("%s, %dx%d. Its units and rules are set by the scenario." % [scenario.title, scenario.map.width, scenario.map.height])
+	elif spec[1] == "village":
+		layout = theatre.village_layout()
+		lines.append("The hand-made map, the same every time.")
+	else:
+		var size: int = RANDOM_MAPS[_size_choice.selected][1]
+		layout = theatre.generate_map(_map_seed, Vector2i(size, size), spec[2])
+		for style: Dictionary in theatre.map_styles():
+			if style["id"] == layout.get("style", ""):
+				lines.append("%s: %s" % [style["title"], style["blurb"]])
+		lines.append("Map #%d." % (_map_seed % 10000))
+	var names: Array = layout["objectives"].map(func(o: Dictionary) -> String: return o["name"])
+	lines.append("Objectives (yellow): %s." % ", ".join(names))
+	lines.append("%s start in blue on the west edge, %s in red on the east." % [theatre.team_name(0), theatre.team_name(1)])
+	_map_info.text = "\n".join(lines)
+	_map_preview.show_layout(layout, theatre.id)
 
 
 ## A label and a control side by side.
@@ -276,9 +355,7 @@ func _chosen_mission() -> Dictionary:
 func _show_skirmish() -> void:
 	var box := _new_page(520)
 	_title(box, "Skirmish", 40)
-	var map_row := HBoxContainer.new()
-	_add_map_choice(map_row)
-	_field(box, "Map", map_row)
+	_add_map_choice(box)
 	_add_mission_choice(box)
 	var opponent := OptionButton.new()
 	for mode: Array in SKIRMISH_MODES:
@@ -356,9 +433,7 @@ func _show_online() -> void:
 
 	_section(box, "Host a new game")
 	_text(box, "You play the %s on the map you pick (%s; switch on the first page)." % [_theatre().team_name(0), _theatre().title], MUTED, 14, true)
-	var map_row := HBoxContainer.new()
-	_add_map_choice(map_row)
-	_field(box, "Map", map_row)
+	_add_map_choice(box)
 	_add_mission_choice(box)
 	_button(box, "Host game", _host, online_save.is_empty())
 
@@ -409,7 +484,10 @@ func _skirmish_setup() -> Dictionary:
 			return {"map": "scenario", "scenario": scenario.to_data(), "seed": randi() % 1000000000 + 1}
 		push_warning(Scenario.last_error)
 	var spec: Array = _builtin_maps[maxi(0, _map_choice.selected) if index < 0 else 0]
-	var setup := {"theatre": _theatre_id, "map": spec[1], "size": spec[2], "seed": randi() % 1000000000 + 1, "deployment": _chosen_deployments()}
+	var setup := {"theatre": _theatre_id, "map": spec[1], "size": RANDOM_MAPS[_size_choice.selected][1], "style": spec[2],
+			"seed": _map_seed if spec[1] == "random" else randi() % 1000000000 + 1, "deployment": _chosen_deployments()}
+	# The next game gets a fresh map unless this one is picked again from the preview.
+	_map_seed = randi() % 1000000000 + 1
 	var mission := _chosen_mission()
 	if not mission.is_empty():
 		setup["mission"] = mission

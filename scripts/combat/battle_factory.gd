@@ -2,11 +2,11 @@ class_name BattleFactory
 extends RefCounted
 ## Builds a Battle from a map layout and the two sides' rosters.
 ##
-## A layout is {"map": TacticalMap, "objectives": Array, "spawns": Array[Vector2i] (Allied, west),
-## "reinforcement_spawns": Array[Vector2i]}; German positions are the mirror image.
+## A layout is {"map": TacticalMap, "objectives": Array, "spawns": [team 0 tiles (west), team 1 tiles (east)],
+## "reinforcement_spawns": [team 0 tiles, team 1 tiles]}: each side starts on its own tiles, nothing mirrored.
 ## A roster entry is a role name, or {"role", "name", "rank", "record_id"} for campaign soldiers.
-## Scenarios add "pos" (an exact start tile), "facing" and "stance" to entries, and "spawns" (exact tiles, not
-## mirrored) to reinforcement waves.
+## Scenarios add "pos" (an exact start tile), "facing" and "stance" to entries, and "spawns" (exact tiles) to
+## reinforcement waves.
 
 ## options: theatre (an id, Normandy if left out), mission (see Mission; "vip_team" names whose VIP unit it is), vp_to_win, max_rounds, kill_points and objective_points
 ## ([team 0, team 1], see Battle), points_scale (multiplies vp_to_win), reinforcements: [{"round", "team", "roster", "air"?, "tunnels"?}]. A wave that is "air"
@@ -31,8 +31,8 @@ static func create(layout: Dictionary, rosters: Array, seed := 0, options := {})
 			if roster[i] is Dictionary and roster[i].has("pos"):
 				pos = roster[i]["pos"]
 			else:
-				var spawn: Vector2i = layout["spawns"][i % layout["spawns"].size()]
-				pos = _free_tile(map, _side(map, spawn, team), taken)
+				var spawns: Array = layout["spawns"][team]
+				pos = _free_tile(map, spawns[i % spawns.size()], taken)
 			units.append(_make_unit(units.size(), roster[i], team, pos, names, theatre_id))
 	var battle := Battle.new(map, units, seed)
 	battle.theatre_id = theatre_id
@@ -56,17 +56,14 @@ static func create(layout: Dictionary, rosters: Array, seed := 0, options := {})
 	for wave: Dictionary in options.get("reinforcements", []):
 		var team: int = wave["team"]
 		var wave_units: Array[Unit] = []
-		var spawns: Array = wave.get("spawns", layout["reinforcement_spawns"])
-		# Exact tiles (not mirrored for the second side): scenario spawns, a landing zone, tunnel entrances.
-		var exact: bool = wave.has("spawns")
+		# The wave's own tiles (scenarios), else a landing zone or tunnel entrances, else the side's usual ones.
+		var spawns: Array = wave.get("spawns", layout["reinforcement_spawns"][team])
 		if wave.get("air", false) and layout.has("landing_zones"):
 			spawns = [layout["landing_zones"][team]]
-			exact = true
 		elif wave.get("tunnels", false) and not layout.get("tunnels", [[], []])[team].is_empty():
 			spawns = layout["tunnels"][team]
-			exact = true
 		for i in wave["roster"].size():
-			var pos: Vector2i = spawns[i % spawns.size()] if exact else _side(map, spawns[i % spawns.size()], team)
+			var pos: Vector2i = spawns[i % spawns.size()]
 			wave_units.append(_make_unit(next_id, wave["roster"][i], team, pos, names, theatre_id))
 			next_id += 1
 		battle.reinforcements.append({"round": wave["round"], "team": team, "units": wave_units, "air": wave.get("air", false)})
@@ -105,10 +102,6 @@ static func _make_unit(id: int, entry: Variant, team: int, pos: Vector2i, names:
 	if spec.has("stance") and not u.vehicle:
 		u.stance = spec["stance"]
 	return u
-
-
-static func _side(map: TacticalMap, p: Vector2i, team: int) -> Vector2i:
-	return p if team == 0 else Vector2i(map.width - 1 - p.x, p.y)
 
 
 static func _free_tile(map: TacticalMap, p: Vector2i, taken: Dictionary) -> Vector2i:

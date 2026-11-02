@@ -35,7 +35,7 @@ func make_mission(specs: Array, mission: Dictionary, objectives := [], max_round
 	var rosters := [[], []]
 	for spec: Array in specs:
 		rosters[spec[1]].append({"role": spec[0], "pos": spec[2]})
-	var layout := {"map": TacticalMap.new(20, 20), "objectives": objectives, "spawns": [Vector2i(1, 10)], "reinforcement_spawns": [Vector2i(0, 10)]}
+	var layout := {"map": TacticalMap.new(20, 20), "objectives": objectives, "spawns": [[Vector2i(1, 10)], [Vector2i(18, 10)]], "reinforcement_spawns": [[Vector2i(0, 10)], [Vector2i(19, 10)]]}
 	var battle := BattleFactory.create(layout, rosters, 77, {"mission": mission, "max_rounds": max_rounds})
 	battle.start()
 	return battle

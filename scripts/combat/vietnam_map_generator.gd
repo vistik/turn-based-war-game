@@ -1,207 +1,224 @@
 class_name VietnamMapGenerator
 extends RefCounted
-## Procedural Vietnam battlefields, 1967. The same seed always gives the same map.
+## Procedural Vietnam battlefields, 1967, built with NaturalMap. The same seed (and style) always gives the
+## same map.
 ##
-## A red dirt trail crosses the map. On the centre line sit three objectives: a hamlet of bamboo huts to the
-## north, the trail crossing in the middle and a landing zone cut out of the jungle to the south. Between the
-## two start areas lie rice paddies divided by low dykes (the only cover in the open), patches of elephant
-## grass, and jungle: thick undergrowth that hides whoever is in it and that sight can't get far through.
-## Generated on the west half and mirrored, like MapGenerator; maps a spawn can't cross are rerolled.
-## Then the Viet Cong (team 1, east) prepare the ground, which is not mirrored: tunnel entrances on their
-## half and close behind the objectives, and punji traps on the approaches the Americans will use.
+## Red dirt trails wind across country of rice paddies divided by low dykes (the only cover in the open),
+## elephant grass and jungle: thick undergrowth that hides whoever is in it and that sight can't get far
+## through. Jungle grows where the ground is wildest, paddies where it is wettest. Three kinds of country:
+## - "paddies": a valley of paddies with a hamlet on the trail and jungle on the high ground.
+## - "jungle": a trail through deep jungle, a hamlet and a few clearings.
+## - "delta": hamlets scattered among paddies and palm groves, little jungle.
+## Then the Viet Cong (team 1, east) prepare the ground: tunnel entrances near their start and just behind
+## each objective on their side, and punji traps on the trails and ground the Americans will cross.
 
-const ATTEMPTS := 10
-## Jungle blobs, paddy fields and grass patches tried on a 40x40 map (scaled with area).
-const JUNGLE_BLOBS := 9
-const PADDY_ATTEMPTS := 40
-const GRASS_PATCHES := 5
+const STYLES := [
+	{"id": "paddies", "title": "Paddy valley", "blurb": "Rice paddies along a trail, a hamlet in the middle, jungle on the high ground."},
+	{"id": "jungle", "title": "Jungle trail", "blurb": "A trail through deep jungle, a hamlet and a few clearings. Short sight lines."},
+	{"id": "delta", "title": "Delta hamlets", "blurb": "Hamlets among paddies and palm groves; open, wet country with little jungle."},
+]
+const HUT_SIZES := [Vector2i(4, 3), Vector2i(4, 4), Vector2i(3, 3)]
 
 
-## Returns a layout for BattleFactory.create.
-static func generate(seed: int, size := Vector2i(44, 44)) -> Dictionary:
-	var layout := {}
-	for attempt in ATTEMPTS:
-		layout = _generate(seed + attempt * 7919, size)
-		if MapGenerator.is_playable(layout):
-			return layout
+## Returns a layout for BattleFactory.create, with "style" set. No style picks one from the seed.
+static func generate(seed: int, size := Vector2i(44, 44), style := "") -> Dictionary:
+	if style == "":
+		style = STYLES[posmod(seed, STYLES.size())]["id"]
+	var layout := NaturalMap.generate(seed, size, func(nm: NaturalMap) -> Dictionary: return _build(nm, style))
+	layout["style"] = style
 	return layout
 
 
-static func _generate(seed: int, size: Vector2i) -> Dictionary:
-	var rng := RandomNumberGenerator.new()
-	rng.seed = seed
-	var b := MapBuilder.new(size.x, size.y)
-	var w := size.x
-	var h := size.y
-	var mid := w / 2
-	var area_scale := float(w * h) / 1600.0
-	## Tiles on the west half that paddies, jungle and clutter must stay off.
-	var reserved := {}
+static func _build(nm: NaturalMap, style: String) -> Dictionary:
+	var scale := float(nm.width * nm.height) / 1600.0
+	var laterite := TacticalMap.Terrain.ROAD
+	# The trail, west to east, each end at its own height; a footpath north to south.
+	var west := Vector2i(0, nm.rng.randi_range(int(nm.height * 0.25), int(nm.height * 0.75)))
+	var east := Vector2i(nm.width - 1, nm.rng.randi_range(int(nm.height * 0.25), int(nm.height * 0.75)))
+	nm.road(nm.meander(west, east, 3, nm.height * 0.15), 2 if style != "jungle" else 1, laterite, 8.0)
+	var north := Vector2i(nm.rng.randi_range(int(nm.width * 0.3), int(nm.width * 0.7)), 0)
+	var south := Vector2i(nm.rng.randi_range(int(nm.width * 0.3), int(nm.width * 0.7)), nm.height - 1)
+	nm.road(nm.meander(north, south, 2, nm.width * 0.15), 1, laterite, 8.0)
+	if not nm.junctions.is_empty():
+		nm.landmark("Trail crossing", nm.junctions[0])
 
-	# The trail: red dirt across the map, and a footpath down the centre line joining the objectives.
-	var trail := rng.randi_range(int(h * 0.4), h - 16)
-	b.terrain(Rect2i(0, trail, w, 2), TacticalMap.Terrain.ROAD, false)
-	MapGenerator._reserve(reserved, Rect2i(0, trail - 1, mid, 4))
-	MapGenerator._reserve(reserved, Rect2i(0, 0, 4, h))
-	MapGenerator._reserve(reserved, Rect2i(mid - 2, 0, 2, h))
+	var hamlets: int = {"paddies": 1, "jungle": 1, "delta": 3}[style] + int(nm.width >= 60)
+	var away: Array = []
+	var names := ["Hamlet", "Village", "Fishing hamlet", "Market hamlet"]
+	for i in hamlets:
+		for spot: Vector2i in MapGenerator._road_spots(nm, away, 11.0):
+			if _hamlet(nm, spot, names[i]):
+				away.append(spot)
+				break
+	_clearing(nm, "Landing zone", Vector2i(7, 6))
+	if style == "jungle":
+		_clearing(nm, "Bunker", Vector2i(5, 5))
+	else:
+		_temple(nm, away)
 
-	# North: the hamlet, bamboo huts round a yard with rice sacks and a few palms.
-	var hamlet := rng.randi_range(2, maxi(2, trail - 13))
-	b.building(Rect2i(mid - 4, hamlet, 4, 4), [[Vector2i(mid - 2, hamlet + 3), MapBuilder.S]],
-			[[Vector2i(mid - 4, hamlet + 1), MapBuilder.W], [Vector2i(mid - 2, hamlet), MapBuilder.N]], [MapBuilder.E], "bamboo")
-	b.building(Rect2i(mid - 9, hamlet + 1, 4, 3), [[Vector2i(mid - 6, hamlet + 2), MapBuilder.E]],
-			[[Vector2i(mid - 8, hamlet + 1), MapBuilder.N], [Vector2i(mid - 9, hamlet + 2), MapBuilder.W]], [], "bamboo")
-	b.building(Rect2i(mid - 8, hamlet + 6, 4, 3), [[Vector2i(mid - 6, hamlet + 6), MapBuilder.N]],
-			[[Vector2i(mid - 8, hamlet + 7), MapBuilder.W], [Vector2i(mid - 5, hamlet + 8), MapBuilder.S]], [], "bamboo")
-	for p in [Vector2i(mid - 3, hamlet + 5), Vector2i(mid - 4, hamlet + 6)]:
-		b.object(p, Cover.HALF, "rice_sacks")
-	for p in [Vector2i(mid - 10, hamlet + 5), Vector2i(mid - 2, hamlet + 8), Vector2i(mid - 5, hamlet - 1)]:
-		if b.map.in_bounds(p) and rng.randf() < 0.85:
-			b.object(p, Cover.FULL, "palm")
-	b.terrain(Rect2i(mid - 1, hamlet + 4, 2, trail - hamlet - 4), TacticalMap.Terrain.ROAD, false)
-	MapGenerator._reserve(reserved, Rect2i(mid - 11, maxi(0, hamlet - 2), 11, 12))
+	match style:
+		"jungle":
+			nm.woods(0.55, TacticalMap.Terrain.JUNGLE, ["tree", "bamboo", "palm"], 0.14)
+			_paddies(nm, 0.55)
+		"delta":
+			nm.woods(0.1, TacticalMap.Terrain.JUNGLE, ["tree", "bamboo"], 0.12)
+			_groves(nm, scale)
+			_paddies(nm, 0.3)
+		_:
+			nm.woods(0.28, TacticalMap.Terrain.JUNGLE, ["tree", "bamboo"], 0.12)
+			_paddies(nm, 0.35)
+	_grass(nm, scale)
 
-	# The trail crossing: a sandbagged checkpoint on the junction.
-	b.object(Vector2i(mid - 3, trail - 1), Cover.HALF, "sandbags")
-	b.object(Vector2i(mid - 3, trail + 2), Cover.HALF, "sandbags")
-	b.object(Vector2i(mid - 5, trail - 2), Cover.HALF, "rice_sacks")
+	# Clutter: bomb craters, palms, termite mounds (rocks), rice sacks and a fuel drum from a supply drop.
+	nm.patches(int(nm.rng.randi_range(3, 6) * scale), TacticalMap.Terrain.CRATER)
+	nm.scatter(int(nm.rng.randi_range(3, 5) * scale), Cover.FULL, ["palm"])
+	nm.scatter(int(nm.rng.randi_range(1, 3) * scale), Cover.FULL, ["rock"])
+	nm.scatter(int(nm.rng.randi_range(1, 2) * scale), Cover.HALF, ["rice_sacks"])
+	nm.scatter(1, Cover.HALF, ["fuel"])
 
-	# South: the landing zone, a clearing of short grass ringed by jungle, with a sandbagged corner.
-	var lz := rng.randi_range(trail + 7, maxi(trail + 7, h - 8))
-	var clearing := Rect2i(mid - 6, lz - 3, 6, 6)
-	MapGenerator._reserve(reserved, clearing.grow(1))
-	b.object(Vector2i(mid - 6, lz - 3), Cover.HALF, "sandbags")
-	b.object(Vector2i(mid - 5, lz + 2), Cover.HALF, "crate")
-	b.terrain(Rect2i(mid - 1, trail + 2, 2, maxi(0, lz - trail - 5)), TacticalMap.Terrain.ROAD, false)
-	# The jungle wall round the clearing, with gaps on the trail side and towards the start.
-	var ring := clearing.grow(2)
-	for y in range(ring.position.y, ring.end.y):
-		for x in range(ring.position.x, mini(ring.end.x, mid - 1)):
-			var p := Vector2i(x, y)
-			if clearing.grow(1).has_point(p) or not b.map.in_bounds(p) or reserved.has(p):
-				continue
-			if absi(y - lz) <= 1 or x >= mid - 3:
-				continue
-			b.terrain(Rect2i(p, Vector2i.ONE), TacticalMap.Terrain.JUNGLE)
-	MapGenerator._reserve(reserved, ring)
+	var layout := nm.finish()
+	if layout.is_empty():
+		return layout
+	layout["landing_zones"] = [nm.landing_zone(0), nm.landing_zone(1)]
+	layout["tunnels"] = [[], _dig_tunnels(nm, layout)]
+	_lay_traps(nm, layout, int(nm.rng.randi_range(4, 6) * scale))
+	return layout
 
-	# Rice paddies: flooded fields divided by low dykes, the open ground between the starts and the centre.
-	var paddies := {}
-	for attempt in int(PADDY_ATTEMPTS * area_scale):
-		var block := Vector2i(rng.randi_range(4, 7), rng.randi_range(3, 6))
-		var corner := Vector2i(rng.randi_range(6, maxi(6, mid - 3 - block.x)), rng.randi_range(1, h - 2 - block.y))
-		var rect := Rect2i(corner, block)
-		if rect.end.x > mid - 2 or MapGenerator._overlaps(reserved, rect) or MapGenerator._overlaps(paddies, rect):
+
+## A hamlet of bamboo huts along the trail at `at`, rice sacks in the yard and palms round it.
+static func _hamlet(nm: NaturalMap, at: Vector2i, hamlet_name: String) -> bool:
+	var huts := nm.village(at, 7.0, nm.rng.randi_range(3, 4), HUT_SIZES, "bamboo")
+	if huts.size() < 2:
+		return false
+	nm.landmark(hamlet_name, nm.nearest_open(at))
+	for rect in huts:
+		var yard := rect.get_center() + Vector2i(nm.rng.randi_range(-3, 3), nm.rng.randi_range(-3, 3))
+		if nm.is_free(yard):
+			nm.map.set_object(yard, Cover.HALF, "rice_sacks")
+			nm.reserved[yard] = true
+	for i in 4:
+		var p := at + Vector2i(nm.rng.randi_range(-7, 7), nm.rng.randi_range(-7, 7))
+		if nm.is_free(p):
+			nm.map.set_object(p, Cover.FULL, "palm")
+			nm.reserved[p] = true
+	return true
+
+
+## A clearing in the middle of the map kept clear of jungle: a landing zone with a sandbagged corner, or a
+## bunker ringed with sandbags.
+static func _clearing(nm: NaturalMap, clearing_name: String, size: Vector2i) -> void:
+	for attempt in 40:
+		var at := Vector2i(nm.rng.randi_range(int(nm.width * 0.3), int(nm.width * 0.7) - size.x), nm.rng.randi_range(2, nm.height - size.y - 3))
+		var rect := Rect2i(at, size)
+		if not nm.fits(rect) or nm.landmarks.any(func(m: Dictionary) -> bool: return Vector2(m["tile"]).distance_to(Vector2(rect.get_center())) < 9.0):
 			continue
-		b.terrain(rect, TacticalMap.Terrain.PADDY)
-		var gaps := []
-		for dir: Vector2i in [MapBuilder.N, MapBuilder.S, MapBuilder.W, MapBuilder.E]:
-			var along := rect.size.x if dir.y != 0 else rect.size.y
-			var t := rng.randi_range(0, along - 1)
-			var tile := Vector2i(rect.position.x + t, rect.position.y if dir == MapBuilder.N else rect.end.y - 1) if dir.y != 0 \
-					else Vector2i(rect.position.x if dir == MapBuilder.W else rect.end.x - 1, rect.position.y + t)
-			gaps.append([tile, dir, Cover.NONE, ""])
-		b.enclose(rect, Cover.HALF, "dyke", gaps)
-		MapGenerator._reserve(paddies, rect)
-		if rng.randf() < 0.3:
-			b.object(rect.position + Vector2i(-1, rng.randi_range(0, rect.size.y - 1)), Cover.FULL, "palm")
-	reserved.merge(paddies)
-
-	# Jungle: blobs of thick undergrowth with tall trees and bamboo, mostly on the flanks and edges.
-	for i in int(JUNGLE_BLOBS * area_scale):
-		var center := Vector2(rng.randf_range(4, mid - 3), rng.randf_range(0, h))
-		var radius := rng.randf_range(2.5, 5.5)
-		for y in range(int(center.y - radius) - 1, int(center.y + radius) + 2):
-			for x in range(int(center.x - radius) - 1, int(center.x + radius) + 2):
-				var p := Vector2i(x, y)
-				if p.x < 4 or p.x >= mid - 2 or not b.map.in_bounds(p) or reserved.has(p):
-					continue
-				# Ragged edges.
-				if Vector2(p).distance_to(center) > radius * rng.randf_range(0.75, 1.15):
-					continue
-				b.terrain(Rect2i(p, Vector2i.ONE), TacticalMap.Terrain.JUNGLE)
-				var roll := rng.randf()
-				if roll < 0.08:
-					b.object(p, Cover.FULL, "tree")
-				elif roll < 0.12:
-					b.object(p, Cover.FULL, "bamboo")
-				reserved[p] = true
-
-	# Elephant grass in the open ground.
-	for i in int(GRASS_PATCHES * area_scale):
-		var at := MapGenerator._open_tile(b, rng, reserved, mid)
-		var patch := Rect2i(at, Vector2i(rng.randi_range(2, 4), rng.randi_range(2, 4)))
-		for y in range(patch.position.y, patch.end.y):
-			for x in range(patch.position.x, patch.end.x):
-				var p := Vector2i(x, y)
-				if p.x < mid - 2 and b.map.in_bounds(p) and not reserved.has(p) and b.map.get_terrain(p) == TacticalMap.Terrain.FLOOR:
-					b.terrain(Rect2i(p, Vector2i.ONE), TacticalMap.Terrain.TALL_GRASS)
-					reserved[p] = true
-
-	# Clutter: bomb craters, palms, termite mounds (rocks), a few fuel drums from a supply drop.
-	for i in int(rng.randi_range(3, 6) * area_scale):
-		b.terrain(Rect2i(MapGenerator._open_tile(b, rng, reserved, mid), Vector2i.ONE), TacticalMap.Terrain.CRATER)
-	for i in int(rng.randi_range(3, 5) * area_scale):
-		b.object(MapGenerator._open_tile(b, rng, reserved, mid), Cover.FULL, "palm")
-	for i in int(rng.randi_range(1, 3) * area_scale):
-		b.object(MapGenerator._open_tile(b, rng, reserved, mid), Cover.FULL, "rock")
-	for i in int(rng.randi_range(1, 2) * area_scale):
-		b.object(MapGenerator._open_tile(b, rng, reserved, mid), Cover.HALF, "rice_sacks")
-	b.object(MapGenerator._open_tile(b, rng, reserved, mid), Cover.HALF, "fuel")
-
-	var tunnels := _dig_tunnels(b, rng, [hamlet + 2, trail + 1, lz])
-	_lay_traps(b, rng, trail, int(rng.randi_range(4, 6) * area_scale))
-
-	var spawns: Array[Vector2i] = []
-	var center := trail + 1
-	for offset in [0, -2, 2, -4, 4, -6, 6, -1, 1, -3, 3, 5, -5, 7, -7, 8]:
-		spawns.append(Vector2i(1 + absi(offset) % 3, clampi(center + offset, 0, h - 1)))
-	return {
-		"map": b.map,
-		"objectives": [
-			{"name": "Hamlet", "center": Vector2(mid, hamlet + 2.5), "radius": 2.5},
-			{"name": "Trail crossing", "center": Vector2(mid, trail + 1), "radius": 2.5},
-			{"name": "Landing zone", "center": Vector2(mid, lz + 0.5), "radius": 2.5},
-		],
-		"spawns": spawns,
-		"reinforcement_spawns": [Vector2i(1, trail), Vector2i(0, 2), Vector2i(0, h - 3)],
-		# A helicopter landing zone in each side's half, for reinforcements flown in.
-		"landing_zones": [Vector2i(mid - 10, lz), Vector2i(w - 1 - (mid - 10), lz)],
-		"tunnels": [[], tunnels],
-	}
+		nm.reserve(rect.grow(1))
+		var c := rect.get_center()
+		if clearing_name == "Bunker":
+			for d: Vector2i in [Vector2i(-2, -1), Vector2i(-2, 1), Vector2i(2, -1), Vector2i(2, 1), Vector2i(0, -2), Vector2i(1, 2)]:
+				nm.map.set_object(c + d, Cover.HALF, "sandbags")
+			nm.map.set_object(c + Vector2i(-1, 0), Cover.HALF, "crate")
+		else:
+			nm.map.set_object(rect.position, Cover.HALF, "sandbags")
+			nm.map.set_object(rect.position + Vector2i(1, 0), Cover.HALF, "sandbags")
+			nm.map.set_object(rect.end - Vector2i(1, 1), Cover.HALF, "crate")
+		nm.landmark(clearing_name, c)
+		return
 
 
-## Viet Cong tunnel entrances (team 1): a couple near their start, one a few tiles behind each objective on
-## their side, and one or two out on their flanks. Returns the entrances.
-static func _dig_tunnels(b: MapBuilder, rng: RandomNumberGenerator, objective_rows: Array) -> Array[Vector2i]:
-	var map := b.map
-	var w := map.width
-	var h := map.height
-	var mid := w / 2
+## A stone pagoda by the trail, away from the hamlets.
+static func _temple(nm: NaturalMap, away: Array) -> void:
+	for spot: Vector2i in MapGenerator._road_spots(nm, away, 9.0):
+		var rect := nm.roadside_house(spot, Vector2i(5, 5), "stone", 2)
+		if rect.size != Vector2i.ZERO:
+			nm.landmark("Pagoda", nm.nearest_open(rect.get_center()))
+			for d: Vector2i in [Vector2i(-1, -1), Vector2i(1, 1)]:
+				var p := rect.get_center() + d
+				if rect.has_point(p):
+					nm.map.set_object(p, Cover.HALF, "rice_sacks")
+			return
+
+
+## Rice paddies in the wetter ground: flooded fields divided by low dykes, a gap or two in each.
+static func _paddies(nm: NaturalMap, wettest: float) -> void:
+	nm.patchwork(6.0, func(tiles: Array) -> Dictionary:
+		nm.plant(tiles, TacticalMap.Terrain.PADDY)
+		if nm.rng.randf() < 0.25:
+			nm.dot(tiles, 1, Cover.FULL, "palm")
+		return {"edge": "dyke", "cover": Cover.HALF, "gaps": 1},
+		func(p: Vector2i) -> bool: return nm.wet(p) >= wettest)
+
+
+## Palm groves on the drier delta ground.
+static func _groves(nm: NaturalMap, scale: float) -> void:
+	for i in int(5 * scale):
+		var at := nm.open_tile(func(p: Vector2i) -> bool: return nm.wet(p) < 0.5)
+		if at.x < 0:
+			continue
+		for j in 6:
+			var p := at + Vector2i(nm.rng.randi_range(-2, 2), nm.rng.randi_range(-2, 2))
+			if nm.is_free(p) and nm.rng.randf() < 0.6:
+				nm.map.set_object(p, Cover.FULL, "palm")
+				nm.reserved[p] = true
+
+
+## Elephant grass in the open ground, in patches that follow the noise.
+static func _grass(nm: NaturalMap, scale: float) -> void:
+	var patches := 0
+	for i in int(12 * scale):
+		if patches >= int(5 * scale):
+			return
+		var at := nm.open_tile(func(p: Vector2i) -> bool: return nm.map.get_terrain(p) == TacticalMap.Terrain.FLOOR)
+		if at.x < 0:
+			continue
+		patches += 1
+		var radius := nm.rng.randf_range(1.5, 3.0)
+		for dy in range(-3, 4):
+			for dx in range(-3, 4):
+				var p := at + Vector2i(dx, dy)
+				if (nm.is_free(p) or p == at) and nm.map.get_terrain(p) == TacticalMap.Terrain.FLOOR \
+						and Vector2(dx, dy).length() <= radius * (0.7 + nm.grain(p) * 0.6):
+					nm.map.set_terrain(p, TacticalMap.Terrain.TALL_GRASS)
+					nm.reserved[p] = true
+
+
+## Viet Cong tunnel entrances (team 1): one a few tiles behind each objective on their side, a couple near
+## their start, one or two out in their part of the map. Returns the entrances.
+static func _dig_tunnels(nm: NaturalMap, layout: Dictionary) -> Array[Vector2i]:
+	var w := nm.width
+	var h := nm.height
 	var wanted: Array[Vector2i] = []
-	for y: int in objective_rows:
-		wanted.append(Vector2i(mid + rng.randi_range(4, 6), y + rng.randi_range(-2, 2)))
+	for objective: Dictionary in layout["objectives"]:
+		var c := Vector2i(objective["center"])
+		wanted.append(c + Vector2i(nm.rng.randi_range(4, 6), nm.rng.randi_range(-2, 2)))
 	for i in 2:
-		wanted.append(Vector2i(w - rng.randi_range(4, 7), rng.randi_range(int(h * 0.25), int(h * 0.75))))
+		wanted.append(Vector2i(w - nm.rng.randi_range(4, 7), nm.rng.randi_range(int(h * 0.25), int(h * 0.75))))
 	for i in 1 + int(w >= 60):
-		wanted.append(Vector2i(rng.randi_range(mid + 6, w - 8), rng.randi_range(2, h - 3)))
+		wanted.append(Vector2i(nm.rng.randi_range(int(w * 0.6), w - 8), nm.rng.randi_range(2, h - 3)))
 	var result: Array[Vector2i] = []
 	for want in wanted:
-		var tile := _free_tile(map, want, mid + 2)
+		var tile := _free_tile(nm.map, want, int(w * 0.4))
 		if tile != Vector2i(-1, -1) and not result.has(tile):
-			map.set_tunnel(tile, 1)
+			nm.map.set_tunnel(tile, 1)
 			result.append(tile)
 	return result
 
 
-## Punji traps on the American approaches: on the trail and in the open ground short of the centre line.
-static func _lay_traps(b: MapBuilder, rng: RandomNumberGenerator, trail: int, count: int) -> void:
-	var map := b.map
-	var mid := map.width / 2
+## Punji traps on the American approaches: on the trails short of the objectives and in the open ground
+## between the American start and the objectives.
+static func _lay_traps(nm: NaturalMap, layout: Dictionary, count: int) -> void:
+	var map := nm.map
+	var front := 0
+	for objective: Dictionary in layout["objectives"]:
+		front = maxi(front, int(objective["center"].x))
+	var trail: Array[Vector2i] = []
+	for p: Vector2i in nm.roads:
+		if p.x >= 8 and p.x < front:
+			trail.append(p)
 	for i in count:
-		var want := Vector2i(rng.randi_range(mid - 12, mid - 3), trail + rng.randi_range(0, 1)) if i % 2 == 0 \
-				else Vector2i(rng.randi_range(8, mid - 3), rng.randi_range(2, map.height - 3))
-		var tile := _free_tile(map, want, 6, mid - 2)
+		var want := trail[nm.rng.randi_range(0, trail.size() - 1)] if i % 2 == 0 and not trail.is_empty() \
+				else Vector2i(nm.rng.randi_range(8, maxi(8, front - 2)), nm.rng.randi_range(2, map.height - 3))
+		var tile := _free_tile(map, want, 6, front)
 		if tile != Vector2i(-1, -1) and not map.has_mine(tile):
 			map.set_mine(tile, true, "punji")
 

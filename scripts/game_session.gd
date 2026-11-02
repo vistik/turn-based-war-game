@@ -47,7 +47,7 @@ static func start_battle(p_battle: Battle, p_ai_teams: Array, title: String) -> 
 
 
 ## A skirmish from a setup {"theatre": id (Normandy if left out), "map": "village" or "random", "size": side
-## length, "seed": int, "mission": {"type", "attacker", "vip_known"} (see Mission; points if left out)}, or {"map": "scenario", "scenario": Scenario.to_data(), "seed": int}: the same setup
+## length, "style": a Theatre.map_styles() id ("" or left out: the seed picks), "seed": int, "mission": {"type", "attacker", "vip_known"} (see Mission; points if left out)}, or {"map": "scenario", "scenario": Scenario.to_data(), "seed": int}: the same setup
 ## always builds the same battle, which is how both online players start identical games.
 ## Bigger maps bring bigger forces, need more points to win and allow more rounds. Returns [battle, title].
 static func build_skirmish(setup: Dictionary) -> Array:
@@ -68,9 +68,9 @@ static func build_skirmish(setup: Dictionary) -> Array:
 		title = theatre.village_title()
 	else:
 		var size: int = setup.get("size", 44)
-		layout = theatre.generate_map(seed, Vector2i(size, size))
+		layout = theatre.generate_map(seed, Vector2i(size, size), setup.get("style", ""))
 		forces = theatre.skirmish_forces(size)
-		title = "Random %dx%d map #%d" % [size, size, seed % 10000]
+		title = "%s %dx%d #%d" % [style_title(theatre, layout.get("style", "")), size, size, seed % 10000]
 	var mission_setup: Dictionary = setup.get("mission", {})
 	forces = Mission.adapt_forces(forces, mission_setup, layout["map"].width)
 	var options := {"theatre": theatre.id, "reinforcements": forces["waves"], "max_rounds": forces["max_rounds"], "vp_to_win": forces["vp_to_win"]}
@@ -82,6 +82,14 @@ static func build_skirmish(setup: Dictionary) -> Array:
 	if Mission.type_of(mission_setup) != Mission.POINTS:
 		title += ": " + Mission.title(Mission.type_of(mission_setup))
 	return [battle, title]
+
+
+## The menu name of one of a theatre's map styles ("Random map" if it has none by that id).
+static func style_title(theatre: Theatre, style: String) -> String:
+	for entry: Dictionary in theatre.map_styles():
+		if entry["id"] == style:
+			return entry["title"]
+	return "Random map"
 
 
 static func current_slot() -> String:

@@ -228,7 +228,7 @@ static func deploy(layout: Dictionary, rosters: Array, deployments: Array) -> Ar
 	if deployments.all(func(d: Dictionary) -> bool: return d.is_empty()):
 		return rosters
 	var map: TacticalMap = layout["map"]
-	var reachable := Pathfinder.search(map, layout["spawns"][0], 100000.0)
+	var reachable := Pathfinder.search(map, layout["spawns"][0][0], 100000.0)
 	var taken := {}
 	var placed := [[], []]
 	var defensive_tiles := [[], []]
@@ -291,7 +291,8 @@ static func deployment_tiles(map: TacticalMap, side: int, orders: Dictionary, re
 
 
 static func _free_near(map: TacticalMap, want: Vector2i, side: int, depth: Array, reachable: Dictionary, taken: Dictionary) -> Vector2i:
-	var mirror := func(p: Vector2i) -> Vector2i: return p if side == 0 else Vector2i(map.width - 1 - p.x, p.y)
+	# Bands are worked out from the west edge; Germany's run the same distance in from the east edge.
+	var from_edge := func(p: Vector2i) -> Vector2i: return p if side == 0 else Vector2i(map.width - 1 - p.x, p.y)
 	for radius in range(0, maxi(map.width, map.height)):
 		for dy in range(-radius, radius + 1):
 			for dx in range(-radius, radius + 1):
@@ -303,10 +304,10 @@ static func _free_near(map: TacticalMap, want: Vector2i, side: int, depth: Array
 					continue
 				if p.x < 0 or p.x >= map.width / 2:
 					continue
-				var tile: Vector2i = mirror.call(p)
+				var tile: Vector2i = from_edge.call(p)
 				if map.in_bounds(tile) and map.is_passable(tile) and reachable.has(tile) and not taken.has(tile):
 					return tile
-	return mirror.call(want)
+	return from_edge.call(want)
 
 
 ## Applies a finished battle: the winner scores the map's points (a draw splits them, rounding down),

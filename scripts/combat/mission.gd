@@ -281,13 +281,12 @@ static func prepare(theatre: Theatre, layout: Dictionary, rosters: Array, setup:
 	return {"layout": out, "rosters": placed, "mission": mission}
 
 
-## Where a side's units start: the middle of its spawns (team 1's are the mirror image of the layout's).
+## Where a side's units start: the middle of its own spawn tiles.
 static func spawn_center(layout: Dictionary, team: int) -> Vector2i:
-	var map: TacticalMap = layout["map"]
 	var sum := Vector2.ZERO
-	var spawns: Array = layout["spawns"]
+	var spawns: Array = layout["spawns"][team]
 	for p: Vector2i in spawns:
-		sum += Vector2(p if team == 0 else Vector2i(map.width - 1 - p.x, p.y))
+		sum += Vector2(p)
 	return Vector2i((sum / maxi(1, spawns.size())).round())
 
 

@@ -1,235 +1,342 @@
 class_name MapGenerator
 extends RefCounted
-## Procedural Normandy battlefields. The same seed always gives the same map.
+## Procedural Normandy battlefields, built with NaturalMap. The same seed (and style) always gives the same map.
 ##
-## A main road crosses the map with a village at the crossroads; a church to the north and a farm to the
-## south sit on the centre line, each an objective, joined by a lane. The rest is bocage: hedged fields of
-## grass, wheat, orchard or rough ground, with craters and scattered cover. Generated on the west half
-## and mirrored. Maps where a spawn can't reach every objective are thrown away and rerolled.
+## Four kinds of country, each lopsided the way real ground is; fairness comes from objectives each side walks
+## about as far to (see NaturalMap.fair_objectives):
+## - "bocage": a village where a winding road crosses a lane, a church, outlying farms, hedged fields.
+## - "hamlets": a web of sunken lanes between farmsteads, small hedged fields and orchards, no village.
+## - "town": a shelled market town, streets of stone houses round a square, many of them in ruins.
+## - "forest": a road through a wood with a sawmill and a lodge in clearings, farmland on the open side.
 
-const ATTEMPTS := 10
-## Random tries at placing a field on a 40x40 map (scaled with area); most of the open ground ends up covered.
-const FIELD_ATTEMPTS := 120
-## Map sizes offered in skirmish, and the side length from which outlying farmsteads appear (one per this many tiles).
+## Map sizes offered in skirmish.
 const SIZES := {"Standard": 44, "Large": 64, "Huge": 84}
-const HAMLET_SPACING := 16
+const STYLES := [
+	{"id": "bocage", "title": "Bocage crossroads", "blurb": "A village where the road crosses a lane, a church, farms and hedged fields."},
+	{"id": "hamlets", "title": "Hedgerow hamlets", "blurb": "Sunken lanes between farmsteads; small hedged fields and orchards everywhere."},
+	{"id": "town", "title": "Shelled market town", "blurb": "Streets of stone houses round a square, many of them in ruins."},
+	{"id": "forest", "title": "Forest edge", "blurb": "A road through a wood: a sawmill and a lodge in its clearings, farmland beyond."},
+]
+const HOUSE_SIZES := [Vector2i(5, 4), Vector2i(4, 3), Vector2i(6, 4), Vector2i(4, 4)]
 
 
-## Returns a layout for BattleFactory.create.
-static func generate(seed: int, size := Vector2i(40, 40)) -> Dictionary:
-	var layout := {}
-	for attempt in ATTEMPTS:
-		layout = _generate(seed + attempt * 7919, size)
-		if is_playable(layout):
-			return layout
+## Returns a layout for BattleFactory.create, with "style" set. No style picks one from the seed.
+static func generate(seed: int, size := Vector2i(44, 44), style := "") -> Dictionary:
+	if style == "":
+		style = STYLES[posmod(seed, STYLES.size())]["id"]
+	var layout := NaturalMap.generate(seed, size, func(nm: NaturalMap) -> Dictionary: return _build(nm, style))
+	layout["style"] = style
 	return layout
 
 
-## Whether every spawn can walk to every objective and to the enemy's side.
+## Whether every spawn can reach every objective and the enemy's side.
 static func is_playable(layout: Dictionary) -> bool:
-	var map: TacticalMap = layout["map"]
-	var targets: Array[Vector2i] = []
-	for objective: Dictionary in layout["objectives"]:
-		targets.append(Vector2i(objective["center"]))
-	for spawn: Vector2i in layout["spawns"] + layout["reinforcement_spawns"]:
-		if not map.is_passable(spawn):
-			return false
-	var reach := Pathfinder.search(map, layout["spawns"][0], 10000.0)
-	for spawn: Vector2i in layout["spawns"] + layout["reinforcement_spawns"]:
-		if not reach.has(spawn) or not reach.has(Vector2i(map.width - 1 - spawn.x, spawn.y)):
-			return false
-	for target in targets:
-		if not reach.has(target):
-			return false
+	return NaturalMap.is_playable(layout)
+
+
+static func _build(nm: NaturalMap, style: String) -> Dictionary:
+	match style:
+		"hamlets":
+			_hamlets(nm)
+		"town":
+			_town(nm)
+		"forest":
+			_forest(nm)
+		_:
+			_bocage(nm)
+	_hazards(nm)
+	return nm.finish()
+
+
+static func _scale(nm: NaturalMap) -> float:
+	return float(nm.width * nm.height) / 1600.0
+
+
+## A road from the west edge to the east edge, each end at its own height.
+static func _east_west(nm: NaturalMap, road_width: int, bends := 2) -> Array[Vector2i]:
+	var a := Vector2i(0, nm.rng.randi_range(int(nm.height * 0.25), int(nm.height * 0.75)))
+	var b := Vector2i(nm.width - 1, nm.rng.randi_range(int(nm.height * 0.25), int(nm.height * 0.75)))
+	return nm.road(nm.meander(a, b, bends, nm.height * 0.12), road_width)
+
+
+## A road from the north edge to the south edge, both ends somewhere in the middle half.
+static func _north_south(nm: NaturalMap, road_width: int, bends := 2) -> Array[Vector2i]:
+	var a := Vector2i(nm.rng.randi_range(int(nm.width * 0.3), int(nm.width * 0.7)), 0)
+	var b := Vector2i(nm.rng.randi_range(int(nm.width * 0.3), int(nm.width * 0.7)), nm.height - 1)
+	return nm.road(nm.meander(a, b, bends, nm.width * 0.12), road_width)
+
+
+## The middle of the map, where the objectives are fought over.
+static func _middling(nm: NaturalMap, p: Vector2i) -> bool:
+	return p.x > nm.width * 0.28 and p.x < nm.width * 0.72
+
+
+## Road tiles in the middle of the map at least `apart` from every tile in `away`, nearest the middle first.
+static func _road_spots(nm: NaturalMap, away: Array, apart: float) -> Array[Vector2i]:
+	var spots: Array = []
+	for p: Vector2i in nm.roads:
+		if not _middling(nm, p) or p.y < 3 or p.y > nm.height - 4:
+			continue
+		if away.any(func(q: Vector2i) -> bool: return Vector2(p).distance_to(Vector2(q)) < apart):
+			continue
+		spots.append([nm.rng.randf(), p])
+	spots.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+	var result: Array[Vector2i] = []
+	for s: Array in spots:
+		result.append(s[1])
+	return result
+
+
+## The village church: pews inside, the door onto the road. Returns the church, or an empty rect.
+static func _church(nm: NaturalMap, at: Vector2i, landmark_name := "Church") -> Rect2i:
+	var rect := nm.roadside_house(at, Vector2i(7, 5), "stone", 2)
+	if rect.size == Vector2i.ZERO:
+		return rect
+	var long_x := rect.size.x >= rect.size.y
+	for i in range(1, (rect.size.x if long_x else rect.size.y) - 2, 2):
+		for j in [1, rect.size.y - 2] if long_x else [1, rect.size.x - 2]:
+			var p := rect.position + (Vector2i(i, j) if long_x else Vector2i(j, i))
+			nm.map.set_object(p, Cover.HALF, "pew")
+	nm.landmark(landmark_name, nm.nearest_open(rect.get_center()))
+	return rect
+
+
+## A farmstead by the road at `at`: the farmhouse with a walled yard and hay, maybe a barn. Returns whether it
+## was built (and registers it as a landmark).
+static func _farm(nm: NaturalMap, at: Vector2i, landmark_name: String) -> bool:
+	var rect := nm.roadside_house(at, Vector2i(5, 4), "stone", nm.rng.randi_range(1, 2), "stone")
+	if rect.size == Vector2i.ZERO:
+		return false
+	nm.landmark(landmark_name, nm.nearest_open(rect.get_center()))
+	var spots := 0
+	for dy in range(-6, 7):
+		for dx in range(-6, 7):
+			var p := rect.get_center() + Vector2i(dx, dy)
+			if spots < 3 and nm.solid.has(p) and nm.map.get_terrain(p) != TacticalMap.Terrain.INDOOR and nm.map.is_passable(p) \
+					and nm.rng.randf() < 0.25:
+				nm.map.set_object(p, Cover.HALF, "hay")
+				spots += 1
+	# A barn further along the road.
+	nm.village(at, 7.0, 1, [Vector2i(6, 4), Vector2i(5, 4)], "stone")
 	return true
 
 
-static func _generate(seed: int, size: Vector2i) -> Dictionary:
-	var rng := RandomNumberGenerator.new()
-	rng.seed = seed
-	var b := MapBuilder.new(size.x, size.y)
-	var w := size.x
-	var h := size.y
-	var mid := w / 2
-	## Tiles on the west half that bocage fields and clutter must stay off.
-	var reserved := {}
+## The bocage: hedged fields of wheat, pasture and orchard, with a few stone-walled ones; copses where the
+## ground is wildest.
+static func _countryside(nm: NaturalMap, spacing: float, woods_share: float) -> void:
+	nm.woods(woods_share, -1, ["tree"], 0.45)
+	var fields := nm.patchwork(spacing, func(tiles: Array) -> Dictionary:
+		var roll := nm.rng.randf()
+		var damp := nm.wet(tiles[0])
+		if roll < 0.22:
+			nm.orchard(tiles)
+		elif damp < 0.45 and roll < 0.7:
+			nm.plant(tiles, TacticalMap.Terrain.WHEAT)
+		elif roll < 0.8:
+			nm.plant(tiles.filter(func(p: Vector2i) -> bool: return nm.grain(p) > 0.45), TacticalMap.Terrain.ROUGH)
+		else:
+			nm.dot(tiles, nm.rng.randi_range(0, 2), Cover.HALF, "hay")
+		var edge := nm.rng.randf()
+		if edge < 0.72:
+			return {"edge": "hedge", "cover": Cover.FULL, "gaps": 0}
+		if edge < 0.86:
+			return {"edge": "stone", "cover": Cover.HALF, "gaps": 0}
+		return {"edge": "", "cover": Cover.NONE, "gaps": 0})
+	_field_landmarks(nm, fields)
 
-	# The main road and the crossroads.
-	var road := rng.randi_range(int(h * 0.38), h - 18)
-	b.terrain(Rect2i(0, road, w, 2), TacticalMap.Terrain.ROAD, false)
-	_reserve(reserved, Rect2i(0, road - 1, mid, 4))
-	_reserve(reserved, Rect2i(0, 0, 4, h))
-	# The lane and the landmarks along the centre line.
-	_reserve(reserved, Rect2i(mid - 2, 0, 2, h))
 
-	# North landmark: the church, with a lane down to the road.
-	var church := rng.randi_range(1, maxi(1, road - 12))
-	b.building(Rect2i(mid - 5, church, 5, 7), [[Vector2i(mid - 1, church + 6), MapBuilder.S]],
-			[[Vector2i(mid - 5, church + 2), MapBuilder.W], [Vector2i(mid - 5, church + 4), MapBuilder.W], [Vector2i(mid - 3, church), MapBuilder.N]], [MapBuilder.E])
-	for p in [Vector2i(mid - 4, church + 2), Vector2i(mid - 3, church + 2), Vector2i(mid - 4, church + 4), Vector2i(mid - 3, church + 4)]:
-		b.object(p, Cover.HALF, "pew")
-	b.terrain(Rect2i(mid - 1, church + 7, 2, road - church - 7), TacticalMap.Terrain.ROAD, false)
-	_reserve(reserved, Rect2i(mid - 6, church, 6, 7))
+## The biggest fields in the middle of the map as fall-back objectives, named for what grows there
+## (`plain` for a field of nothing much).
+static func _field_landmarks(nm: NaturalMap, fields: Array, plain := "Meadow") -> void:
+	var middle := fields.filter(func(tiles: Array) -> bool: return tiles.size() >= 12 and _middling(nm, tiles[tiles.size() / 2]))
+	middle.sort_custom(func(a: Array, b: Array) -> bool: return a.size() > b.size())
+	for tiles: Array in middle.slice(0, 4):
+		var center: Vector2i = tiles[tiles.size() / 2]
+		var kind := nm.map.get_terrain(center)
+		var landmark_name := "Wheat field" if kind == TacticalMap.Terrain.WHEAT else ("Orchard" if tiles.any(func(p: Vector2i) -> bool:
+			return nm.map.get_object_kind(p) == "tree") else plain)
+		nm.landmark(landmark_name, nm.nearest_open(center), 0.2)
 
-	# South landmark: the farm, a walled courtyard in front of the farmhouse.
-	var farm := rng.randi_range(road + 6, maxi(road + 6, h - 12))
-	b.enclose(Rect2i(mid - 6, farm, 6, 6), Cover.HALF, "stone",
-			[[Vector2i(mid - 1, farm), MapBuilder.N, Cover.NONE, ""], [Vector2i(mid - 6, farm + 2), MapBuilder.W, Cover.NONE, ""]], true, [MapBuilder.E])
-	b.building(Rect2i(mid - 5, farm + 6, 5, 5), [[Vector2i(mid - 1, farm + 6), MapBuilder.N]],
-			[[Vector2i(mid - 5, farm + 8), MapBuilder.W], [Vector2i(mid - 3, farm + 10), MapBuilder.S]], [MapBuilder.E])
-	for p in [Vector2i(mid - 5, farm + 1), Vector2i(mid - 4, farm + 4), Vector2i(mid - 2, farm + 2)]:
-		if rng.randf() < 0.8:
-			b.object(p, Cover.HALF, "hay")
-	b.terrain(Rect2i(mid - 1, road + 2, 2, farm - road - 2), TacticalMap.Terrain.ROAD, false)
-	_reserve(reserved, Rect2i(mid - 7, farm, 7, 11))
 
-	# Village houses beside the crossroads, sandbags on the junction corners.
-	b.building(Rect2i(mid - 11, road - 6, 5, 4), [[Vector2i(mid - 9, road - 3), MapBuilder.S], [Vector2i(mid - 7, road - 5), MapBuilder.E]],
-			[[Vector2i(mid - 10, road - 6), MapBuilder.N], [Vector2i(mid - 11, road - 4), MapBuilder.W]])
-	b.building(Rect2i(mid - 11, road + 3, 5, 4), [[Vector2i(mid - 9, road + 3), MapBuilder.N]],
-			[[Vector2i(mid - 10, road + 6), MapBuilder.S], [Vector2i(mid - 7, road + 5), MapBuilder.E]])
-	_reserve(reserved, Rect2i(mid - 11, road - 6, 5, 4))
-	_reserve(reserved, Rect2i(mid - 11, road + 3, 5, 4))
-	b.object(Vector2i(mid - 3, road - 1), Cover.HALF, "sandbags")
-	b.object(Vector2i(mid - 3, road + 2), Cover.HALF, "sandbags")
-	b.object(Vector2i(mid - 6, road - 2), Cover.HALF, "crate")
-
-	# Stone walls along the road, broken up.
-	for x in range(5, mid - 12):
-		if rng.randf() < 0.55:
-			b.side(Vector2i(x, road - 1), MapBuilder.S, Cover.HALF, "stone")
-		if rng.randf() < 0.55:
-			b.side(Vector2i(x, road + 2), MapBuilder.N, Cover.HALF, "stone")
-
-	# Outlying farmsteads on bigger maps: a house in a walled yard, away from the centre features.
-	var area_scale := float(w * h) / 1600.0
-	for i in maxi(0, (w - 40) / HAMLET_SPACING + 1) if w > 48 else 0:
-		for attempt in 30:
-			var house := Rect2i(rng.randi_range(6, maxi(6, mid - 15)), rng.randi_range(2, h - 12), 5, 4)
-			var yard := Rect2i(house.position + Vector2i(-1, 4), Vector2i(7, 5))
-			var plot := house.merge(yard)
-			if plot.end.x > mid - 4 or plot.end.y > h - 1 or _overlaps(reserved, plot.grow(2)):
-				continue
-			b.building(house, [[Vector2i(house.position.x + 2, house.end.y - 1), MapBuilder.S]],
-					[[Vector2i(house.position.x, house.position.y + 1), MapBuilder.W], [Vector2i(house.end.x - 1, house.position.y + 2), MapBuilder.E],
-					[Vector2i(house.position.x + 3, house.position.y), MapBuilder.N]])
-			b.enclose(yard, Cover.HALF, "stone", [[Vector2i(yard.position.x + 3, yard.end.y - 1), MapBuilder.S, Cover.NONE, ""],
-					[Vector2i(yard.position.x, yard.position.y + 2), MapBuilder.W, Cover.NONE, ""]], true, [MapBuilder.N])
-			b.object(Vector2i(yard.position.x + 1, yard.position.y + 3), Cover.HALF, "hay")
-			_reserve(reserved, plot.grow(1))
+static func _bocage(nm: NaturalMap) -> void:
+	var scale := _scale(nm)
+	_east_west(nm, 2)
+	_north_south(nm, 1)
+	if nm.width >= 60:
+		# A farm track off to one side.
+		var a := Vector2i(nm.rng.randi_range(int(nm.width * 0.2), int(nm.width * 0.8)), 0 if nm.rng.randf() < 0.5 else nm.height - 1)
+		var b := Vector2i(nm.rng.randi_range(int(nm.width * 0.3), int(nm.width * 0.7)), nm.height / 2)
+		nm.road(nm.meander(a, b, 1, 6.0), 1)
+	var heart: Vector2i = nm.junctions[0] if not nm.junctions.is_empty() else Vector2i(nm.width / 2, nm.height / 2)
+	nm.landmark("Crossroads", heart)
+	var church_spots := _road_spots(nm, [heart], 4.0).filter(func(p: Vector2i) -> bool: return Vector2(p).distance_to(Vector2(heart)) < 11.0)
+	for spot: Vector2i in church_spots:
+		if _church(nm, spot).size != Vector2i.ZERO:
 			break
+	for p: Vector2i in [heart + Vector2i(2, -2), heart + Vector2i(-3, 3)]:
+		if nm.map.in_bounds(p) and nm.map.is_passable(p) and not nm.roads.has(p):
+			nm.map.set_object(p, Cover.HALF, "sandbags")
+	nm.village(heart, 10.0, int(6 * sqrt(scale)), HOUSE_SIZES, "stone", 0.4, "stone")
+	var away: Array = [heart]
+	for farm_name: String in ["Farm", "Manor", "Mill"]:
+		for spot in _road_spots(nm, away, 12.0):
+			if _farm(nm, spot, farm_name):
+				away.append(spot)
+				break
+	_countryside(nm, 8.5, 0.1)
+	_clutter(nm, scale)
 
-	# Bocage: hedged fields packed into the open ground. Fields may share a hedgerow with each other,
-	# but keep a tile clear of roads and buildings.
-	var fields := {}
-	for attempt in int(FIELD_ATTEMPTS * area_scale):
-		var size_ := Vector2i(rng.randi_range(4, 9), rng.randi_range(4, 8))
-		var corner := Vector2i(rng.randi_range(5, maxi(5, mid - 3 - size_.x)), rng.randi_range(1, h - 2 - size_.y))
-		var rect := Rect2i(corner, size_)
-		if rect.end.x <= mid - 2 and not _overlaps(reserved, rect.grow(1)) and not _overlaps(fields, rect):
-			_field(b, rng, rect)
-			_reserve(fields, rect)
-	reserved.merge(fields)
 
-	# Clutter in the open ground between fields.
-	for i in int(rng.randi_range(4, 7) * area_scale):
-		var p := _open_tile(b, rng, reserved, mid)
-		b.terrain(Rect2i(p, Vector2i.ONE), TacticalMap.Terrain.CRATER)
-	for i in int(rng.randi_range(2, 4) * area_scale):
-		var p := _open_tile(b, rng, reserved, mid)
-		b.object(p, Cover.FULL, "rock" if rng.randf() < 0.5 else "tree")
-	for i in int(rng.randi_range(2, 4) * area_scale):
-		var p := _open_tile(b, rng, reserved, mid)
-		b.object(p, Cover.HALF, "sandbags" if rng.randf() < 0.5 else "crate")
+static func _hamlets(nm: NaturalMap) -> void:
+	var scale := _scale(nm)
+	# Sunken lanes wandering between the edges and each other.
+	_east_west(nm, 1, 3)
+	for i in 2 + int(nm.width >= 60):
+		if i % 2 == 0:
+			_north_south(nm, 1, 2)
+		else:
+			_east_west(nm, 1, 3)
+	var away: Array = []
+	for farm_name: String in ["Farm", "Manor", "Mill", "Hamlet", "Dairy"]:
+		for spot in _road_spots(nm, away, 10.0):
+			if _farm(nm, spot, farm_name):
+				away.append(spot)
+				break
+	for spot in _road_spots(nm, away, 8.0):
+		if _church(nm, spot, "Chapel").size != Vector2i.ZERO:
+			break
+	if not nm.junctions.is_empty():
+		nm.landmark("Crossroads", nm.junctions[0])
+	_countryside(nm, 6.5, 0.08)
+	_clutter(nm, scale)
 
-	# Hazards: fuel drums and (on bigger maps) an oil tank that explode, a hidden minefield or two,
-	# and barbed wire across the open ground.
-	for i in maxi(1, int(rng.randi_range(1, 3) * area_scale)):
-		b.object(_open_tile(b, rng, reserved, mid), Cover.HALF, "fuel")
-	if w >= 56:
-		b.object(_open_tile(b, rng, reserved, mid), Cover.FULL, "oil_tank")
-	for i in 1 + int(w >= 56):
-		var at := _open_tile(b, rng, reserved, mid)
-		for j in rng.randi_range(3, 5):
-			var p := at + Vector2i(rng.randi_range(-1, 1), rng.randi_range(-1, 1))
-			if p.x >= 5 and p.x < mid - 2 and b.map.is_passable(p) and b.map.get_terrain(p) != TacticalMap.Terrain.ROAD:
-				b.mine(p)
-	for i in 1 + int(w >= 56):
-		var at := _open_tile(b, rng, reserved, mid)
-		var along := Vector2i(0, 1) if rng.randf() < 0.5 else Vector2i(1, 0)
-		for j in rng.randi_range(3, 5):
+
+static func _town(nm: NaturalMap) -> void:
+	var scale := _scale(nm)
+	_east_west(nm, 2, 2)
+	for i in 1 + int(nm.width >= 60):
+		_north_south(nm, 2, 1)
+	_east_west(nm, 1, 2)
+	_north_south(nm, 1, 2)
+	var heart: Vector2i = nm.junctions[0] if not nm.junctions.is_empty() else Vector2i(nm.width / 2, nm.height / 2)
+	# The square: paved, a fountain (rock) and a wrecked lorry.
+	var square := Rect2i(heart - Vector2i(3, 2), Vector2i(6, 5))
+	for y in range(square.position.y, square.end.y):
+		for x in range(square.position.x, square.end.x):
+			var p := Vector2i(x, y)
+			if nm.in_play(p) and not nm.solid.has(p):
+				nm.map.set_terrain(p, TacticalMap.Terrain.ROAD)
+				nm.roads[p] = -1
+				nm.reserved[p] = true
+	nm.map.set_object(heart + Vector2i(1, 1), Cover.FULL, "rock")
+	nm.map.set_object(heart + Vector2i(-2, 0), Cover.FULL, "wreck")
+	nm.landmark("Town square", heart)
+	for spot: Vector2i in _road_spots(nm, [heart], 4.0):
+		if Vector2(spot).distance_to(Vector2(heart)) < 9.0 and _church(nm, spot).size != Vector2i.ZERO:
+			break
+	for spot: Vector2i in _road_spots(nm, [heart], 8.0):
+		var hall := nm.roadside_house(spot, Vector2i(7, 5), "stone", 1)
+		if hall.size != Vector2i.ZERO:
+			nm.landmark("Town hall", nm.nearest_open(hall.get_center()))
+			break
+	for spot: Vector2i in _road_spots(nm, [heart], 14.0):
+		var station := nm.roadside_house(spot, Vector2i(6, 4), "stone", 2)
+		if station.size != Vector2i.ZERO:
+			nm.landmark("Station", nm.nearest_open(station.get_center()))
+			break
+	var houses := nm.village(heart, nm.width * 0.45, int(22 * scale), [Vector2i(4, 3), Vector2i(5, 4), Vector2i(4, 4), Vector2i(6, 3)], "stone", 0.25, "stone")
+	# The shelling: houses in ruins, rubble and craters in the streets, barricades and wrecks.
+	for rect in houses:
+		if nm.rng.randf() < 0.35:
+			nm.ruin(rect, nm.rng.randf_range(0.25, 0.6))
+	nm.patches(int(8 * scale), TacticalMap.Terrain.RUBBLE)
+	nm.patches(int(8 * scale), TacticalMap.Terrain.CRATER)
+	var street := func(p: Vector2i) -> bool: return nm.roads.has(p)
+	for i in int(5 * scale):
+		var p := Vector2i(nm.rng.randi_range(NaturalMap.STRIP + 2, nm.width - NaturalMap.STRIP - 3), nm.rng.randi_range(2, nm.height - 3))
+		if street.call(p) and nm.map.is_passable(p) and Vector2(p).distance_to(Vector2(heart)) > 3.0:
+			nm.map.set_object(p, Cover.FULL if nm.rng.randf() < 0.4 else Cover.HALF, "wreck" if nm.rng.randf() < 0.4 else "sandbags")
+	# Gardens and allotments behind the houses, walled or fenced.
+	var gardens := nm.patchwork(6.0, func(tiles: Array) -> Dictionary:
+		if nm.rng.randf() < 0.3:
+			nm.orchard(tiles)
+		elif nm.rng.randf() < 0.3:
+			nm.plant(tiles, TacticalMap.Terrain.ROUGH)
+		var roll := nm.rng.randf()
+		return {"edge": "stone" if roll < 0.5 else ("fence" if roll < 0.75 else "hedge"),
+				"cover": Cover.FULL if roll >= 0.75 else Cover.HALF, "gaps": 1})
+	_field_landmarks(nm, gardens, "Gardens")
+	_clutter(nm, scale * 0.6)
+
+
+static func _forest(nm: NaturalMap) -> void:
+	var scale := _scale(nm)
+	_east_west(nm, 1, 3)
+	_north_south(nm, 1, 2)
+	# Clearings in the wood: the sawmill, the lodge, a charcoal burners' clearing.
+	for clearing_name: String in ["Sawmill", "Lodge", "Clearing"]:
+		for attempt in 30:
+			var at := Vector2i(nm.rng.randi_range(int(nm.width * 0.3), int(nm.width * 0.7)), nm.rng.randi_range(3, nm.height - 9))
+			var rect := Rect2i(at, Vector2i(nm.rng.randi_range(6, 8), nm.rng.randi_range(5, 7)))
+			if not nm.fits(rect) or nm.landmarks.any(func(m: Dictionary) -> bool: return Vector2(m["tile"]).distance_to(Vector2(at)) < 10.0):
+				continue
+			nm.reserve(rect.grow(1))
+			match clearing_name:
+				"Sawmill":
+					nm.house(Rect2i(rect.position + Vector2i(1, 1), Vector2i(5, 3)), NaturalMap.S, "stone")
+					for x in range(rect.position.x, rect.end.x, 2):
+						nm.map.set_object(Vector2i(x, rect.end.y - 1), Cover.HALF, "crate")
+				"Lodge":
+					nm.house(Rect2i(rect.position + Vector2i(1, 1), Vector2i(4, 3)), NaturalMap.S, "stone")
+					nm.map.set_object(rect.position + Vector2i(rect.size.x - 1, rect.size.y - 1), Cover.HALF, "fuel")
+				_:
+					nm.map.set_object(rect.get_center() + Vector2i(1, 0), Cover.HALF, "crate")
+					nm.map.set_object(rect.get_center() + Vector2i(-2, 1), Cover.FULL, "rock")
+			nm.landmark(clearing_name, nm.nearest_open(rect.get_center() + Vector2i(0, rect.size.y / 2)))
+			break
+	if not nm.junctions.is_empty():
+		nm.landmark("Crossroads", nm.junctions[0])
+	nm.woods(0.45, TacticalMap.Terrain.ROUGH, ["tree", "tree", "tree", "rock"], 0.6)
+	var fields := nm.patchwork(9.0, func(tiles: Array) -> Dictionary:
+		if nm.rng.randf() < 0.5:
+			nm.plant(tiles, TacticalMap.Terrain.WHEAT)
+		else:
+			nm.dot(tiles, nm.rng.randi_range(0, 2), Cover.HALF, "hay")
+		return {"edge": "hedge" if nm.rng.randf() < 0.6 else "fence", "cover": Cover.FULL, "gaps": 0})
+	_field_landmarks(nm, fields)
+	_clutter(nm, scale * 0.7)
+
+
+## Shell craters, rocks and lone trees, sandbags and crates.
+static func _clutter(nm: NaturalMap, scale: float) -> void:
+	nm.patches(int(nm.rng.randi_range(4, 7) * scale), TacticalMap.Terrain.CRATER)
+	nm.scatter(int(nm.rng.randi_range(2, 4) * scale), Cover.FULL, ["rock", "tree"])
+	nm.scatter(int(nm.rng.randi_range(2, 4) * scale), Cover.HALF, ["sandbags", "crate"])
+
+
+## Fuel drums and (on bigger maps) an oil tank that explode, a hidden minefield or two, barbed wire across the
+## open ground. Anywhere: nothing is copied from one side to the other.
+static func _hazards(nm: NaturalMap) -> void:
+	var scale := _scale(nm)
+	var big := int(nm.width >= 56)
+	nm.scatter(maxi(2, int(nm.rng.randi_range(2, 4) * scale)), Cover.HALF, ["fuel"])
+	if big:
+		nm.scatter(1, Cover.FULL, ["oil_tank"])
+	for i in 2 + big:
+		var at := nm.open_tile()
+		if at.x < 0:
+			continue
+		for j in nm.rng.randi_range(3, 5):
+			var p := at + Vector2i(nm.rng.randi_range(-1, 1), nm.rng.randi_range(-1, 1))
+			if nm.in_play(p) and nm.map.is_passable(p) and not nm.roads.has(p) and nm.map.get_terrain(p) != TacticalMap.Terrain.INDOOR:
+				nm.build.mine(p)
+	for i in 2 + big:
+		var at := nm.open_tile()
+		if at.x < 0:
+			continue
+		var along := Vector2i(0, 1) if nm.rng.randf() < 0.5 else Vector2i(1, 0)
+		for j in nm.rng.randi_range(3, 5):
 			var p := at + along * j
-			if p.x >= 5 and p.x < mid - 2 and p.y > 0 and p.y < h - 1 and not reserved.has(p) and b.map.is_passable(p) \
-					and b.map.get_terrain(p) != TacticalMap.Terrain.ROAD:
-				b.terrain(Rect2i(p, Vector2i.ONE), TacticalMap.Terrain.WIRE)
-				reserved[p] = true
-
-	var spawns: Array[Vector2i] = []
-	var center := road + 1
-	for offset in [0, -2, 2, -4, 4, -6, 6, -1, 1, -3, 3, 5]:
-		spawns.append(Vector2i(1 + absi(offset) % 3, clampi(center + offset, 0, h - 1)))
-	return {
-		"map": b.map,
-		"objectives": [
-			{"name": "Church", "center": Vector2(mid, church + 3.5), "radius": 2.5},
-			{"name": "Crossroads", "center": Vector2(mid, road + 1), "radius": 2.5},
-			{"name": "Farm", "center": Vector2(mid, farm + 3), "radius": 2.5},
-		],
-		"spawns": spawns,
-		"reinforcement_spawns": [Vector2i(1, road), Vector2i(0, 2), Vector2i(0, h - 3)],
-	}
-
-
-## A hedged (or walled, or open) field with grass, wheat, an orchard or rough ground inside.
-static func _field(b: MapBuilder, rng: RandomNumberGenerator, rect: Rect2i) -> void:
-	var boundary := rng.randf()
-	if boundary < 0.8:
-		var kind := "hedge" if boundary < 0.68 else "stone"
-		var cover := Cover.FULL if kind == "hedge" else Cover.HALF
-		var gaps := []
-		for dir: Vector2i in [MapBuilder.N, MapBuilder.S, MapBuilder.W, MapBuilder.E]:
-			for i in rng.randi_range(1, 2):
-				var along := rect.size.x if dir.y != 0 else rect.size.y
-				var t := rng.randi_range(1, along - 2)
-				var tile := Vector2i(rect.position.x + t, rect.position.y if dir == MapBuilder.N else rect.end.y - 1) if dir.y != 0 \
-						else Vector2i(rect.position.x if dir == MapBuilder.W else rect.end.x - 1, rect.position.y + t)
-				gaps.append([tile, dir, Cover.NONE, ""])
-		b.enclose(rect, cover, kind, gaps)
-	var inside := rect.grow(-1) if rect.size.x > 4 and rect.size.y > 4 else rect
-	var crop := rng.randf()
-	if crop < 0.3:
-		b.terrain(rect, TacticalMap.Terrain.WHEAT)
-	elif crop < 0.5:
-		for ty in range(inside.position.y, inside.end.y, 3):
-			for tx in range(inside.position.x, inside.end.x, 3):
-				b.object(Vector2i(tx, ty), Cover.FULL, "tree")
-	elif crop < 0.62:
-		b.terrain(inside, TacticalMap.Terrain.ROUGH)
-	else:
-		for i in rng.randi_range(0, 2):
-			var p := inside.position + Vector2i(rng.randi_range(0, inside.size.x - 1), rng.randi_range(0, inside.size.y - 1))
-			b.object(p, Cover.HALF, "hay")
-
-
-static func _reserve(reserved: Dictionary, rect: Rect2i) -> void:
-	for y in range(rect.position.y, rect.end.y):
-		for x in range(rect.position.x, rect.end.x):
-			reserved[Vector2i(x, y)] = true
-
-
-static func _overlaps(reserved: Dictionary, rect: Rect2i) -> bool:
-	for y in range(rect.position.y, rect.end.y):
-		for x in range(rect.position.x, rect.end.x):
-			if reserved.has(Vector2i(x, y)):
-				return true
-	return false
-
-
-## A random free tile on the west half, away from the spawn zone and reserved features.
-static func _open_tile(b: MapBuilder, rng: RandomNumberGenerator, reserved: Dictionary, mid: int) -> Vector2i:
-	for i in 50:
-		var p := Vector2i(rng.randi_range(6, mid - 3), rng.randi_range(1, b.map.height - 2))
-		if not reserved.has(p) and b.map.is_passable(p) and b.map.get_terrain(p) != TacticalMap.Terrain.ROAD:
-			reserved[p] = true
-			return p
-	return Vector2i(6, 1)
+			if nm.is_free(p) or p == at:
+				nm.map.set_terrain(p, TacticalMap.Terrain.WIRE)
+				nm.reserved[p] = true

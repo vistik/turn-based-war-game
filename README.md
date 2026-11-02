@@ -66,6 +66,8 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   status (overwatch, MG set up, hunkered); a hit on one just says HIT. The agent link and move suggestions
   follow the same rule.
 - Overwatch holds its fire for targets it can't hurt, such as rifles and machine guns against a tank.
+- The selected unit stands out: a pulsing gold ring and glow under it and a bobbing gold arrow over its
+  health bar.
 - The selected soldier's field of fire: an outline round everything it can see, green where its gun is at its
   best and a red tint where the range is poor (filled in while aiming).
 - Moving shows the cover at the destination, and "EXPOSED TO 2" if seen enemies would have it in the open.

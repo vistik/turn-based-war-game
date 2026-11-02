@@ -29,8 +29,16 @@ static func generate(seed: int, size := Vector2i(44, 44), style := "") -> Dictio
 	return layout
 
 
+## [hills per 1600 tiles, hill height] per style: ridges and knolls rise out of the jungle; the paddies and
+## the delta are low. Huts are never more than one storey.
+const HEIGHTS := {"paddies": [2.0, 2], "jungle": [3.5, 3], "delta": [2.0, 1]}
+
+
 static func _build(nm: NaturalMap, style: String) -> Dictionary:
 	var scale := float(nm.width * nm.height) / 1600.0
+	var heights: Array = HEIGHTS.get(style, HEIGHTS["jungle"])
+	nm.hills = heights[0]
+	nm.hill_height = heights[1]
 	var laterite := TacticalMap.Terrain.ROAD
 	# The trail, west to east, each end at its own height; a footpath north to south.
 	var west := Vector2i(0, nm.rng.randi_range(int(nm.height * 0.25), int(nm.height * 0.75)))

@@ -16,7 +16,7 @@ const DrawLayer := preload("res://scripts/view/draw_layer.gd")
 const PANEL_WIDTH := 280.0
 const TOP_BAR_HEIGHT := 50.0
 ## Controls listed by the "?" button in the top bar.
-const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nTab next unit   Enter end turn\n1-0, T, C, Z, X, B, G, U, J, K: actions (see buttons)\nH: suggest a move (Shift+H: this soldier)\nWASD / arrows / middle drag: pan\nWheel: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\n+ / -: playback speed   M: music on / off"
+const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nTab next unit   Enter end turn\n1-0, T, C, Z, X, B, G, U, J, K: actions (see buttons)\nH: suggest a move (Shift+H: this soldier)\nWASD / arrows / middle drag: pan\nWheel: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\nPage Up / Down: floors shown (clicks go to the top one)\n+ / -: playback speed   M: music on / off"
 const NEUTRAL_COLOR := Color("e8e2cf")
 ## The mortar button's tag for each kind of round.
 const KIND_TAGS := {"he": "HE", "smoke": "SMK", "napalm": "NPM"}
@@ -130,6 +130,12 @@ var _move_visibility := {}
 var _floaters := []
 var _effects := []
 var _overlay_state := ""
+## Floors shown in tall buildings: everything up to this level (ALL_FLOORS: up to the roofs). Clicking a
+## building moves to the highest floor shown there.
+const ALL_FLOORS := 99
+var _cut := ALL_FLOORS
+## Height each unit is drawn at: the floor it stands on, in levels (ground elevation plus floor).
+var _display_height := {}
 ## While events play back, map changes (crushed or blasted cover) are held back until the moment they happen.
 var _hold_layout := false
 ## Playing an online opponent. Stays set after a disconnect. Online battles aren't saved by _save() but at
@@ -186,7 +192,8 @@ func _ready() -> void:
 				_layer(SHADOW_Z, _paint_shadow_chunk.bind(chunk)),
 				_layer(FOG_Z, _paint_fog_chunk.bind(chunk)),
 			]
-	_overlay_layer = _layer(OVERLAY_Z, _paint_ground_overlays)
+	# On maps with height the markings go over everything, or banks and upper floors would hide them.
+	_overlay_layer = _layer(TOP_Z - 20 if battle.map.has_height() else OVERLAY_Z, _paint_ground_overlays)
 	_camera = Camera2D.new()
 	_camera.zoom = Vector2(0.9, 0.9)
 	add_child(_camera)
@@ -262,6 +269,7 @@ func _quit_to_menu() -> void:
 
 func _add_display_state(u: Unit) -> void:
 	_display_pos[u.id] = _center(u.pos)
+	_display_height[u.id] = battle.map.floor_height(u.pos, u.level)
 	_display_hp[u.id] = u.hp
 	_display_suppression[u.id] = u.suppression
 	_facing[u.id] = Vector2(u.facing).normalized()
@@ -358,6 +366,10 @@ func _handle_camera_input(event: InputEvent) -> bool:
 			KEY_F:
 				if selected != null:
 					_focus(_display_pos[selected.id])
+			KEY_PAGEUP:
+				_change_cut(1)
+			KEY_PAGEDOWN:
+				_change_cut(-1)
 			KEY_EQUAL, KEY_PLUS, KEY_KP_ADD:
 				_change_speed(1)
 			KEY_MINUS, KEY_KP_SUBTRACT:
@@ -395,8 +407,11 @@ func _on_click(tile: Vector2i) -> void:
 		Mode.MOVE:
 			if own:
 				_select(u)
-			elif selected != null and u == null and battle.can_move(selected, tile) == "":
-				_command({"cmd": "move", "unit": selected.id, "tile": tile})
+			elif selected != null and battle.can_move(selected, tile, _dest_level(tile)) == "" and (u == null or u == selected):
+				var command := {"cmd": "move", "unit": selected.id, "tile": tile}
+				if battle.map.has_height():
+					command["level"] = _dest_level(tile)
+				_command(command)
 		Mode.SHOOT:
 			if u != null and _can_fire_at(u) == "":
 				_command({"cmd": _shot_cmd, "unit": selected.id, "target": u.id})
@@ -457,6 +472,9 @@ func _on_action(action: String) -> void:
 			return
 		"toggle_view":
 			_toggle_view()
+			return
+		"floors":
+			_change_cut(1, true)
 			return
 		"speed":
 			_change_speed(1, true)
@@ -663,7 +681,117 @@ func _set_hover(tile: Vector2i) -> void:
 func _mouse_tile() -> Vector2i:
 	if get_viewport().gui_get_hovered_control() != null:
 		return Vector2i(-1, -1)
-	return _proj.tile_at(get_local_mouse_position())
+	return _pick_tile(get_local_mouse_position())
+
+
+## The tile under a screen point: on maps with height, the first surface (raised ground, a floor shown or a
+## roof) the line of view from the camera meets, from the top down.
+func _pick_tile(at: Vector2) -> Vector2i:
+	var map := battle.map
+	if not map.has_height() or not _proj.isometric:
+		return _proj.tile_at(at)
+	var h := float(TacticalMap.MAX_ELEVATION + TacticalMap.MAX_STOREYS) * TerrainPainter.LEVEL_HEIGHT
+	while h > 0.0:
+		var g := _proj.unproject(at + Vector2(0, h * ViewProjection.HEIGHT_PX))
+		var p := Vector2i(g.floor())
+		if map.in_bounds(p) and _surface_lift(p) >= h - 0.001:
+			return p
+		h -= 0.1
+	return _proj.tile_at(at)
+
+
+## The highest floor of tile p on show: its roof (if anyone can stand there) unless floors above `_cut` are
+## hidden.
+func _shown_level(p: Vector2i) -> int:
+	return mini(battle.map.top_level(p), _cut)
+
+
+## How high the surface on show at tile p is drawn.
+func _surface_lift(p: Vector2i) -> float:
+	return battle.map.floor_height(p, _shown_level(p)) * TerrainPainter.LEVEL_HEIGHT
+
+
+## The floor a move to tile p goes to: the one on show there if the selected soldier can reach it, else the
+## highest he can below it, else the lowest he can.
+func _dest_level(p: Vector2i) -> int:
+	if not _reach.has(p):
+		return _shown_level(p)
+	var levels: Dictionary = _reach[p].get("levels", {_reach[p]["level"]: _reach[p]["cost"]})
+	var best := -1
+	for level: int in levels:
+		if level <= _shown_level(p) and level > best:
+			best = level
+	if best == -1:
+		for level: int in levels:
+			if best == -1 or level < best:
+				best = level
+	return best
+
+
+## How high to draw things standing on tile p at the given floor (-1: the move destination there).
+func _tile_lift(p: Vector2i, level := -1) -> float:
+	if not battle.map.has_height():
+		return 0.0
+	if level < 0:
+		level = _dest_level(p) if mode == Mode.MOVE and _reach.has(p) else _shown_level(p)
+	return battle.map.floor_height(p, level) * TerrainPainter.LEVEL_HEIGHT
+
+
+## A tile's outline polygon, lifted to its floor on show.
+func _tile_poly(p: Vector2i, level := -1) -> PackedVector2Array:
+	_proj.lift = _tile_lift(p, level)
+	var poly := TerrainPainter.tile_poly(_proj, p)
+	_proj.lift = 0.0
+	return poly
+
+
+## A circle on the ground round grid point g, lifted to the surface of the tile it's centred on.
+func _ground_circle(g: Vector2, radius: float, closed := true, height := 0.0) -> PackedVector2Array:
+	_proj.lift = _lift_at(g)
+	var points := TerrainPainter.ground_circle(_proj, g, radius, closed, height)
+	_proj.lift = 0.0
+	return points
+
+
+## How high whatever stands at grid point g is drawn: a unit there at its floor, else the surface on show.
+func _lift_at(g: Vector2) -> float:
+	if not battle.map.has_height():
+		return 0.0
+	var p := Vector2i(g.floor())
+	var u := battle.unit_at(p)
+	if u != null and _display_height.has(u.id):
+		return _display_height[u.id] * TerrainPainter.LEVEL_HEIGHT
+	return _surface_lift(p) if battle.map.in_bounds(p) else 0.0
+
+
+## A unit's drawing height.
+func _unit_lift(u: Unit) -> float:
+	return _display_height.get(u.id, 0.0) * TerrainPainter.LEVEL_HEIGHT
+
+
+## A point `height` above a unit, on screen.
+func _unit_point(u: Unit, height: float) -> Vector2:
+	return _proj.project(_display_pos[u.id], height + _unit_lift(u))
+
+
+## Shows one floor more or less of tall buildings (wrapping round from all floors when cycling).
+func _change_cut(step: int, wrap := false) -> void:
+	if battle.map.get_tall_buildings().is_empty():
+		return
+	var levels := TacticalMap.MAX_STOREYS
+	var current := levels if _cut == ALL_FLOORS else _cut
+	current += step
+	if wrap and current > levels:
+		current = 0
+	current = clampi(current, 0, levels)
+	_cut = ALL_FLOORS if current >= levels else current
+	_flash("Showing all floors" if _cut == ALL_FLOORS else ("Showing the ground floor" if _cut == 0 else "Showing up to floor %d" % _cut))
+	if _buttons.has("floors"):
+		_buttons["floors"].text = "Floors: all" if _cut == ALL_FLOORS else "Floor %d" % _cut
+	for node in _prop_nodes:
+		if node.has_meta("cut"):
+			node.queue_redraw()
+	_refresh()
 
 
 func _next_ready_unit(after: Unit) -> Unit:
@@ -941,12 +1069,12 @@ func _play_event(e: Dictionary) -> void:
 			var u := battle.get_unit(e["unit"])
 			_died_at[u.id] = _time
 			if u.vehicle:
-				_effects.append({"kind": "explosion", "at": _display_pos[u.id], "radius": 1.2, "age": 0.0, "life": 1.4})
+				_effects.append({"kind": "explosion", "at": _display_pos[u.id], "radius": 1.2, "age": 0.0, "life": 1.4, "lift": _unit_lift(u)})
 				_float(_display_pos[u.id], "KNOCKED OUT", Color("ff3b3b"))
 				_log_line("[color=#ff6b6b]%s is knocked out![/color]" % u.name)
 				await _wait(0.35)
 				# The ammunition goes up as the turret lifts.
-				_effects.append({"kind": "explosion", "at": _display_pos[u.id], "radius": 0.7, "age": 0.0, "life": 1.0})
+				_effects.append({"kind": "explosion", "at": _display_pos[u.id], "radius": 0.7, "age": 0.0, "life": 1.0, "lift": _unit_lift(u)})
 				await _wait(0.45)
 			else:
 				_start_fall(u)
@@ -970,11 +1098,12 @@ func _play_event(e: Dictionary) -> void:
 		"explosion":
 			_last_source = {"at": _center(e["center"]), "blast": true}
 			_hold_layout = false
-			_effects.append({"kind": "explosion", "at": _center(e["center"]), "radius": e["radius"] + 0.5, "age": 0.0, "life": 1.4})
+			_effects.append({"kind": "explosion", "at": _center(e["center"]), "radius": e["radius"] + 0.5, "age": 0.0, "life": 1.4,
+					"lift": battle.map.floor_height(e["center"], e.get("level", 0)) * TerrainPainter.LEVEL_HEIGHT})
 			_log_line("Explosion: %d pieces of cover destroyed." % e["destroyed"])
 			await _wait(0.6)
 		"smoke":
-			_effects.append({"kind": "puff_burst", "at": _center(e["center"]), "age": 0.0, "life": 0.8})
+			_effects.append({"kind": "puff_burst", "at": _center(e["center"]), "age": 0.0, "life": 0.8, "lift": _lift_at(_center(e["center"]))})
 			_log_line("%s lays smoke." % battle.get_unit(e["unit"]).name)
 			await _wait(0.4)
 		"smoke_clear":
@@ -1016,7 +1145,7 @@ func _play_event(e: Dictionary) -> void:
 		"napalm":
 			_last_source = {"at": _center(e["center"]), "blast": true}
 			_hold_layout = false
-			_effects.append({"kind": "explosion", "at": _center(e["center"]), "radius": CombatRules.NAPALM_RADIUS + 1.0, "age": 0.0, "life": 1.6})
+			_effects.append({"kind": "explosion", "at": _center(e["center"]), "radius": CombatRules.NAPALM_RADIUS + 1.0, "age": 0.0, "life": 1.6, "lift": _lift_at(_center(e["center"]))})
 			_float(_center(e["center"]), "NAPALM", Color("ff8a3d"))
 			_log_line("[color=#ffb84d]Napalm! The ground goes up in flames.[/color]")
 			await _wait(0.7)
@@ -1040,7 +1169,7 @@ func _play_event(e: Dictionary) -> void:
 			await _play_mortar_fire(e)
 		"strike":
 			var center := _center(e["center"])
-			_effects.append({"kind": "incoming", "at": center, "age": 0.0, "life": 0.35})
+			_effects.append({"kind": "incoming", "at": center, "age": 0.0, "life": 0.35, "lift": _lift_at(center)})
 			if (_view_team() == -1 or _viewer_sees(e["center"]) or controllers[battle.current_team] == null) and _follows(battle.get_unit(e["unit"]).team):
 				_focus(center)
 			await _wait(0.35)
@@ -1188,6 +1317,7 @@ func _play_tunnel(e: Dictionary) -> void:
 	if not own:
 		_move_visibility[u.id] = _viewer_sees(to)
 	_display_pos[u.id] = _center(to)
+	_display_height[u.id] = battle.map.floor_height(to)
 	if own or _viewer_sees(to):
 		if controllers[u.team] != null and _follows(u.team):
 			_focus(_center(to))
@@ -1225,15 +1355,18 @@ func _play_move(e: Dictionary) -> void:
 		return
 	_walking[u.id] = true
 	var facings: Array = e.get("facings", [])
+	var levels: Array = e.get("levels", [])
 	for i in range(1, path.size()):
 		if u.vehicle and i < facings.size():
 			# Tanks turn before they drive on, and back up without turning.
 			await _turn_hull(u.id, Vector2(facings[i]).normalized())
-		else:
+		elif path[i] != path[i - 1]:
 			_facing[u.id] = Vector2(path[i] - path[i - 1]).normalized()
 		if watched:
 			_move_visibility[u.id] = _viewer_sees(path[i])
-		await _tween_unit(u.id, _center(path[i]), 0.3 if u.vehicle else 0.16)
+		var height := battle.map.floor_height(path[i], levels[i] if i < levels.size() else 0)
+		var duration := 0.3 if u.vehicle else (0.28 if path[i] == path[i - 1] else 0.16)
+		await _tween_unit(u.id, _center(path[i]), duration, height)
 		if u.vehicle:
 			_hide_crushed(path[i])
 	_walking.erase(u.id)
@@ -1250,6 +1383,8 @@ func _jump_move(u: Unit, e: Dictionary) -> void:
 	if u.team != _view_team() and _view_team() != -1:
 		_move_visibility[u.id] = _viewer_sees(path[-1])
 	_display_pos[u.id] = _center(path[-1])
+	var levels: Array = e.get("levels", [])
+	_display_height[u.id] = battle.map.floor_height(path[-1], levels[-1] if not levels.is_empty() else 0)
 	if u.vehicle:
 		for tile: Vector2i in path:
 			_hide_crushed(tile)
@@ -1274,16 +1409,18 @@ func _play_shot(e: Dictionary) -> void:
 		await _wait(0.45)
 	else:
 		await _wait(0.15)
+	_proj.lift = _unit_lift(shooter)
 	var from := SoldierPainter.muzzle(_proj, _display_pos[shooter.id], shooter, _pose(shooter))
-	var to := _proj.project(_display_pos[target.id], 0.7)
+	_proj.lift = 0.0
+	var to := _unit_point(target, 0.7)
 	var suppressing: bool = e["result"] == "suppressing"
 	var hit: bool = e["result"] != "miss" and not suppressing
 	if e.has("stray_unit"):
-		to = _proj.project(_display_pos[e["stray_unit"]], 0.7)
+		to = _unit_point(battle.get_unit(e["stray_unit"]), 0.7)
 	elif e.has("stray"):
-		to = _proj.project(_center(e["stray"]), 0.3)
+		to = _proj.project(_center(e["stray"]), 0.3 + _lift_at(_center(e["stray"])))
 	elif not hit:
-		to = _proj.project(_display_pos[target.id] + Vector2.from_angle(randf() * TAU) * 0.7, 0.3)
+		to = _proj.project(_display_pos[target.id] + Vector2.from_angle(randf() * TAU) * 0.7, 0.3 + _unit_lift(target))
 	var bursts := 3 if shooter.weapon.kind in ["mg", "smg"] else 1
 	if suppressing:
 		bursts += 2
@@ -1318,7 +1455,8 @@ func _play_throw(e: Dictionary) -> void:
 	if landing != _display_pos[u.id]:
 		_facing[u.id] = (landing - _display_pos[u.id]).normalized()
 	_revealed[u.id] = true
-	_effects.append({"kind": "shell", "from": _display_pos[u.id], "to": landing, "age": 0.0, "life": 0.5})
+	_effects.append({"kind": "shell", "from": _display_pos[u.id], "to": landing, "age": 0.0, "life": 0.5,
+			"lift": _unit_lift(u), "to_lift": battle.map.floor_height(e["center"], e.get("level", 0)) * TerrainPainter.LEVEL_HEIGHT})
 	await _wait(0.5)
 	if e["center"] != e["target"]:
 		var off := Vector2(e["center"]).distance_to(Vector2(e["target"]))
@@ -1332,9 +1470,9 @@ func _play_object_shot(e: Dictionary) -> void:
 	var to := _center(e["tile"])
 	_revealed[u.id] = true
 	_facing[u.id] = (to - _display_pos[u.id]).normalized()
-	var from := _proj.project(_display_pos[u.id], 0.7)
+	var from := _unit_point(u, 0.7)
 	_effects.append({"kind": "muzzle", "at": from, "age": 0.0, "life": 0.1})
-	_effects.append({"kind": "tracer", "from": from, "to": _proj.project(to, 0.4), "age": 0.0, "life": 0.25})
+	_effects.append({"kind": "tracer", "from": from, "to": _proj.project(to, 0.4 + _lift_at(to)), "age": 0.0, "life": 0.25})
 	await _wait(0.25)
 	if not e["hit"]:
 		_float(to, "MISS (%d%%)" % e["chance"], Color.WHITE)
@@ -1391,8 +1529,8 @@ func _play_mortar_fire(e: Dictionary) -> void:
 	var target := _center(e["target"])
 	_facing[u.id] = (target - _display_pos[u.id]).normalized()
 	_revealed[u.id] = true
-	_effects.append({"kind": "muzzle", "at": _proj.project(_display_pos[u.id], 0.9), "age": 0.0, "life": 0.15})
-	_effects.append({"kind": "shell", "from": _display_pos[u.id], "to": target, "age": 0.0, "life": 0.8})
+	_effects.append({"kind": "muzzle", "at": _unit_point(u, 0.9), "age": 0.0, "life": 0.15})
+	_effects.append({"kind": "shell", "from": _display_pos[u.id], "to": target, "age": 0.0, "life": 0.8, "lift": _unit_lift(u), "to_lift": _lift_at(target)})
 	var round_name: String = Battle.KIND_NAMES.get(e["kind"], e["kind"])
 	if u.indirect.get("spotter", "team") == "self":
 		_log_line("%s calls in %s. It lands at the start of their next turn." % [u.name, "napalm" if e["kind"] == "napalm" else ("smoke" if e["kind"] == "smoke" else ("an " if String(u.indirect["name"]).begins_with("a") else "") + u.indirect["name"])])
@@ -1406,7 +1544,7 @@ func _viewer_sees(tile: Vector2i) -> bool:
 	if team == -1:
 		return true
 	for u in battle.alive_units(team):
-		if LineOfSight.can_see(battle.map, u.pos, tile, u.sight):
+		if battle.sees_tile(u.pos, u.level, tile, u.sight):
 			return true
 	return false
 
@@ -1435,13 +1573,18 @@ func _hide_crushed(tile: Vector2i) -> void:
 			node.visible = false
 
 
-func _tween_unit(id: int, to: Vector2, duration: float) -> void:
+## Moves a unit's drawing to grid point `to`, and to floor height `height` (in levels; -1 keeps it).
+func _tween_unit(id: int, to: Vector2, duration: float, height := -1.0) -> void:
 	var speed: float = SPEEDS[_speed_index]
 	if speed == 0.0:
 		_display_pos[id] = to
+		if height >= 0.0:
+			_display_height[id] = height
 		return
 	var tween := create_tween()
 	tween.tween_method(_set_display_pos.bind(id), _display_pos[id], to, duration / speed)
+	if height >= 0.0 and height != _display_height.get(id, 0.0):
+		tween.parallel().tween_method(func(h: float) -> void: _display_height[id] = h, _display_height.get(id, 0.0), height, duration / speed)
 	await tween.finished
 
 
@@ -1458,7 +1601,7 @@ func _wait(seconds: float) -> void:
 
 ## Rising text over a grid position.
 func _float(at: Vector2, text: String, color: Color) -> void:
-	_floaters.append({"text": text, "at": at, "color": color, "age": 0.0, "life": 1.3})
+	_floaters.append({"text": text, "at": at, "color": color, "age": 0.0, "life": 1.3, "lift": _lift_at(at)})
 
 
 func _flash(message: String) -> void:
@@ -1798,12 +1941,19 @@ func _describe_tile(p: Vector2i) -> String:
 	else:
 		lines.append("[b]%s[/b]  move cost %s" % [TacticalMap.TERRAIN_NAMES[map.get_terrain(p)], str(TacticalMap.TERRAIN_COST[map.get_terrain(p)])])
 		var covers := PackedStringArray()
+		var level := _dest_level(p) if map.has_height() else 0
 		for i in 4:
 			var d: Vector2i = TacticalMap.DIRS4[i]
-			var c := map.cover_toward(p, d)
+			var c := map.cover_toward(p, d, level)
 			if c != Cover.NONE:
 				covers.append("%s %s" % [["N", "E", "S", "W"][i], Cover.NAMES[c].to_lower()])
 		lines.append("Cover: " + (", ".join(covers) if not covers.is_empty() else "none"))
+	if map.get_elevation(p) > 0:
+		lines.append("Height %d: climbing a level costs 1 more; shooting down gives the high ground" % map.get_elevation(p))
+	if map.get_storeys(p) >= 2:
+		var shown := _dest_level(p)
+		lines.append("%d storeys, flat roof%s%s" % [map.get_storeys(p), ", stairs" if map.has_stairs(p) else "",
+				(": showing the roof" if map.is_roof(p, shown) else (": showing floor %d" % shown if shown > 0 else ": showing the ground floor"))])
 	if map.has_smoke(p):
 		lines.append("[color=#c8d0d8]Smoke: blocks sight[/color]")
 	if map.is_explosive(p):
@@ -1898,6 +2048,9 @@ func _build_ui() -> void:
 	_add_button(view_row, "rotate_left", "Q Rotate")
 	_add_button(view_row, "rotate_right", "E Rotate")
 	_add_button(view_row, "toggle_view", "V Iso / top")
+	if not battle.map.get_tall_buildings().is_empty():
+		_add_button(view_row, "floors", "Floors: all")
+		_buttons["floors"].tooltip_text = "Floors of tall buildings shown (Page Up / Page Down); clicks go to the highest one shown"
 	_add_button(view_row, "speed", "Speed 1x")
 	var help_button := Button.new()
 	help_button.text = "?"
@@ -2151,6 +2304,8 @@ func _chunk_tiles(chunk: Vector2i) -> Array[Vector2i]:
 func _paint_ground_chunk(c: CanvasItem, chunk: Vector2i) -> void:
 	var batch := DrawBatch.new()
 	for p in _chunk_tiles(chunk):
+		if battle.map.get_elevation(p) > 0:
+			continue  # Raised ground is drawn as a prop (see _rebuild_props).
 		TerrainPainter.draw_tile(batch, _proj, battle.map, p)
 		batch.draw_polyline(_tile_outline(p), Color(0, 0, 0, 0.08), 1.0)
 	batch.flush(c)
@@ -2172,7 +2327,7 @@ func _paint_shadow_chunk(c: CanvasItem, chunk: Vector2i) -> void:
 func _paint_fog_chunk(c: CanvasItem, chunk: Vector2i) -> void:
 	var batch := DrawBatch.new()
 	for p in _chunk_tiles(chunk):
-		if not _visible_tiles.has(p):
+		if not _visible_tiles.has(p) and battle.map.get_elevation(p) == 0:
 			batch.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), Color(0.03, 0.03, 0.05, 0.5))
 	batch.flush(c)
 
@@ -2185,6 +2340,20 @@ func _rebuild_props() -> void:
 	_props_by_tile.clear()
 	_faded.clear()
 	var map := battle.map
+	# Raised ground first, so what stands on it sorts after it.
+	for y in map.height:
+		for x in map.width:
+			var p := Vector2i(x, y)
+			if map.get_elevation(p) > 0:
+				var tiles: Array[Vector2i] = [p]
+				_add_prop(_paint_terrace.bind(p), _center(p), tiles)
+	for p: Vector2i in map.get_tall_buildings():
+		if map.get_storeys(p) >= 2:
+			var tiles: Array[Vector2i] = [p]
+			_add_prop(_paint_upper_floors.bind(p), _center(p), tiles).set_meta("cut", true)
+	for key: Vector3i in _upper_wall_keys():
+		var pair := TacticalMap.edge_tiles(key)
+		_add_prop(_paint_upper_walls.bind(key), (_center(pair[0]) + _center(pair[1])) * 0.5, pair).set_meta("cut", true)
 	for y in map.height:
 		for x in map.width:
 			var p := Vector2i(x, y)
@@ -2195,6 +2364,31 @@ func _rebuild_props() -> void:
 		var pair := TacticalMap.edge_tiles(key)
 		_add_prop(_paint_edge.bind(key), (_center(pair[0]) + _center(pair[1])) * 0.5, pair).set_meta("edge", key)
 	_update_prop_darkness()
+
+
+## Edges of buildings of two storeys or more that have walls above the ground floor: every wall and window
+## touching one, and its outside where the ground floor has a doorway.
+func _upper_wall_keys() -> Array[Vector3i]:
+	return TerrainPainter.upper_wall_keys(battle.map)
+
+
+func _paint_terrace(c: CanvasItem, p: Vector2i) -> void:
+	var batch := DrawBatch.new()
+	TerrainPainter.draw_terrace(batch, _proj, battle.map, p, false)
+	batch.flush(c)
+
+
+func _paint_upper_floors(c: CanvasItem, p: Vector2i) -> void:
+	var batch := DrawBatch.new()
+	TerrainPainter.draw_upper_floors(batch, _proj, battle.map, p, _cut, false)
+	batch.flush(c)
+
+
+func _paint_upper_walls(c: CanvasItem, key: Vector3i) -> void:
+	var batch := DrawBatch.new()
+	var kind := battle.map.edge_kind(key) if battle.map.get_edges().has(key) else ""
+	TerrainPainter.draw_upper_walls(batch, _proj, battle.map, key, kind, _cut, false)
+	batch.flush(c)
 
 
 func _add_prop(painter: Callable, center: Vector2, tiles: Array[Vector2i]) -> Node2D:
@@ -2288,7 +2482,9 @@ func _sync_smoke() -> void:
 
 
 func _paint_smoke(c: CanvasItem, p: Vector2i) -> void:
+	_proj.lift = _tile_lift(p, 0)
 	TerrainPainter.draw_smoke(c, _proj, p, _time)
+	_proj.lift = 0.0
 
 
 ## Soldiers are the costliest thing to draw, so a unit is only repainted while it is on screen, and every frame
@@ -2337,34 +2533,38 @@ func _draw() -> void:
 
 func _paint_ground_overlays(c: CanvasItem) -> void:
 	for p: Vector2i in battle.map.get_fires():
+		_proj.lift = _tile_lift(p, 0)
 		TerrainPainter.draw_fire(c, _proj, p, _time)
 	for p: Vector2i in battle.tunnels_known_to(_view_team()):
+		_proj.lift = _tile_lift(p, 0)
 		TerrainPainter.draw_tunnel(c, _proj, p)
 	for p: Vector2i in battle.map.get_mines():
 		if _mine_known(p):
+			_proj.lift = _tile_lift(p, 0)
 			TerrainPainter.draw_trap(c, _proj, p, battle.map.get_mine_kind(p))
+	_proj.lift = 0.0
 	if not busy and selected != null and _is_human_turn():
 		if mode == Mode.SHOOT and _shot_cmd == "shoot":
 			for p in _explosives_in_sight(selected):
-				c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(p), 0.5), Color("ff8a3d"), 2.0)
+				c.draw_polyline(_ground_circle(_center(p), 0.5), Color("ff8a3d"), 2.0)
 		elif mode == Mode.CLEAR_MINE:
 			for p in _clearable_mines(selected):
-				c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(p), 0.4), Color("e7d9a8"), 2.5)
+				c.draw_polyline(_ground_circle(_center(p), 0.4), Color("e7d9a8"), 2.5)
 		elif mode == Mode.TUNNEL:
 			for p: Vector2i in battle.map.get_tunnels():
 				if battle.can_tunnel(selected, p) == "":
-					c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(p), 0.45), Color("d9a66b"), 2.5)
+					c.draw_polyline(_ground_circle(_center(p), 0.45), Color("d9a66b"), 2.5)
 		elif mode == Mode.DETONATE:
 			for p in _detonatable(selected):
-				c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(p), CombatRules.IED_RADIUS), Color("ff8a3d"), 2.0)
+				c.draw_polyline(_ground_circle(_center(p), CombatRules.IED_RADIUS), Color("ff8a3d"), 2.0)
 		elif mode == Mode.TRAP:
 			for d: Vector2i in TacticalMap.DIRS8:
 				if battle.can_lay_trap(selected, selected.pos + d) == "":
-					c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(selected.pos + d), 0.35), Color("d9a66b"), 2.0)
+					c.draw_polyline(_ground_circle(_center(selected.pos + d), 0.35), Color("d9a66b"), 2.0)
 	for objective in battle.objectives:
 		var owner: int = objective["owner"]
 		var color: Color = _team_color(owner) if owner != -1 else NEUTRAL_COLOR
-		c.draw_polyline(TerrainPainter.ground_circle(_proj, objective["center"], objective["radius"]), Color(color, 0.7), 2.5)
+		c.draw_polyline(_ground_circle(objective["center"], objective["radius"]), Color(color, 0.7), 2.5)
 	_draw_mission_ground(c)
 	for strike in battle.strikes:
 		var he: bool = strike["kind"] != "smoke"
@@ -2372,34 +2572,41 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 		var center := _center(strike["target"])
 		var radius := battle.strike_reach(strike)
 		var pulse := 0.5 + 0.5 * sin(_time * 6.0)
-		c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, center, radius, false), Color(color, 0.08 + 0.08 * pulse))
-		c.draw_polyline(TerrainPainter.ground_circle(_proj, center, radius), color, 2.0)
+		c.draw_colored_polygon(_ground_circle(center, radius, false), Color(color, 0.08 + 0.08 * pulse))
+		c.draw_polyline(_ground_circle(center, radius), color, 2.0)
 	if busy or selected == null or not _is_human_turn():
 		return
 	_draw_gun_view(c)
 	if mode == Mode.MOVE and not _reach.is_empty():
 		for p: Vector2i in _reach:
 			if p != selected.pos:
-				c.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), (MOVE_COLOR if _move_tiles.has(p) else DASH_COLOR) * Color(1, 1, 1, 0.1))
+				c.draw_colored_polygon(_tile_poly(p), (MOVE_COLOR if _move_tiles.has(p) else DASH_COLOR) * Color(1, 1, 1, 0.1))
 		_draw_region_border(c, _reach, DASH_COLOR)
 		_draw_region_border(c, _move_tiles, MOVE_COLOR)
 	if mode == Mode.MORTAR:
 		var at := _center(selected.pos)
-		c.draw_polyline(TerrainPainter.ground_circle(_proj, at, selected.indirect["min"]), Color(1, 0.4, 0.3, 0.5), 1.5)
+		c.draw_polyline(_ground_circle(at, selected.indirect["min"]), Color(1, 0.4, 0.3, 0.5), 1.5)
 		if selected.indirect["max"] < maxi(battle.map.width, battle.map.height):
-			c.draw_polyline(TerrainPainter.ground_circle(_proj, at, selected.indirect["max"]), Color(1, 0.7, 0.3, 0.5), 1.5)
+			c.draw_polyline(_ground_circle(at, selected.indirect["max"]), Color(1, 0.7, 0.3, 0.5), 1.5)
 	if not battle.map.in_bounds(hover):
 		return
-	c.draw_polyline(_tile_outline(hover), Color(1, 1, 1, 0.8), 2.0)
+	var outline := _tile_poly(hover)
+	outline.append(outline[0])
+	c.draw_polyline(outline, Color(1, 1, 1, 0.8), 2.0)
 	match mode:
 		Mode.MOVE:
-			if _reach.has(hover) and hover != selected.pos:
-				var color := MOVE_COLOR if _move_tiles.has(hover) else DASH_COLOR
-				var points := PackedVector2Array([_proj.project(_center(selected.pos))])
-				for p in Pathfinder.path_to(_reach, hover):
-					points.append(_proj.project(_center(p)))
+			var dest_level := _dest_level(hover)
+			if _reach.has(hover) and (hover != selected.pos or dest_level != selected.level):
+				var color := MOVE_COLOR if Pathfinder.cost_to(_reach, hover, dest_level) <= selected.current_mobility() + 0.001 else DASH_COLOR
+				var points := PackedVector2Array([_proj.project(_center(selected.pos), _unit_lift(selected))])
+				var path := Pathfinder.path_to(_reach, hover, dest_level)
+				var levels := Pathfinder.path_levels(_reach, hover, dest_level)
+				for i in path.size():
+					points.append(_proj.project(_center(path[i]), _tile_lift(path[i], levels[i])))
 				c.draw_polyline(points, color, 3.0)
+				_proj.lift = _tile_lift(hover, dest_level)
 				c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(hover), 0.3), color, 2.5)
+				_proj.lift = 0.0
 				if selected.vehicle:
 					_draw_heading(c, hover, _reach[hover]["facing"], color)
 		Mode.PIVOT:
@@ -2410,7 +2617,7 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 			var throw_range := CombatRules.GRENADE_RANGE if grenade else CombatRules.SMOKE_RANGE
 			var radius := CombatRules.GRENADE_RADIUS if grenade else CombatRules.SMOKE_RADIUS
 			var color := Color(1, 0.55, 0.1, 0.4) if grenade else Color(0.8, 0.85, 0.9, 0.35)
-			c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(selected.pos), throw_range), Color(color, 0.6), 1.5)
+			c.draw_polyline(_ground_circle(_center(selected.pos), throw_range), Color(color, 0.6), 1.5)
 			var ok := battle.can_throw_grenade(selected, hover) == "" if grenade else battle.can_throw_smoke(selected, hover) == ""
 			if ok:
 				# The blast on target, and fainter, everywhere it could reach if the throw goes astray.
@@ -2421,31 +2628,31 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 						area[p] = true
 				var core := battle.map.tiles_in_radius(hover, radius)
 				for p: Vector2i in area:
-					c.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), color if core.has(p) else Color(color, color.a * 0.35))
+					c.draw_colored_polygon(_tile_poly(p), color if core.has(p) else Color(color, color.a * 0.35))
 				_draw_region_border(c, area, Color(color, 0.9))
 				if scatter >= 0.5:
-					c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(hover), scatter), Color(color, 0.9), 1.5)
+					c.draw_polyline(_ground_circle(_center(hover), scatter), Color(color, 0.9), 1.5)
 		Mode.MORTAR:
 			if battle.can_fire_mortar(selected, hover, _mortar_kind) == "":
 				var he := _mortar_kind != "smoke"
 				var radius: float = (selected.indirect["radius"] if he else CombatRules.SMOKE_RADIUS) + battle.firing_scatter(selected, hover)
 				var color := Color(1, 0.45, 0.15, 0.3) if he else Color(0.8, 0.85, 0.9, 0.3)
-				c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, _center(hover), radius, false), color)
-				c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(hover), radius), Color(color, 0.9), 2.0)
+				c.draw_colored_polygon(_ground_circle(_center(hover), radius, false), color)
+				c.draw_polyline(_ground_circle(_center(hover), radius), Color(color, 0.9), 2.0)
 		Mode.MEDKIT:
 			for u in battle.alive_units(selected.team):
 				if battle.can_use_medkit(selected, u) == "":
-					c.draw_polyline(TerrainPainter.ground_circle(_proj, _display_pos[u.id], 0.45), Color("6bff8a"), 2.5)
+					c.draw_polyline(_ground_circle(_display_pos[u.id], 0.45), Color("6bff8a"), 2.5)
 	if (mode == Mode.MOVE or mode == Mode.SHOOT) and CombatRules.misses_stray(selected.weapon):
 		# Where misses may go: a rocket or shell's landing area, and friends in harm's way.
 		var target := battle.unit_at(hover)
 		if target != null and _seen_units.has(target.id) and battle.can_shoot(selected, target) == "":
 			if selected.weapon.anti_tank:
 				for p in battle.stray_tiles(selected.pos, hover):
-					c.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), Color(1, 0.4, 0.2, 0.12))
+					c.draw_colored_polygon(_tile_poly(p), Color(1, 0.4, 0.2, 0.12))
 			for risk: Dictionary in battle.stray_risks(selected, selected.pos, target):
 				if risk["unit"].team == selected.team:
-					c.draw_polyline(TerrainPainter.ground_circle(_proj, _display_pos[risk["unit"].id], 0.45), Color("ff6b6b"), 2.5)
+					c.draw_polyline(_ground_circle(_display_pos[risk["unit"].id], 0.45), Color("ff6b6b"), 2.5)
 
 
 ## The selected unit's field of fire: an outline round everything it can see, a green outline round where
@@ -2460,9 +2667,9 @@ func _draw_gun_view(c: CanvasItem) -> void:
 		if band == 1:
 			good[p] = true
 		if aiming and band != 0:
-			c.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), Color(0.55, 0.9, 0.45, 0.1) if band == 1 else Color(1, 0.4, 0.3, 0.08))
+			c.draw_colored_polygon(_tile_poly(p), Color(0.55, 0.9, 0.45, 0.1) if band == 1 else Color(1, 0.4, 0.3, 0.08))
 		elif band == -1:
-			c.draw_colored_polygon(TerrainPainter.tile_poly(_proj, p), Color(1, 0.4, 0.3, 0.05))
+			c.draw_colored_polygon(_tile_poly(p), Color(1, 0.4, 0.3, 0.05))
 	_draw_region_border(c, _gun_view, Color(1, 0.95, 0.8, 0.45 if aiming else 0.3))
 	_draw_region_border(c, good, Color(0.55, 0.9, 0.45, 0.7 if aiming else 0.45))
 
@@ -2472,20 +2679,25 @@ func _draw_heading(c: CanvasItem, tile: Vector2i, dir: Vector2i, color: Color) -
 	var at := _center(tile)
 	var forward := Vector2(dir).normalized()
 	var side := Vector2(-forward.y, forward.x)
+	_proj.lift = _tile_lift(tile, 0)
 	var tip := _proj.project(at + forward * 0.95)
 	c.draw_line(_proj.project(at + forward * 0.35), tip, color, 3.0)
 	c.draw_colored_polygon(PackedVector2Array([tip, _proj.project(at + forward * 0.7 + side * 0.18), _proj.project(at + forward * 0.7 - side * 0.18)]), color)
+	_proj.lift = 0.0
 
 
 ## Outlines the boundary of a set of tiles, like XCOM's move range border.
 func _draw_region_border(c: CanvasItem, tiles: Dictionary, color: Color) -> void:
 	var corners := [Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)]
+	var tall := battle.map.has_height()
 	for p: Vector2i in tiles:
+		var lift := _tile_lift(p) if tall else 0.0
 		for i in 4:
-			if not tiles.has(p + TacticalMap.DIRS4[i]):
+			var q: Vector2i = p + TacticalMap.DIRS4[i]
+			if not tiles.has(q) or (tall and absf(_tile_lift(q) - lift) > 0.01):
 				var a: Vector2 = Vector2(p) + corners[i]
 				var b: Vector2 = Vector2(p) + corners[(i + 1) % 4]
-				c.draw_line(_proj.project(a), _proj.project(b), color, 2.5)
+				c.draw_line(_proj.project(a, lift), _proj.project(b, lift), color, 2.5)
 
 
 func _pose(u: Unit) -> Dictionary:
@@ -2511,6 +2723,12 @@ func _pose(u: Unit) -> Dictionary:
 
 
 func _paint_unit(c: CanvasItem, u: Unit) -> void:
+	_proj.lift = _unit_lift(u)
+	_paint_unit_at_lift(c, u)
+	_proj.lift = 0.0
+
+
+func _paint_unit_at_lift(c: CanvasItem, u: Unit) -> void:
 	var g: Vector2 = _display_pos[u.id]
 	var pose := _pose(u)
 	if u.vehicle:
@@ -2573,15 +2791,16 @@ func _draw_markers() -> void:
 	for objective in battle.objectives:
 		var owner: int = objective["owner"]
 		var color: Color = _team_color(owner) if owner != -1 else NEUTRAL_COLOR
-		var base := _proj.project(objective["center"])
-		var top := _proj.project(objective["center"], 2.2)
+		var lift := _lift_at(objective["center"])
+		var base := _proj.project(objective["center"], lift)
+		var top := _proj.project(objective["center"], 2.2 + lift)
 		draw_line(base, top, Color("3a3226"), 3.0)
 		var wave := sin(_time * 3.0) * 2.0
 		draw_colored_polygon(PackedVector2Array([top, top + Vector2(22, 3 + wave), top + Vector2(22, 15 + wave), top + Vector2(0, 14)]), color)
 		draw_string_outline(_font, top + Vector2(-60, -8), objective["name"], HORIZONTAL_ALIGNMENT_CENTER, 120, 13, 4, Color(0, 0, 0, 0.8))
 		draw_string(_font, top + Vector2(-60, -8), objective["name"], HORIZONTAL_ALIGNMENT_CENTER, 120, 13, color)
 	for strike in battle.strikes:
-		var at := _proj.project(_center(strike["target"]), 0.4)
+		var at := _proj.project(_center(strike["target"]), 0.4 + _lift_at(_center(strike["target"])))
 		var label := "INCOMING" if strike["kind"] == "he" else "SMOKE ROUND"
 		draw_string_outline(_font, at + Vector2(-60, 0), label, HORIZONTAL_ALIGNMENT_CENTER, 120, 12, 4, Color(0, 0, 0, 0.8))
 		draw_string(_font, at + Vector2(-60, 0), label, HORIZONTAL_ALIGNMENT_CENTER, 120, 12, Color("ff6a50") if strike["kind"] == "he" else Color("d8dee4"))
@@ -2590,7 +2809,7 @@ func _draw_markers() -> void:
 	for u in battle.units:
 		if not _display_pos.has(u.id) or _display_hp[u.id] <= 0 or not _is_drawn(u):
 			continue
-		var top := _proj.project(_display_pos[u.id], 1.1 if u.vehicle else 1.15) + Vector2(0, -14)
+		var top := _unit_point(u, 1.1 if u.vehicle else 1.15) + Vector2(0, -14)
 		if not view.has_point(top):
 			continue
 		if not _knows(u):
@@ -2638,17 +2857,21 @@ func _draw_markers() -> void:
 		return
 	# Cover shields on each side of the move destination, and how many seen enemies would have it in the open.
 	var center := _center(hover)
+	var dest_level := _dest_level(hover)
+	var lift := _tile_lift(hover, dest_level)
 	for d: Vector2i in TacticalMap.DIRS4:
-		var c := battle.map.cover_toward(hover, d)
+		var c := battle.map.cover_toward(hover, d, dest_level)
 		if c != Cover.NONE:
-			_draw_shield(_proj.project(center + Vector2(d) * 0.36, 0.5), c == Cover.FULL)
+			_draw_shield(_proj.project(center + Vector2(d) * 0.36, 0.5 + lift), c == Cover.FULL)
 	var notes := PackedStringArray()
 	if not _move_tiles.has(hover):
 		notes.append("DASH")
 	if not _flankers.is_empty():
 		notes.append("EXPOSED TO %d" % _flankers.size())
+	if dest_level > 0:
+		notes.append("ROOF" if battle.map.is_roof(hover, dest_level) else "FLOOR %d" % dest_level)
 	if not notes.is_empty():
-		var at := _proj.project(center) + Vector2(-60, 20)
+		var at := _proj.project(center, lift) + Vector2(-60, 20)
 		draw_string_outline(_font, at, "  ".join(notes), HORIZONTAL_ALIGNMENT_CENTER, 120, 12, 3, Color(0, 0, 0, 0.7))
 		draw_string(_font, at, "  ".join(notes), HORIZONTAL_ALIGNMENT_CENTER, 120, 12, Color("ff8a7a") if not _flankers.is_empty() else DASH_COLOR)
 
@@ -2665,6 +2888,7 @@ func _draw_shield(at: Vector2, full: bool) -> void:
 func _draw_effects() -> void:
 	for fx in _effects:
 		var t: float = fx["age"] / fx["life"]
+		_proj.lift = lerpf(fx.get("lift", 0.0), fx.get("to_lift", fx.get("lift", 0.0)), t)
 		match fx["kind"]:
 			"muzzle":
 				var at: Vector2 = fx["at"]
@@ -2709,11 +2933,12 @@ func _draw_effects() -> void:
 				var height := lerpf(3.0, 0.8, smoothstep(0.0, 0.45, t)) if t < 0.6 else lerpf(0.8, 3.5, smoothstep(0.6, 1.0, t))
 				var heading := (to - from).normalized() if t < 0.6 else (from - to).normalized()
 				VehiclePainter.draw_helicopter(self, _proj, where, heading, height, _time, 1.0 - smoothstep(0.85, 1.0, t))
+	_proj.lift = 0.0
 	for f in _floaters:
 		var t: float = f["age"] / f["life"]
 		var color: Color = f["color"]
 		color.a = 1.0 - t * t
-		var at: Vector2 = _proj.project(f["at"], 1.5) + Vector2(-110, -22 - 24 * t)
+		var at: Vector2 = _proj.project(f["at"], 1.5 + f.get("lift", 0.0)) + Vector2(-110, -22 - 24 * t)
 		draw_string_outline(_font, at, f["text"], HORIZONTAL_ALIGNMENT_CENTER, 220, 14, 4, Color(0, 0, 0, color.a))
 		draw_string(_font, at, f["text"], HORIZONTAL_ALIGNMENT_CENTER, 220, 14, color)
 

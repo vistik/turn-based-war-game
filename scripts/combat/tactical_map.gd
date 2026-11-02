@@ -51,6 +51,33 @@ const FUEL_CRUSH_COST := 6.0
 ## Low obstacles and hedges a tank can drive through (and destroys on the way).
 const CRUSHABLE_EDGES := ["fence", "stone", "hedge", "dyke", "bamboo_wall", "bamboo_window"]
 
+# --- Height ---
+## Heights are in levels: one level is a storey, about three metres. Ground rises in whole levels (hills,
+## ridges, terraces), up to MAX_ELEVATION. A building has 1 to MAX_STOREYS storeys; one of two storeys or
+## more has a flat roof soldiers can stand on, reached by its stairs. Single-storey buildings have pitched
+## roofs nobody stands on. A soldier's level is the floor he stands on: 0 is the ground (or the ground floor),
+## a building's storey count is its roof.
+const MAX_ELEVATION := 3
+const MAX_STOREYS := 3
+## Eye height above the floor, in levels, for each stance (Unit.Stance). Vehicles count as standing.
+const STANCE_EYE := [0.55, 0.35, 0.12]
+## How tall things are, in levels, for seeing over them from higher up. Other full-cover objects stand
+## FULL_OBJECT_HEIGHT high, free-standing full walls WALL_HEIGHT; building walls reach the roof.
+const OBJECT_HEIGHT := {"tree": 2.5, "palm": 2.5, "poplar": 3.0, "bamboo": 2.0, "oil_tank": 1.3}
+const FULL_OBJECT_HEIGHT := 1.0
+const WALL_HEIGHT := 1.0
+const HEDGE_HEIGHT := 1.3
+const SMOKE_HEIGHT := 2.0
+## Jungle canopy: sight below it counts the jungle tiles it passes (JUNGLE_SIGHT_TILES); above it, not.
+const CANOPY_HEIGHT := 2.0
+## Extra path cost of climbing one level: up a slope, onto a roof from a hillside. Going down is free.
+## Ground two or more levels apart is a cliff nobody climbs.
+const CLIMB_COST := 1.0
+## Going up or down one storey on a staircase.
+const STAIRS_COST := 1.5
+## Tanks labour up slopes.
+const VEHICLE_CLIMB_COST := 2.0
+
 var width: int
 var height: int
 ## Bumped on every change, so caches (vision, drawing) know when to rebuild.
@@ -74,6 +101,19 @@ var _fires := {}
 var _mines := {}
 ## Tunnel entrances: tile -> the team whose tunnels they are (Vietnam). The enemy has to find them.
 var _tunnels := {}
+## Ground height of each tile, in levels.
+var _elevation := PackedInt32Array()
+## Building tiles of more than one storey: tile -> storeys. Other indoor tiles have one.
+var _storeys := {}
+## Tiles with a staircase, which joins every floor of the building there, roof included.
+var _stairs := {}
+## Whether any ground is raised, any building is taller than one storey, or any stairs exist. Flat maps take
+## the old, quicker paths for sight and movement.
+var _tall := false
+## Per tile, the height of the tallest thing there that can block sight (ground, object, smoke, roof), and
+## the map revision it was worked out for (see tile_tops).
+var _tops := PackedFloat32Array()
+var _tops_revision := -1
 
 
 func _init(p_width: int, p_height: int) -> void:
@@ -83,6 +123,8 @@ func _init(p_width: int, p_height: int) -> void:
 	_terrain.fill(Terrain.FLOOR)
 	_objects.resize(width * height)
 	_objects.fill(Cover.NONE)
+	_elevation.resize(width * height)
+	_elevation.fill(0)
 
 
 func in_bounds(p: Vector2i) -> bool:
@@ -118,6 +160,158 @@ func set_object(p: Vector2i, cover: int, kind := "") -> void:
 		_object_kinds[p] = kind
 	revision += 1
 	layout_revision += 1
+
+
+# --- Height ---
+
+func has_height() -> bool:
+	return _tall
+
+
+func get_elevation(p: Vector2i) -> int:
+	return _elevation[_index(p)] if in_bounds(p) else 0
+
+
+func set_elevation(p: Vector2i, level: int) -> void:
+	level = clampi(level, 0, MAX_ELEVATION)
+	_elevation[_index(p)] = level
+	if level != 0:
+		_tall = true
+	revision += 1
+	layout_revision += 1
+
+
+## Storeys of the building on the tile: 0 outdoors, 1 or more indoors.
+func get_storeys(p: Vector2i) -> int:
+	if get_terrain(p) != Terrain.INDOOR:
+		return 0
+	return _storeys.get(p, 1)
+
+
+func set_storeys(p: Vector2i, storeys: int) -> void:
+	storeys = clampi(storeys, 1, MAX_STOREYS)
+	if storeys <= 1:
+		_storeys.erase(p)
+	else:
+		_storeys[p] = storeys
+		_tall = true
+	revision += 1
+	layout_revision += 1
+
+
+func has_stairs(p: Vector2i) -> bool:
+	return _stairs.has(p)
+
+
+func set_stairs(p: Vector2i, present: bool) -> void:
+	if present:
+		_stairs[p] = true
+		_tall = true
+	else:
+		_stairs.erase(p)
+	revision += 1
+	layout_revision += 1
+
+
+func get_stairs() -> Dictionary:
+	return _stairs
+
+
+func get_tall_buildings() -> Dictionary:
+	return _storeys
+
+
+## The highest level anyone can stand at on the tile: the roof of a building of two storeys or more,
+## else the ground (or ground floor).
+func top_level(p: Vector2i) -> int:
+	var storeys := get_storeys(p)
+	return storeys if storeys >= 2 else 0
+
+
+func can_stand(p: Vector2i, level: int) -> bool:
+	return in_bounds(p) and level >= 0 and level <= top_level(p)
+
+
+func is_roof(p: Vector2i, level: int) -> bool:
+	return level > 0 and level == get_storeys(p)
+
+
+## Inside a building on that floor (ground floor included).
+func is_indoors(p: Vector2i, level: int) -> bool:
+	return level < get_storeys(p)
+
+
+## Height of the floor a soldier at that level on the tile stands on.
+func floor_height(p: Vector2i, level := 0) -> float:
+	return get_elevation(p) + level
+
+
+func eye_height(p: Vector2i, level := 0, stance := 0) -> float:
+	return floor_height(p, level) + STANCE_EYE[stance]
+
+
+## Per tile (indexed y * width + x), the top of whatever there could block a line of sight: lines passing
+## over higher than this go through untouched. Rebuilt when the map changes.
+func tile_tops() -> PackedFloat32Array:
+	if _tops_revision != revision:
+		_tops_revision = revision
+		_tops.resize(width * height)
+		for y in height:
+			for x in width:
+				var p := Vector2i(x, y)
+				var i := _index(p)
+				var top := float(_elevation[i])
+				if _objects[i] == Cover.FULL:
+					top = maxf(top, object_top(p))
+				if _smoke.has(p):
+					top = maxf(top, _elevation[i] + SMOKE_HEIGHT)
+				if _terrain[i] == Terrain.INDOOR:
+					top = maxf(top, _elevation[i] + get_storeys(p))
+				if _terrain[i] == Terrain.JUNGLE:
+					top = maxf(top, _elevation[i] + CANOPY_HEIGHT)
+				_tops[i] = top
+	return _tops
+
+
+## The level a soldier at level `from_level` on a reaches by stepping onto the neighbouring tile b, or -1 if he
+## can't get there that way. Indoors, a floor leads only to the same floor next door, and only the ground floor
+## leads outside. Out in the open (on the ground or a roof) he can step to open ground or a roof within one
+## level of his own, and from the ground through a door into a ground floor level with it.
+func arrival_level(a: Vector2i, from_level: int, b: Vector2i) -> int:
+	if not in_bounds(b):
+		return -1
+	var terrain_b := _terrain[_index(b)]
+	if from_level == 0 and terrain_b != Terrain.INDOOR and get_terrain(a) != Terrain.INDOOR:
+		# Open ground to open ground, the common case.
+		return 0 if absi(_elevation[_index(a)] - _elevation[_index(b)]) <= 1 else -1
+	var storeys_b := get_storeys(b)
+	if is_indoors(a, from_level):
+		if storeys_b > 0 and from_level < storeys_b and get_elevation(a) == get_elevation(b):
+			return from_level
+		if from_level == 0 and storeys_b == 0 and absi(get_elevation(a) - get_elevation(b)) <= 1:
+			return 0
+		return -1
+	var here := get_elevation(a) + from_level
+	if storeys_b == 0:
+		return 0 if absi(here - get_elevation(b)) <= 1 else -1
+	if from_level == 0 and get_storeys(a) == 0 and here == get_elevation(b):
+		return 0
+	if storeys_b >= 2 and absi(here - (get_elevation(b) + storeys_b)) <= 1:
+		return storeys_b
+	return -1
+
+
+## The wall between two neighbouring tiles as it stands at the height of a step or a soldier at those
+## levels: up on a roof, walls between building tiles are gone and the building's outer edge is a parapet
+## (half cover); everywhere else the wall is the same on every floor.
+func edge_at(a: Vector2i, b: Vector2i, level_a := 0, level_b := 0) -> int:
+	if is_roof(a, level_a) or is_roof(b, level_b):
+		var indoor_a := get_storeys(a) > 0
+		var indoor_b := get_storeys(b) > 0
+		if indoor_a and indoor_b:
+			return Cover.NONE
+		return Cover.HALF
+	return get_edge(a, b)
 
 
 ## Cover level of the wall between two orthogonally adjacent tiles.
@@ -270,8 +464,61 @@ func is_passable(p: Vector2i) -> bool:
 	return in_bounds(p) and get_object(p) == Cover.NONE
 
 
-## Path cost of stepping from a to the neighbouring tile b, or INF if the step is impossible.
-func step_cost(a: Vector2i, b: Vector2i) -> float:
+## Path cost of stepping from a to the neighbouring tile b, or INF if the step is impossible. Levels: the
+## floor stood on at a, and the one arrived at on b (-1: work it out with arrival_level).
+func step_cost(a: Vector2i, b: Vector2i, level_a := 0, level_b := -1) -> float:
+	if not _tall:
+		return _flat_step_cost(a, b)
+	if level_b < 0:
+		level_b = arrival_level(a, level_a, b)
+	if level_b < 0:
+		return INF
+	if level_b == 0 and (not is_passable(b) or _fires.has(b)):
+		return INF
+	var cost: float = TERRAIN_COST[get_terrain(b)] if level_b == 0 else 1.0
+	if level_a == 0 and level_b == 0 and _level_open(a, b) and (a.x == b.x or a.y == b.y or (_level_open(a, Vector2i(b.x, a.y)) and _level_open(a, Vector2i(a.x, b.y)))):
+		# Level open ground: as on a flat map.
+		return _flat_step_cost(a, b)
+	var rise := floor_height(b, level_b) - floor_height(a, level_a)
+	if a.x != b.x and a.y != b.y:
+		# Diagonals only across level ground, and no cutting corners past objects or walls.
+		if rise != 0.0:
+			return INF
+		for side: Vector2i in [Vector2i(b.x, a.y), Vector2i(a.x, b.y)]:
+			if arrival_level(a, level_a, side) != level_a or floor_height(side, level_a) != floor_height(a, level_a):
+				return INF
+			if level_a == 0 and not is_passable(side):
+				return INF
+			if edge_at(a, side, level_a, level_a) != Cover.NONE or edge_at(side, b, level_a, level_b) != Cover.NONE:
+				return INF
+		return cost * DIAGONAL_FACTOR
+	if rise > 0.0:
+		cost += CLIMB_COST * rise
+	match edge_at(a, b, level_a, level_b):
+		Cover.FULL:
+			return cost + HEDGE_COST if get_edge_kind(a, b) == "hedge" else INF
+		Cover.HALF:
+			return cost + VAULT_COST
+	return cost
+
+
+## Whether b is open ground (no building) level with open ground at a.
+func _level_open(a: Vector2i, b: Vector2i) -> bool:
+	if not in_bounds(b):
+		return false
+	var i := _index(a)
+	var j := _index(b)
+	return _elevation[i] == _elevation[j] and _terrain[i] != Terrain.INDOOR and _terrain[j] != Terrain.INDOOR
+
+
+## Climbing or descending a staircase on p by one storey, or INF without stairs or a floor there.
+func stairs_cost(p: Vector2i, from_level: int, to_level: int) -> float:
+	if not _stairs.has(p) or absi(from_level - to_level) != 1 or not can_stand(p, to_level) or not can_stand(p, from_level):
+		return INF
+	return STAIRS_COST
+
+
+func _flat_step_cost(a: Vector2i, b: Vector2i) -> float:
 	if not is_passable(b) or _fires.has(b):
 		return INF
 	var cost: float = TERRAIN_COST[get_terrain(b)]
@@ -301,6 +548,17 @@ func vehicle_step_cost(a: Vector2i, b: Vector2i) -> float:
 	# Tanks roll straight over barbed wire, but bog down in paddies.
 	var terrain := get_terrain(b)
 	var cost: float = VEHICLE_TERRAIN_COST.get(terrain, TERRAIN_COST[terrain])
+	if _tall:
+		# Up one level at a time, and diagonally only across level ground.
+		var rise := get_elevation(b) - get_elevation(a)
+		if absi(rise) > 1 or get_storeys(b) > 1:
+			return INF
+		if rise != 0 and a.x != b.x and a.y != b.y:
+			return INF
+		if a.x != b.x and a.y != b.y and (get_elevation(Vector2i(b.x, a.y)) != get_elevation(a) or get_elevation(Vector2i(a.x, b.y)) != get_elevation(a)):
+			return INF
+		if rise > 0:
+			cost += VEHICLE_CLIMB_COST
 	if get_object_kind(b) == "fuel" and get_object(b) != Cover.NONE:
 		# Possible, but the drums go up under the tank.
 		cost += FUEL_CRUSH_COST
@@ -339,33 +597,58 @@ func is_jungle(p: Vector2i) -> bool:
 
 
 ## Cover a unit standing on p gets on the side facing direction dir.
-## A crater covers every side; a tank alongside counts as half cover.
-func cover_toward(p: Vector2i, dir: Vector2i) -> int:
-	var cover := maxi(get_edge(p, p + dir), get_object(p + dir))
-	if _vehicles.has(p + dir):
+## A crater covers every side; a tank alongside counts as half cover; a bank of higher ground is full cover.
+## Upstairs, only the building's walls and windows count (an open doorway below is wall up there); on a
+## roof, the parapet is half cover and a taller building alongside full cover.
+func cover_toward(p: Vector2i, dir: Vector2i, level := 0) -> int:
+	var q := p + dir
+	if level > 0:
+		if is_roof(p, level):
+			var beside := floor_height(q, get_storeys(q))
+			if beside > floor_height(p, level) + 0.5:
+				return Cover.FULL
+			if get_storeys(q) > 0 and beside == floor_height(p, level):
+				return Cover.NONE
+			return Cover.HALF
+		var wall := get_edge(p, q)
+		if wall == Cover.NONE and not (get_storeys(q) > level and get_elevation(q) == get_elevation(p)):
+			return Cover.FULL
+		return wall
+	var cover := maxi(get_edge(p, q), get_object(q))
+	if _vehicles.has(q):
 		cover = maxi(cover, Cover.HALF)
 	if get_terrain(p) == Terrain.CRATER:
 		cover = maxi(cover, Cover.HALF)
+	if _tall and in_bounds(q) and get_elevation(q) > get_elevation(p):
+		cover = Cover.FULL
 	return cover
 
 
-func has_cover(p: Vector2i) -> bool:
+func has_cover(p: Vector2i, level := 0) -> bool:
 	for d: Vector2i in DIRS4:
-		if cover_toward(p, d) != Cover.NONE:
+		if cover_toward(p, d, level) != Cover.NONE:
 			return true
 	return false
 
 
 ## Best cover protecting a unit on target from an attacker on attacker_pos.
 ## A side's cover counts when the attacker is in front of it, within roughly 63° of straight on.
-func cover_against(target: Vector2i, attacker_pos: Vector2i) -> int:
+## Shooting down from a level or more above, low cover no longer hides the target; from two levels above,
+## full cover only half does.
+func cover_against(target: Vector2i, attacker_pos: Vector2i, target_level := 0, attacker_level := 0) -> int:
 	var offset := attacker_pos - target
 	var best := Cover.NONE
 	for d: Vector2i in DIRS4:
 		var along := offset.x * d.x + offset.y * d.y
 		var across := absi(offset.x * d.y - offset.y * d.x)
 		if along > 0 and along * 2 >= across:
-			best = maxi(best, cover_toward(target, d))
+			best = maxi(best, cover_toward(target, d, target_level))
+	if _tall and best != Cover.NONE:
+		var drop := floor_height(attacker_pos, attacker_level) - floor_height(target, target_level)
+		if drop >= 2.0:
+			best -= 1
+		elif drop >= 1.0 and best == Cover.HALF:
+			best = Cover.NONE
 	return best
 
 
@@ -375,6 +658,23 @@ func blocks_sight(p: Vector2i) -> bool:
 
 func edge_blocks_sight(a: Vector2i, b: Vector2i) -> bool:
 	return get_edge(a, b) == Cover.FULL
+
+
+## How high the full-cover object on p reaches.
+func object_top(p: Vector2i) -> float:
+	return get_elevation(p) + OBJECT_HEIGHT.get(get_object_kind(p), FULL_OBJECT_HEIGHT)
+
+
+## How high a full wall or hedge between a and b reaches: a building's walls go up to its roof.
+func edge_top(a: Vector2i, b: Vector2i) -> float:
+	var top := 0.0
+	for side: Vector2i in [a, b]:
+		if get_storeys(side) > 0:
+			top = maxf(top, floor_height(side, get_storeys(side)))
+	if top > 0.0:
+		return top
+	var base := maxi(get_elevation(a), get_elevation(b))
+	return base + (HEDGE_HEIGHT if get_edge_kind(a, b) == "hedge" else WALL_HEIGHT)
 
 
 func tiles_in_radius(center: Vector2i, radius: float) -> Array[Vector2i]:
@@ -403,7 +703,8 @@ func destroy_cover(center: Vector2i, radius: float) -> int:
 			destroyed += 1
 		if get_object(p) != Cover.NONE:
 			set_object(p, Cover.NONE)
-			set_terrain(p, Terrain.RUBBLE)
+			if not _storeys.has(p):
+				set_terrain(p, Terrain.RUBBLE)
 			destroyed += 1
 	for key: Vector3i in _edges.keys():
 		var pair := edge_tiles(key)
@@ -424,9 +725,15 @@ func to_dict() -> Dictionary:
 		"object_kinds": _object_kinds.duplicate(), "edges": _edges.duplicate(), "edge_kinds": _edge_kinds.duplicate(),
 		"smoke": _smoke.duplicate(), "vehicles": _vehicles.duplicate(), "fires": _fires.duplicate(), "mines": _mines.duplicate(),
 	}
-	# Only maps with tunnels say so, so maps without read (and checksum) as they always have.
+	# Only maps with tunnels say so, so maps without read (and checksum) as they always have. Likewise heights.
 	if not _tunnels.is_empty():
 		data["tunnels"] = _tunnels.duplicate()
+	if _elevation.count(0) != _elevation.size():
+		data["elevation"] = _elevation.duplicate()
+	if not _storeys.is_empty():
+		data["storeys"] = _storeys.duplicate()
+	if not _stairs.is_empty():
+		data["stairs"] = _stairs.duplicate()
 	return data
 
 
@@ -442,7 +749,17 @@ static func from_dict(data: Dictionary) -> TacticalMap:
 	map._fires = data.get("fires", {}).duplicate()
 	map._mines = data.get("mines", {}).duplicate()
 	map._tunnels = data.get("tunnels", {}).duplicate()
+	if data.has("elevation"):
+		map._elevation = PackedInt32Array(data["elevation"])
+	map._storeys = data.get("storeys", {}).duplicate()
+	map._stairs = data.get("stairs", {}).duplicate()
+	map._tall = map._elevation.count(0) != map._elevation.size() or not map._storeys.is_empty() or not map._stairs.is_empty()
 	return map
+
+
+## The key of the edge between two orthogonally adjacent tiles (as get_edges() uses).
+static func edge_key(a: Vector2i, b: Vector2i) -> Vector3i:
+	return _edge_key(a, b)
 
 
 func _index(p: Vector2i) -> int:

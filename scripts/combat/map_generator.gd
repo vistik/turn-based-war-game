@@ -34,7 +34,16 @@ static func is_playable(layout: Dictionary) -> bool:
 	return NaturalMap.is_playable(layout)
 
 
+## [hills per 1600 tiles, hill height, chance a house has upper floors, most storeys] per style.
+const HEIGHTS := {"bocage": [2.5, 2, 0.4, 2], "hamlets": [3.0, 2, 0.3, 2], "town": [0.0, 0, 0.6, 3], "forest": [3.0, 3, 0.2, 2]}
+
+
 static func _build(nm: NaturalMap, style: String) -> Dictionary:
+	var heights: Array = HEIGHTS.get(style, HEIGHTS["bocage"])
+	nm.hills = heights[0]
+	nm.hill_height = heights[1]
+	nm.tall_chance = heights[2]
+	nm.tall_max = heights[3]
 	match style:
 		"hamlets":
 			_hamlets(nm)
@@ -97,6 +106,8 @@ static func _church(nm: NaturalMap, at: Vector2i, landmark_name := "Church") -> 
 		for j in [1, rect.size.y - 2] if long_x else [1, rect.size.x - 2]:
 			var p := rect.position + (Vector2i(i, j) if long_x else Vector2i(j, i))
 			nm.map.set_object(p, Cover.HALF, "pew")
+	# The bell tower: three storeys over one corner, with stairs to the top.
+	nm.tall(Rect2i(rect.position, Vector2i(2, 2)), 3)
 	nm.landmark(landmark_name, nm.nearest_open(rect.get_center()))
 	return rect
 
@@ -237,11 +248,13 @@ static func _town(nm: NaturalMap) -> void:
 	for spot: Vector2i in _road_spots(nm, [heart], 8.0):
 		var hall := nm.roadside_house(spot, Vector2i(7, 5), "stone", 1)
 		if hall.size != Vector2i.ZERO:
+			nm.tall(hall, 2)
 			nm.landmark("Town hall", nm.nearest_open(hall.get_center()))
 			break
 	for spot: Vector2i in _road_spots(nm, [heart], 14.0):
 		var station := nm.roadside_house(spot, Vector2i(6, 4), "stone", 2)
 		if station.size != Vector2i.ZERO:
+			nm.tall(station, 2)
 			nm.landmark("Station", nm.nearest_open(station.get_center()))
 			break
 	var houses := nm.village(heart, nm.width * 0.45, int(22 * scale), [Vector2i(4, 3), Vector2i(5, 4), Vector2i(4, 4), Vector2i(6, 3)], "stone", 0.25, "stone")

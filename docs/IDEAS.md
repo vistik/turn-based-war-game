@@ -20,7 +20,7 @@ Saved from a design discussion; nothing here is decided.
 ## Needed whichever way
 
 - Real art (sprites or simple 3D), sound and music
-- Tanks and height levels (planned)
+- Tanks and height levels (done)
 - Save/load (straightforward: all state lives in plain engine objects)
 - Better AI: smoke, falling back, coordinated flanking
 

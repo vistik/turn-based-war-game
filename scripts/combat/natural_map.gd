@@ -12,7 +12,8 @@ extends RefCounted
 ## register landmarks as they build, and fair_objectives() picks the ones each side walks about as far to.
 ##
 ## Generators build in this order: roads, then settlements and landmarks along them, then woods, then the
-## field patchwork in the ground that is left, then clutter; then spawns and objectives.
+## field patchwork in the ground that is left, then clutter; then finish() raises hills (see `hills`) and picks
+## spawns and objectives. Houses may get upper floors and a flat roof (see `tall_chance`, tall()).
 
 ## Columns kept free of structures along each side's edge, so both sides have room to deploy.
 const STRIP := 4
@@ -43,6 +44,13 @@ var junctions: Array[Vector2i] = []
 var landmarks: Array[Dictionary] = []
 ## How uneven a walk to an objective may be (see fair_objectives). Generators ease it on later attempts.
 var tolerance := 0.15
+## Hills per 1600 tiles (44x44 is about 1900) and how many levels they rise, raised by finish() on the rough
+## ground off roads, buildings and the deployment strips (see HeightGenerator). 0 hills keeps the map flat.
+var hills := 0.0
+var hill_height := 2
+## Chance a house gets upper floors, and the most storeys it may have (2 or 3). Bamboo huts stay low.
+var tall_chance := 0.0
+var tall_max := 2
 var _road_count := 0
 var _wild := FastNoiseLite.new()
 var _wet := FastNoiseLite.new()
@@ -251,10 +259,24 @@ func house(rect: Rect2i, door_side: Vector2i, style := "stone") -> void:
 		for i in (2 if length >= 5 else 1):
 			windows.append([_wall_tile(rect, side), side])
 	build.building(rect, doors, windows, [], style)
+	if style != "bamboo" and tall_chance > 0.0 and rng.randf() < tall_chance:
+		tall(rect, 3 if tall_max >= 3 and rng.randf() < 0.3 else 2, doors[0][0])
 	reserve(rect.grow(1))
 	for y in range(rect.position.y, rect.end.y):
 		for x in range(rect.position.x, rect.end.x):
 			solid[Vector2i(x, y)] = true
+
+
+## Gives a building (or a corner of one: a tower) `count` storeys, with the stairs in the corner furthest from
+## `door` (the rect's first corner if no door is given).
+func tall(rect: Rect2i, count: int, door := Vector2i(-1, -1)) -> void:
+	var corners := [rect.position, Vector2i(rect.end.x - 1, rect.position.y), Vector2i(rect.position.x, rect.end.y - 1), rect.end - Vector2i.ONE]
+	var stairs: Vector2i = corners[0]
+	if door.x >= 0:
+		for c: Vector2i in corners:
+			if Vector2(c).distance_to(Vector2(door)) > Vector2(stairs).distance_to(Vector2(door)):
+				stairs = c
+	build.tall_building(rect, count, stairs)
 
 
 ## A random tile along the `side` wall of a rect, off the corners where the wall is long enough.
@@ -340,11 +362,14 @@ func village(center: Vector2i, radius: float, count: int, sizes: Array, style :=
 	return built
 
 
-## Knocks a house about: about `amount` of its walls come down and its floor turns to rubble in places.
+## Knocks a house about: about `amount` of its walls come down and its floor turns to rubble in places. Its
+## upper floors (if any) are gone.
 func ruin(rect: Rect2i, amount: float) -> void:
 	for y in range(rect.position.y, rect.end.y):
 		for x in range(rect.position.x, rect.end.x):
 			var p := Vector2i(x, y)
+			map.set_storeys(p, 1)
+			map.set_stairs(p, false)
 			if rng.randf() < amount:
 				map.set_terrain(p, TacticalMap.Terrain.RUBBLE)
 			for d: Vector2i in DIRS:
@@ -710,6 +735,7 @@ static func is_playable(layout: Dictionary) -> bool:
 ## The finished layout for BattleFactory.create, with both sides' spawns round the rows given (a road's entry
 ## if there is one), and objectives fair to both; {} if no fair set of objectives could be found.
 func finish(extra := {}) -> Dictionary:
+	_raise_hills()
 	var centers := []
 	for team in 2:
 		var entry := road_entry(team)
@@ -726,3 +752,27 @@ func finish(extra := {}) -> Dictionary:
 	}
 	layout.merge(extra)
 	return layout
+
+
+## Raises `hills` hills on the wilder ground, keeping roads, buildings and their surrounds, paddies and the
+## deployment strips level. Each hilltop becomes a minor landmark ("Hill 104"), so there is high ground to
+## fight over and fair_objectives has more to choose from.
+func _raise_hills() -> void:
+	var count := roundi(hills * width * height / 1600.0)
+	if count <= 0:
+		return
+	var flat := {}
+	for y in height:
+		for x in width:
+			var p := Vector2i(x, y)
+			var terrain := map.get_terrain(p)
+			if not in_play(p) or roads.has(p) or terrain == TacticalMap.Terrain.PADDY or terrain == TacticalMap.Terrain.INDOOR:
+				flat[p] = true
+	for p: Vector2i in solid:
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				flat[p + Vector2i(dx, dy)] = true
+	var tops := HeightGenerator.raise_hills(build, rng, flat, count, hill_height, wild)
+	for i in tops.size():
+		var top := nearest_open(tops[i])
+		landmark("Hill %d" % (80 + map.get_elevation(top) * 15 + i * 7 + rng.randi_range(0, 5)), top, 0.3)

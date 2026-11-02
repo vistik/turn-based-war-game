@@ -90,6 +90,8 @@ const PLANT_VALUE := 80.0
 const DEFUSE_VALUE := 90.0
 ## Standing where our own charge will go off.
 const CHARGE_DANGER := 45.0
+## Worth of each level of height a soldier stands at (on top of what it does for his shots and cover).
+const HEIGHT_WEIGHT := 2.0
 
 var battle: Battle
 var team: int
@@ -111,6 +113,9 @@ var _urgency := 0.0
 var _sight_cache := {}
 ## Per-act cache of _exit_clear(): -1 unknown, else 0 or 1.
 var _exit_cache := -1
+## The floor the unit being judged would stand on at the tile being judged (-1: its own floor at its own
+## tile, else the ground).
+var _at_level := -1
 
 
 func _init(p_battle: Battle, p_team: int) -> void:
@@ -244,7 +249,7 @@ func _best_plan(u: Unit, seen: Array[Unit]) -> Dictionary:
 	if u.ammo < u.weapon.clip_size:
 		var reload_value := RELOAD_EMPTY_VALUE if u.ammo == 0 else (4.0 if seen.is_empty() else 0.0)
 		plans.append(_plan(u, "reload", stay + reload_value))
-	if map.has_cover(here) and not u.vehicle:
+	if map.has_cover(here, u.level) and not u.vehicle:
 		plans.append(_plan(u, "hunker", stay + _danger(u, here, seen)[1]))
 	if u.vehicle:
 		# Turning on the spot to put the front armour toward the threat.
@@ -288,17 +293,25 @@ func _best_plan(u: Unit, seen: Array[Unit]) -> Dictionary:
 
 	var reach := battle.reachable(u)
 	for tile: Vector2i in reach:
-		if tile == here or reach[tile]["cost"] > u.current_mobility() + 0.001:
-			continue
-		var facing := u.facing
-		if u.vehicle:
-			# Judge the spot with the hull facing the way it will end up.
-			u.facing = reach[tile]["facing"]
-		var value := _position_score(u, tile, seen)
-		if u.actions >= 2:
-			value += _followup_value(u, tile, seen)
-		u.facing = facing
-		plans.append(_plan(u, "move", value, null, tile))
+		# Every floor of the tile within a move (on maps with height), else just the tile.
+		var levels: Dictionary = reach[tile].get("levels", {reach[tile]["level"]: reach[tile]["cost"]})
+		for level: int in levels:
+			if (tile == here and level == u.level) or levels[level] > u.current_mobility() + 0.001:
+				continue
+			var facing := u.facing
+			if u.vehicle:
+				# Judge the spot with the hull facing the way it will end up.
+				u.facing = reach[tile]["facing"]
+			_at_level = level
+			var value := _position_score(u, tile, seen)
+			if u.actions >= 2:
+				value += _followup_value(u, tile, seen)
+			_at_level = -1
+			u.facing = facing
+			var plan := _plan(u, "move", value, null, tile)
+			if levels.size() > 1 or level != 0:
+				plan["level"] = level
+			plans.append(plan)
 
 	var best := {}
 	for plan in plans:
@@ -338,7 +351,9 @@ func _stance_plans(u: Unit, seen: Array[Unit]) -> Array[Dictionary]:
 			var reach := battle.reachable(u)
 			for tile: Vector2i in reach:
 				if tile != here:
+					_at_level = reach[tile]["level"]
 					value = maxf(value, _position_score(u, tile, seen) + STANCE_MOBILITY_COST[current])
+					_at_level = -1
 		u.actions += 1
 		u.stance = current
 		var plan := _plan(u, "stance", value)
@@ -370,6 +385,8 @@ func _command(plan: Dictionary) -> Dictionary:
 		command["tile"] = plan["tile"]
 	if plan["kind"] == "stance":
 		command["stance"] = plan["stance"]
+	if plan.has("level"):
+		command["level"] = plan["level"]
 	if plan["kind"] == "mortar":
 		command["kind"] = "he"
 	return command
@@ -394,25 +411,28 @@ func _trap_value(tile: Vector2i) -> float:
 func _position_score(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 	var map := battle.map
 	var score := 0.0
+	var level := _level_of(u, tile)
 	if not u.vehicle:
 		var best_cover := Cover.NONE
 		for d: Vector2i in TacticalMap.DIRS4:
-			best_cover = maxi(best_cover, map.cover_toward(tile, d))
+			best_cover = maxi(best_cover, map.cover_toward(tile, d, level))
 		score += best_cover * COVER_WEIGHT
 		# Cover only helps on the side the shots come from: toward the enemies we know of, else the goal.
 		var threats := _threats(seen)
 		var facing_cover := 0.0
 		if threats.is_empty():
-			facing_cover = map.cover_against(tile, Vector2i(_goal(tile).round()))
+			facing_cover = map.cover_against(tile, Vector2i(_goal(tile).round()), level)
 		else:
 			var weights := 0.0
 			for threat: Array in threats:
-				facing_cover += map.cover_against(tile, threat[1]) * threat[2]
+				facing_cover += map.cover_against(tile, threat[1], level, threat[3]) * threat[2]
 				weights += threat[2]
 			facing_cover /= weights
 		score += facing_cover * FACING_COVER_WEIGHT
 		if best_cover == Cover.NONE:
 			score -= OPEN_GROUND_PENALTY * (1.0 if not seen.is_empty() else 0.5)
+		if map.has_height():
+			score += map.floor_height(tile, level) * HEIGHT_WEIGHT
 
 	var caution := 2.0 - float(u.hp) / u.max_hp
 	if u.id == battle.mission.get("vip", -1):
@@ -474,18 +494,20 @@ func _explosives_near(seen: Array[Unit]) -> Array[Vector2i]:
 func _danger(u: Unit, tile: Vector2i, seen: Array[Unit]) -> Array[float]:
 	var danger := 0.0
 	var hunker_gain := 0.0
+	var level := _level_of(u, tile)
 	for threat in _threats(seen):
 		var e: Unit = threat[0]
 		var from: Vector2i = threat[1]
 		var weight: float = threat[2]
-		if not _can_see(from, tile, e.sight):
+		var from_level: int = threat[3]
+		if not _can_see(from, tile, e.sight, from_level, level):
 			continue
-		if Battle.hidden_at(battle.map, from, u, tile):
+		if Battle.hidden_at(battle.map, from, u, tile, level):
 			# Lying in the wheat (or hidden in the grass or jungle), out of their sight.
 			continue
-		var outcome := _expected_damage(e, from, u, tile)
+		var outcome := _expected_damage(e, from, u, tile, false, from_level, level)
 		danger += (outcome[0] * 10.0 + outcome[1] * KILL_BONUS * 0.5) * weight
-		var cover := battle.map.cover_against(tile, from)
+		var cover := battle.map.cover_against(tile, from, level, from_level)
 		if cover != Cover.NONE:
 			hunker_gain += CombatRules.COVER_DEFENSE[cover] / 100.0 * _average_damage(e) * 10.0 * weight
 	for strike in battle.strikes:
@@ -509,11 +531,12 @@ func _followup_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 		# Moving packs the gun away: the second action can only set it up again.
 		return OVERWATCH_VALUE * 0.6
 	var best := _overwatch_value(u, tile, seen)
+	var level := _level_of(u, tile)
 	for e in seen:
-		if _can_see(tile, e.pos, u.sight):
+		if _can_see(tile, e.pos, u.sight, level, e.level):
 			best = maxf(best, _shot_value(u, tile, e))
 	for p in _explosives_near(seen):
-		if _can_see(tile, p, u.sight):
+		if _can_see(tile, p, u.sight, level):
 			var kind := battle.map.get_object_kind(p)
 			var spec: Dictionary = CombatRules.EXPLOSIVES[kind]
 			var value := _blast_value(p, spec["radius"], spec["damage_min"], spec["damage_max"], 0, seen)
@@ -522,7 +545,7 @@ func _followup_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 
 
 func _shot_value(u: Unit, from: Vector2i, target: Unit, aimed := false) -> float:
-	var outcome := _expected_damage(u, from, target, target.pos, aimed)
+	var outcome := _expected_damage(u, from, target, target.pos, aimed, _level_of(u, from), target.level)
 	var value := (outcome[0] * 10.0 + outcome[1] * KILL_BONUS) * _target_weight(target) + (5.0 if target.overwatch else 0.0)
 	if CombatRules.misses_stray(u.weapon):
 		value -= _stray_cost(u, from, target)
@@ -535,7 +558,7 @@ func _shot_value(u: Unit, from: Vector2i, target: Unit, aimed := false) -> float
 		for other in battle.alive_units():
 			if other != target and Vector2(other.pos).distance_to(Vector2(target.pos)) <= u.weapon.blast_radius:
 				value += splash * (-2.0 if other.team == team else 0.6)
-		if battle.map.has_cover(target.pos):
+		if battle.map.has_cover(target.pos, target.level):
 			value += 6.0
 	if u.weapon.needs_setup:
 		for ally in battle.alive_units(target.team):
@@ -550,10 +573,12 @@ func _stray_cost(u: Unit, from: Vector2i, target: Unit) -> float:
 	var risks := battle.stray_risks(u, from, target)
 	if risks.is_empty():
 		return 0.0
-	var saved := u.pos
+	var saved := [u.pos, u.level]
+	u.level = _level_of(u, from)
 	u.pos = from
 	var odds := battle.shot_odds(u, target)
-	u.pos = saved
+	u.pos = saved[0]
+	u.level = saved[1]
 	var miss: float = 1.0 - (odds["hit"] + odds["graze"]) / 100.0
 	var cost := 0.0
 	for risk in risks:
@@ -631,9 +656,14 @@ func _blast_value(tile: Vector2i, radius: float, damage_min: int, damage_max: in
 	var value := 0.0
 	var hits := 0
 	var average := (damage_min + damage_max) / 2.0
+	var map := battle.map
+	var occupant := battle.unit_at(tile)
+	var blast_height := map.floor_height(tile, occupant.level if occupant != null else 0)
 	for victim in battle.alive_units():
 		var distance := Vector2(victim.pos).distance_to(Vector2(tile))
 		if distance > radius + 1.0:
+			continue
+		if map.has_height() and absf(map.floor_height(victim.pos, victim.level) - blast_height) > 1.0:
 			continue
 		if victim.team != team and not seen.has(victim):
 			continue
@@ -648,7 +678,7 @@ func _blast_value(tile: Vector2i, radius: float, damage_min: int, damage_max: in
 			victim_value += (maxf(0.0, average - armor) * 10.0 + kill * KILL_BONUS) * _target_weight(victim)
 			if victim.team != team:
 				hits += 1
-				if battle.map.has_cover(victim.pos):
+				if battle.map.has_cover(victim.pos, victim.level):
 					value += 6.0
 		value += -victim_value * 2.0 if victim.team == team else victim_value
 	# Fuel drums and oil tanks in the blast go up too (counted one level deep).
@@ -852,15 +882,15 @@ func _seen_enemies() -> Array[Unit]:
 	return result
 
 
-## [enemy, position we believe they're at, weight] for every enemy we know about.
+## [enemy, position we believe they're at, weight, floor] for every enemy we know about.
 func _threats(seen: Array[Unit]) -> Array:
 	var result := []
 	for e in seen:
-		result.append([e, e.pos, 1.0])
+		result.append([e, e.pos, 1.0, e.level])
 	for id: int in _last_seen:
 		var e := battle.get_unit(id)
 		if not seen.has(e):
-			result.append([e, _last_seen[id], REMEMBERED_THREAT * (1.0 - 0.8 * _aggression)])
+			result.append([e, _last_seen[id], REMEMBERED_THREAT * (1.0 - 0.8 * _aggression), 0])
 	return result
 
 
@@ -900,30 +930,47 @@ func _fog_center() -> Vector2:
 
 func _team_sees_tile(tile: Vector2i) -> bool:
 	for u in battle.alive_units(team):
-		if battle.visible_from(u.pos, u.sight).has(tile):
+		if battle.visible_from(u.pos, u.sight, u.level).has(tile):
 			return true
 	return false
 
 
 # --- Hypothetical combat maths ---
 
-func _can_see(from: Vector2i, to: Vector2i, sight: float) -> bool:
+## The floor the unit would be on at the tile being judged.
+func _level_of(u: Unit, tile: Vector2i) -> int:
+	if _at_level >= 0:
+		return _at_level
+	return u.level if u != null and tile == u.pos else 0
+
+
+func _can_see(from: Vector2i, to: Vector2i, sight: float, from_level := 0, to_level := 0) -> bool:
+	var map := battle.map
+	if map.has_height():
+		sight += LineOfSight.HEIGHT_SIGHT_BONUS * maxf(0.0, map.floor_height(from, from_level) - map.floor_height(to, to_level))
 	if Vector2(from).distance_to(Vector2(to)) > sight:
 		return false
-	var key := Vector4i(from.x, from.y, to.x, to.y)
+	var key := Vector4i(from.x + 1024 * from_level, from.y, to.x + 1024 * to_level, to.y)
 	if not _sight_cache.has(key):
-		_sight_cache[key] = LineOfSight.can_see(battle.map, from, to, INF)
+		_sight_cache[key] = LineOfSight.can_see(map, from, to, INF, true, from_level, to_level)
 	return _sight_cache[key]
 
 
-## [expected damage, kill probability] of shooter (standing on from) firing at target (standing on at).
-func _expected_damage(shooter: Unit, from: Vector2i, target: Unit, at: Vector2i, aimed := false) -> Array[float]:
-	var saved := [shooter.pos, target.pos]
+## [expected damage, kill probability] of shooter (standing on from) firing at target (standing on at), on the
+## given floors (-1: where they are now).
+func _expected_damage(shooter: Unit, from: Vector2i, target: Unit, at: Vector2i, aimed := false, from_level := -1, at_level := -1) -> Array[float]:
+	var saved := [shooter.pos, target.pos, shooter.level, target.level]
 	shooter.pos = from
 	target.pos = at
+	if from_level >= 0:
+		shooter.level = from_level
+	if at_level >= 0:
+		target.level = at_level
 	var odds := battle.shot_odds(shooter, target, false, aimed)
 	shooter.pos = saved[0]
 	target.pos = saved[1]
+	shooter.level = saved[2]
+	target.level = saved[3]
 
 	var w := shooter.weapon
 	var armor := target.armor

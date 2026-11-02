@@ -104,6 +104,18 @@ const HESCO_HEIGHT := 1.0
 const CONCRETE := Color("b5b0a4")
 const IED_SHELL := Color("5d6248")
 
+# Height.
+## How tall one level (a storey, or a step of ground) is drawn, in projection height units.
+const LEVEL_HEIGHT := 1.2
+const BANK_EARTH := [Color("6f5b40"), Color("5f4e37")]
+const BANK_TROPIC := [Color("8a4a30"), Color("74402b")]
+const BANK_ARID := [Color("a08a66"), Color("8c785a")]
+const SLAB := Color("8b8172")
+const ROOF := Color("8e8a80")
+const ROOF_ARID := Color("b8a67f")
+const STEP := Color("9a8f7d")
+const PARAPET_HEIGHT := 0.22
+
 ## The theatre whose palette the ground is drawn in ("normandy" or "vietnam"). Set when a battle or scenario loads.
 static var theatre := "normandy"
 
@@ -318,6 +330,12 @@ static func draw_shadow(c: Object, proj: ViewProjection, footprint: PackedVector
 
 
 static func draw_object_shadow(c: Object, proj: ViewProjection, map: TacticalMap, p: Vector2i) -> void:
+	proj.lift = map.get_elevation(p) * LEVEL_HEIGHT
+	_draw_object_shadow(c, proj, map, p)
+	proj.lift = 0.0
+
+
+static func _draw_object_shadow(c: Object, proj: ViewProjection, map: TacticalMap, p: Vector2i) -> void:
 	var center := Vector2(p) + Vector2(0.5, 0.5)
 	match map.get_object_kind(p):
 		"tree" when _arid():
@@ -350,6 +368,12 @@ static func draw_object_shadow(c: Object, proj: ViewProjection, map: TacticalMap
 
 
 static func draw_edge_shadow(c: Object, proj: ViewProjection, map: TacticalMap, key: Vector3i) -> void:
+	proj.lift = edge_elevation(map, key) * LEVEL_HEIGHT
+	_draw_edge_shadow(c, proj, map, key)
+	proj.lift = 0.0
+
+
+static func _draw_edge_shadow(c: Object, proj: ViewProjection, map: TacticalMap, key: Vector3i) -> void:
 	var kind := map.edge_kind(key)
 	var height: float = {"wall": WALL_HEIGHT, "window": WALL_HEIGHT, "hedge": HEDGE_HEIGHT, "stone": LOW_WALL_HEIGHT,
 		"dyke": DYKE_HEIGHT, "bamboo_wall": WALL_HEIGHT, "bamboo_window": WALL_HEIGHT, "mud_wall": WALL_HEIGHT,
@@ -395,7 +419,14 @@ static func prism(c: Object, proj: ViewProjection, footprint: PackedVector2Array
 	return faces
 
 
+## Draws the object on tile p, on the ground at the tile's height.
 static func draw_object(c: Object, proj: ViewProjection, map: TacticalMap, p: Vector2i, alpha: float, dark: bool) -> void:
+	proj.lift = map.get_elevation(p) * LEVEL_HEIGHT
+	_draw_object(c, proj, map, p, alpha, dark)
+	proj.lift = 0.0
+
+
+static func _draw_object(c: Object, proj: ViewProjection, map: TacticalMap, p: Vector2i, alpha: float, dark: bool) -> void:
 	var center := Vector2(p) + Vector2(0.5, 0.5)
 	var tint := 0.45 if dark else 0.0
 	match map.get_object_kind(p):
@@ -509,9 +540,52 @@ static func _draw_crate(c: Object, proj: ViewProjection, rect: Rect2, height: fl
 	c.draw_line(proj.project(corners[1], height), proj.project(corners[3], height), line, 1.0)
 
 
+## Draws a wall, hedge or fence on the ground (on top of the higher of the two tiles either side).
 static func draw_edge(c: Object, proj: ViewProjection, map: TacticalMap, key: Vector3i, alpha: float, dark: bool) -> void:
+	proj.lift = edge_elevation(map, key) * LEVEL_HEIGHT
+	draw_edge_as(c, proj, map.edge_kind(key), key, alpha, dark)
+	proj.lift = 0.0
+
+
+## The ground height an edge stands on: the higher of its two tiles.
+static func edge_elevation(map: TacticalMap, key: Vector3i) -> int:
+	var pair := TacticalMap.edge_tiles(key)
+	return maxi(map.get_elevation(pair[0]), map.get_elevation(pair[1]))
+
+
+## Edges of buildings of two storeys or more that have walls above the ground floor: every wall and window
+## touching one, and the outside of one where the ground floor has a doorway.
+static func upper_wall_keys(map: TacticalMap) -> Array[Vector3i]:
+	var keys := {}
+	for p: Vector2i in map.get_tall_buildings():
+		for d: Vector2i in TacticalMap.DIRS4:
+			var key := TacticalMap.edge_key(p, p + d)
+			if has_upper_walls(map, key):
+				keys[key] = true
+	var result: Array[Vector3i] = []
+	result.assign(keys.keys())
+	return result
+
+
+## Whether the edge has walls above the ground floor (see upper_wall_keys).
+static func has_upper_walls(map: TacticalMap, key: Vector3i) -> bool:
+	var pair := TacticalMap.edge_tiles(key)
+	if not map.in_bounds(pair[0]) or not map.in_bounds(pair[1]):
+		return false
+	for side: Vector2i in pair:
+		if map.get_storeys(side) < 2:
+			continue
+		var other: Vector2i = pair[1] if side == pair[0] else pair[0]
+		var top := map.get_elevation(side) + map.get_storeys(side)
+		if map.get_edges().has(key) or map.get_storeys(other) == 0 or map.get_elevation(other) + map.get_storeys(other) != top:
+			return true
+	return false
+
+
+## Draws an edge of the given kind (as draw_edge does for the map's own), at the projection's current lift.
+static func draw_edge_as(c: Object, proj: ViewProjection, kind: String, key: Vector3i, alpha: float, dark: bool) -> void:
 	var tint := 0.45 if dark else 0.0
-	match map.edge_kind(key):
+	match kind:
 		"dyke" when _arid():
 			_draw_ditch(c, proj, key, tint, alpha)
 		"mud_wall":
@@ -1212,3 +1286,141 @@ static func _on_face(q: Array, u: float, v: float) -> Vector2:
 	var bottom: Vector2 = (q[0] as Vector2).lerp(q[1], u)
 	var top: Vector2 = (q[3] as Vector2).lerp(q[2], u)
 	return bottom.lerp(top, v)
+
+
+# --- Height ---
+
+## The colour of a bank of earth (the side of raised ground) in the theatre's palette.
+static func _bank_colors() -> Array:
+	if _tropical():
+		return BANK_TROPIC
+	if _arid():
+		return BANK_ARID
+	return BANK_EARTH
+
+
+## A tile of raised ground: its banks down to lower neighbours (the sides facing the viewer), then its surface
+## at its height. Draws at the projection's lift 0; leaves the lift at 0.
+static func draw_terrace(c: Object, proj: ViewProjection, map: TacticalMap, p: Vector2i, dark: bool) -> void:
+	var level := map.get_elevation(p)
+	var top := level * LEVEL_HEIGHT
+	var colors := _bank_colors()
+	var tint := 0.45 if dark else 0.0
+	var g := Vector2(p)
+	var corners := [g, g + Vector2(1, 0), g + Vector2(1, 1), g + Vector2(0, 1)]
+	if proj.isometric:
+		for i in 4:
+			var d: Vector2i = TacticalMap.DIRS4[i]
+			var below := map.get_elevation(p + d) if map.in_bounds(p + d) else 0
+			if below >= level:
+				continue
+			var a: Vector2 = corners[i]
+			var b: Vector2 = corners[(i + 1) % 4]
+			var screen_normal := proj.rotate_grid(Vector2(d)) - proj.rotate_grid(Vector2.ZERO)
+			if screen_normal.x + screen_normal.y <= 0.001:
+				continue
+			var base := below * LEVEL_HEIGHT
+			var shade := 0.25 if i == 1 or i == 2 else 0.0
+			var color: Color = colors[(p.x + p.y) % 2].lerp(colors[1], noise(p, 60 + i) * 0.5).darkened(shade + tint)
+			c.draw_colored_polygon(PackedVector2Array([proj.project(a, base), proj.project(b, base), proj.project(b, top), proj.project(a, top)]), color)
+			# Strata: a line or two across the bank, and a dark rim at its foot.
+			for k in range(below, level):
+				var h := (k + 0.5) * LEVEL_HEIGHT
+				c.draw_line(proj.project(a, h), proj.project(b, h + 0.05 * (noise(p, k) - 0.5)), color.darkened(0.2), 1.0)
+			c.draw_line(proj.project(a, base), proj.project(b, base), color.darkened(0.45), 1.5)
+	proj.lift = top
+	draw_tile(c, proj, map, p)
+	if not proj.isometric:
+		# Seen from above, higher ground is lighter, with a line where it drops away.
+		c.draw_colored_polygon(tile_poly(proj, p), Color(1, 1, 0.92, 0.07 * level))
+	for i in 4:
+		var d: Vector2i = TacticalMap.DIRS4[i]
+		if map.in_bounds(p + d) and map.get_elevation(p + d) < level:
+			c.draw_line(proj.project(corners[i]), proj.project(corners[(i + 1) % 4]), Color(0.1, 0.08, 0.05, 0.5), 1.5)
+	if dark:
+		c.draw_colored_polygon(tile_poly(proj, p), Color(0.03, 0.03, 0.05, 0.5))
+	if map.get_object(p) != Cover.NONE:
+		draw_object_shadow(c, proj, map, p)
+	proj.lift = 0.0
+
+
+## The upper floors of a building tile of two storeys or more, up to and including `cut` (its floors' slabs,
+## or stairs going up through it; the roof when cut reaches it). Leaves the lift at 0.
+static func draw_upper_floors(c: Object, proj: ViewProjection, map: TacticalMap, p: Vector2i, cut: int, dark: bool, alpha := 1.0) -> void:
+	var storeys := map.get_storeys(p)
+	var ground := map.get_elevation(p) * LEVEL_HEIGHT
+	var tint := 0.45 if dark else 0.0
+	var g := Vector2(p)
+	var footprint := rect_poly(Rect2(g, Vector2.ONE))
+	var stairs := map.has_stairs(p)
+	for level in range(1, mini(storeys, cut) + 1):
+		var h := ground + level * LEVEL_HEIGHT
+		var roof := level == storeys
+		if stairs and not roof:
+			continue
+		var color := (ROOF_ARID if _arid() else ROOF) if roof else SLAB
+		color = color.lerp(color.lightened(0.08), noise(p, 70 + level)).darkened(tint)
+		prism(c, proj, footprint, h - 0.1, h, color, alpha)
+		if not roof:
+			proj.lift = h
+			for i in range(1, 4):
+				c.draw_line(proj.project(g + Vector2(0, i / 4.0)), proj.project(g + Vector2(1, i / 4.0)), Color(color.darkened(0.25), alpha), 1.0)
+			proj.lift = 0.0
+		elif stairs:
+			# The hatch the stairs come up through.
+			proj.lift = h
+			var hatch := rect_poly(Rect2(g + Vector2(0.2, 0.2), Vector2(0.6, 0.6)))
+			var points := PackedVector2Array()
+			for q in hatch:
+				points.append(proj.project(q))
+			c.draw_colored_polygon(points, Color(0.08, 0.07, 0.06, alpha))
+			proj.lift = 0.0
+	if stairs:
+		# A flight of steps for every storey shown.
+		for level in range(0, mini(storeys, cut + 1)):
+			var base := ground + level * LEVEL_HEIGHT
+			for i in 5:
+				var t := i / 5.0
+				var along := 0.15 + t * 0.7
+				var rect := Rect2(g + Vector2(along, 0.2) if level % 2 == 0 else g + Vector2(0.85 - t * 0.7 - 0.14, 0.2), Vector2(0.14, 0.6))
+				prism(c, proj, rect_poly(rect), base, base + (i + 1) * LEVEL_HEIGHT / 5.0, STEP.darkened(tint + 0.06 * i), alpha)
+
+
+## The walls of a building above its ground floor along one edge: the wall or window (an upstairs window
+## where the ground floor has one, else wall), storey by storey up to the walls of the `cut` floor, and the
+## parapet round the roof. `kind` is the ground floor's edge kind ("" for a doorway).
+static func draw_upper_walls(c: Object, proj: ViewProjection, map: TacticalMap, key: Vector3i, kind: String, cut: int, dark: bool, alpha := 1.0) -> void:
+	var pair := TacticalMap.edge_tiles(key)
+	var a := pair[0]
+	var b := pair[1]
+	var ground := maxi(map.get_elevation(a), map.get_elevation(b))
+	var top := 0
+	for side: Vector2i in pair:
+		top = maxi(top, map.get_elevation(side) + map.get_storeys(side))
+	var storeys := top - ground
+	var tint := 0.45 if dark else 0.0
+	var wall_kind := "mud_wall" if kind.begins_with("mud") or (kind == "" and _arid()) else ("bamboo_wall" if kind.begins_with("bamboo") else "wall")
+	var window_kind := wall_kind.replace("wall", "window")
+	var upper := window_kind if kind.ends_with("window") else wall_kind
+	var color := (MUD_BRICK if wall_kind == "mud_wall" else MASONRY).darkened(tint)
+	var thickness := MUD_HALF_THICKNESS if wall_kind == "mud_wall" else WALL_HALF_THICKNESS
+	var shown := mini(storeys, cut + 1)
+	for k in shown:
+		var base := (ground + k) * LEVEL_HEIGHT
+		if k > 0:
+			proj.lift = base
+			draw_edge_as(c, proj, upper, key, alpha, dark)
+		elif kind == "":
+			# The doorway's lintel.
+			prism(c, proj, _edge_rect(key, 0.0, 1.0, thickness), base + WALL_HEIGHT * 0.85, base + WALL_HEIGHT, color, alpha)
+		proj.lift = 0.0
+		# The band between the wall's top and the next floor.
+		prism(c, proj, _edge_rect(key, 0.0, 1.0, thickness), base + WALL_HEIGHT, base + LEVEL_HEIGHT, color.darkened(0.06), alpha)
+	# Round the roof's edge, where it meets open air or lower ground.
+	var a_top := map.get_elevation(a) + map.get_storeys(a)
+	var b_top := map.get_elevation(b) + map.get_storeys(b)
+	var roof_side := a if a_top > b_top else b
+	if cut >= storeys and a_top != b_top and map.get_storeys(roof_side) >= 2:
+		var h := maxi(a_top, b_top) * LEVEL_HEIGHT
+		prism(c, proj, _edge_rect(key, 0.0, 1.0, thickness), h, h + PARAPET_HEIGHT, color.lightened(0.05), alpha)
+	proj.lift = 0.0

@@ -14,13 +14,17 @@ const TURN_COST := 1.0
 const REVERSE_FACTOR := 2.0
 
 
-## Returns {tile: {"cost": float, "prev": Vector2i}} for every tile reachable within max_cost.
+## Returns {tile: {"cost": float, "prev": Vector2i, "level": int}} for every tile reachable within max_cost.
 ## Tiles in `blocked` (e.g. occupied by units) can't be entered. Vehicles use the tank movement rules and
 ## start facing `facing`; their entries also carry "path" and "facings" (the hull's heading after each step).
-static func search(map: TacticalMap, start: Vector2i, max_cost: float, blocked := {}, vehicle := false, facing := Vector2i(1, 0)) -> Dictionary:
+## On maps with height a soldier starting on `start_level` searches every floor: each entry is for the
+## cheapest floor of the tile ("level"), and "levels" holds {level: cost} for all its floors in reach.
+static func search(map: TacticalMap, start: Vector2i, max_cost: float, blocked := {}, vehicle := false, facing := Vector2i(1, 0), start_level := 0) -> Dictionary:
 	if vehicle:
 		return _search_vehicle(map, start, max_cost, blocked, facing)
-	var result := {start: {"cost": 0.0, "prev": start}}
+	if map.has_height():
+		return _search_levels(map, start, start_level, max_cost, blocked)
+	var result := {start: {"cost": 0.0, "prev": start, "level": 0}}
 	var heap := _Heap.new()
 	heap.push(start, 0.0)
 	while not heap.is_empty():
@@ -37,15 +41,30 @@ static func search(map: TacticalMap, start: Vector2i, max_cost: float, blocked :
 				continue
 			if result.has(next) and cost >= result[next]["cost"] - 0.001:
 				continue
-			result[next] = {"cost": cost, "prev": current}
+			result[next] = {"cost": cost, "prev": current, "level": 0}
 			heap.push(next, cost)
 	return result
 
 
-## The steps from the search start to dest, excluding the start tile.
-static func path_to(result: Dictionary, dest: Vector2i) -> Array[Vector2i]:
+## Path cost to reach dest on the given level (-1: its cheapest), or INF.
+static func cost_to(result: Dictionary, dest: Vector2i, level := -1) -> float:
+	if not result.has(dest):
+		return INF
+	var entry: Dictionary = result[dest]
+	if level < 0 or level == entry.get("level", 0):
+		return entry["cost"]
+	return entry.get("levels", {}).get(level, INF)
+
+
+## The steps from the search start to dest (on the given level, -1: its cheapest), excluding the start tile.
+## A step up or down stairs repeats the tile; path_levels gives the floor after each step.
+static func path_to(result: Dictionary, dest: Vector2i, level := -1) -> Array[Vector2i]:
 	var path: Array[Vector2i] = []
 	if not result.has(dest):
+		return path
+	if result[dest].has("graph"):
+		for state in _state_path(result, dest, level):
+			path.append(Vector2i(state.x, state.y))
 		return path
 	if result[dest].has("path"):
 		path.assign(result[dest]["path"])
@@ -55,6 +74,107 @@ static func path_to(result: Dictionary, dest: Vector2i) -> Array[Vector2i]:
 		path.push_front(p)
 		p = result[p]["prev"]
 	return path
+
+
+## The floor after each step of path_to(result, dest, level).
+static func path_levels(result: Dictionary, dest: Vector2i, level := -1) -> Array[int]:
+	var levels: Array[int] = []
+	if not result.has(dest):
+		return levels
+	if result[dest].has("graph"):
+		for state in _state_path(result, dest, level):
+			levels.append(state.z)
+		return levels
+	for i in path_to(result, dest).size():
+		levels.append(0)
+	return levels
+
+
+static func _state_path(result: Dictionary, dest: Vector2i, level: int) -> Array[Vector3i]:
+	var entry: Dictionary = result[dest]
+	if level < 0:
+		level = entry["level"]
+	var states: Array[Vector3i] = []
+	var graph: Dictionary = entry["graph"]
+	var state := Vector3i(dest.x, dest.y, level)
+	if not graph.has(state):
+		return states
+	while graph[state] != state:
+		states.push_front(state)
+		state = graph[state]
+	return states
+
+
+## Dijkstra over (tile, floor): steps between neighbouring tiles (TacticalMap.arrival_level) and up and
+## down stairs.
+static func _search_levels(map: TacticalMap, start: Vector2i, start_level: int, max_cost: float, blocked: Dictionary) -> Dictionary:
+	var start_state := Vector3i(start.x, start.y, start_level)
+	var costs := {start_state: 0.0}
+	var graph := {start_state: start_state}
+	var heap := _Heap.new()
+	heap.push(start_state, 0.0)
+	var width := map.width
+	var height := map.height
+	var terrain := map._terrain
+	var elevation := map._elevation
+	var indoor := TacticalMap.Terrain.INDOOR
+	while not heap.is_empty():
+		var state: Vector3i = heap.pop()
+		var state_cost: float = costs[state]
+		if heap.last_priority > state_cost + 0.001:
+			continue
+		var tile := Vector2i(state.x, state.y)
+		var here := tile.y * width + tile.x
+		var outdoors := state.z == 0 and terrain[here] != indoor
+		var stairs := map.has_stairs(tile)
+		for i in 10 if stairs else 8:
+			var next_state: Vector3i
+			var step: float
+			if i < 8:
+				var next: Vector2i = tile + TacticalMap.DIRS8[i]
+				if next.x < 0 or next.y < 0 or next.x >= width or next.y >= height or blocked.has(next):
+					continue
+				var level: int
+				var there := next.y * width + next.x
+				if outdoors and terrain[there] != indoor:
+					# Open ground to open ground (TacticalMap.arrival_level's common case).
+					if absi(elevation[here] - elevation[there]) > 1:
+						continue
+					level = 0
+				else:
+					level = map.arrival_level(tile, state.z, next)
+				if level < 0:
+					continue
+				next_state = Vector3i(next.x, next.y, level)
+				step = map.step_cost(tile, next, state.z, level)
+			else:
+				var level := state.z + (1 if i == 9 else -1)
+				next_state = Vector3i(tile.x, tile.y, level)
+				step = map.stairs_cost(tile, state.z, level)
+			var cost := state_cost + step
+			if cost > max_cost + 0.001:
+				continue
+			if costs.has(next_state) and cost >= costs[next_state] - 0.001:
+				continue
+			costs[next_state] = cost
+			graph[next_state] = state
+			heap.push(next_state, cost)
+
+	var result := {}
+	for state: Vector3i in costs:
+		var tile := Vector2i(state.x, state.y)
+		var cost: float = costs[state]
+		if not result.has(tile):
+			result[tile] = {"cost": cost, "prev": Vector2i(graph[state].x, graph[state].y), "level": state.z, "levels": {}, "graph": graph}
+		elif cost < result[tile]["cost"] - 0.001:
+			result[tile]["cost"] = cost
+			result[tile]["prev"] = Vector2i(graph[state].x, graph[state].y)
+			result[tile]["level"] = state.z
+		result[tile]["levels"][state.z] = cost
+	# Staying put costs nothing, whichever floors the stairs could take him to.
+	result[start]["level"] = start_level
+	result[start]["cost"] = 0.0
+	return result
 
 
 ## Index into HEADINGS of the heading closest to a direction.
@@ -126,7 +246,7 @@ static func _search_vehicle(map: TacticalMap, start: Vector2i, max_cost: float, 
 			facings.push_front(HEADINGS[state.z])
 			state = prev[state]
 		var before := Vector2i(prev[best[tile]].x, prev[best[tile]].y)
-		result[tile] = {"cost": costs[best[tile]], "prev": before, "path": path, "facings": facings, "facing": HEADINGS[best[tile].z]}
+		result[tile] = {"cost": costs[best[tile]], "prev": before, "path": path, "facings": facings, "facing": HEADINGS[best[tile].z], "level": 0}
 	return result
 
 

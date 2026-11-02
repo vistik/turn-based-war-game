@@ -414,7 +414,9 @@ func _draw() -> void:
 	var color := AGENT_COLOR if _suggestion.get("source") == "Agent" else ADVICE_COLOR
 	var pulse := 0.6 + 0.4 * sin(_time * 5.0)
 	var from: Vector2 = view._display_pos[u.id]
+	proj.lift = view._unit_lift(u)
 	draw_polyline(TerrainPainter.ground_circle(proj, from, 0.5), Color(color, pulse), 2.5)
+	proj.lift = 0.0
 	var command: Dictionary = _suggestion["command"]
 	var target := battle.get_unit(command.get("target", -1))
 	var label := ""
@@ -422,20 +424,28 @@ func _draw() -> void:
 	match command["cmd"]:
 		"move":
 			var tile: Vector2i = command["tile"]
+			var level: int = command.get("level", -1)
 			var reach := battle.reachable(u)
-			var points := PackedVector2Array([proj.project(from)])
-			for p in Pathfinder.path_to(reach, tile):
-				points.append(proj.project(view._center(p)))
+			if level < 0 and reach.has(tile):
+				level = reach[tile]["level"]
+			level = maxi(level, 0)
+			var points := PackedVector2Array([proj.project(from, view._unit_lift(u))])
+			var steps := Pathfinder.path_to(reach, tile, level)
+			var levels := Pathfinder.path_levels(reach, tile, level)
+			for i in steps.size():
+				points.append(proj.project(view._center(steps[i]), view._tile_lift(steps[i], levels[i])))
 			if points.size() > 1:
 				draw_polyline(points, Color(color, 0.9), 4.0)
 			var at: Vector2 = view._center(tile)
+			proj.lift = view._tile_lift(tile, level)
 			draw_colored_polygon(TerrainPainter.tile_poly(proj, tile), Color(color, 0.25 * pulse))
 			draw_polyline(TerrainPainter.ground_circle(proj, at, 0.42), color, 3.0)
 			for d: Vector2i in TacticalMap.DIRS4:
-				var c := battle.map.cover_toward(tile, d)
+				var c := battle.map.cover_toward(tile, d, level)
 				if c != Cover.NONE:
 					_draw_shield(proj.project(at + Vector2(d) * 0.36, 0.5), c == Cover.FULL)
-			if reach.has(tile) and battle.actions_for_cost(u, reach[tile]["cost"]) > 1:
+			proj.lift = 0.0
+			if reach.has(tile) and battle.actions_for_cost(u, Pathfinder.cost_to(reach, tile, level)) > 1:
 				label = "DASH HERE"
 			else:
 				label = "MOVE HERE"

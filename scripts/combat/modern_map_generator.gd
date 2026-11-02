@@ -27,8 +27,18 @@ static func generate(seed: int, size := Vector2i(44, 44), style := "") -> Dictio
 	return layout
 
 
+## [hills per 1600 tiles, hill height, chance a house has upper floors, most storeys] per style: flat-roofed
+## town houses of up to three storeys, low hills on the green zone, rough ridges round the desert village.
+const HEIGHTS := {"helmand": [1.5, 2, 0.3, 2], "town": [0.0, 0, 0.75, 3], "desert": [3.0, 2, 0.2, 2]}
+
+
 static func _build(nm: NaturalMap, style: String) -> Dictionary:
 	var scale := float(nm.width * nm.height) / 1600.0
+	var heights: Array = HEIGHTS.get(style, HEIGHTS["helmand"])
+	nm.hills = heights[0]
+	nm.hill_height = heights[1]
+	nm.tall_chance = heights[2]
+	nm.tall_max = heights[3]
 	match style:
 		"town":
 			_town(nm, scale)
@@ -102,6 +112,9 @@ static func _helmand(nm: NaturalMap, scale: float) -> void:
 	for spot: Vector2i in MapGenerator._road_spots(nm, away, 10.0):
 		var rect := _roadside_compound(nm, spot, Vector2i(8, 8))
 		if rect.size != Vector2i.ZERO:
+			# The house against its north wall (see NaturalMap.compound) rises two storeys: a flat roof to
+			# watch the valley from.
+			nm.tall(Rect2i(rect.position + Vector2i(1, 1), Vector2i(rect.size.x - 2, 3)), 2)
 			nm.landmark("Compound", nm.nearest_open(rect.get_center() + Vector2i(0, 2)))
 			nm.object_near(rect.get_center() + Vector2i(0, 2), Cover.HALF, "hay")
 			break
@@ -118,6 +131,13 @@ static func _helmand(nm: NaturalMap, scale: float) -> void:
 			for p: Vector2i in tiles:
 				if not tiles.has(p + Vector2i(0, -1)) and nm.rng.randf() < 0.5 and nm.map.is_passable(p):
 					nm.map.set_object(p, Cover.FULL, "tree")
+		# Fields are minor landmarks (as in Normandy), named for where they lie, so small maps with few
+		# buildings still have a fair set of objectives to pick from.
+		if tiles.size() >= 12:
+			var center: Vector2i = tiles[tiles.size() / 2]
+			var where := "North" if center.y < nm.height / 3 else ("South" if center.y >= nm.height * 2 / 3 else "Middle")
+			var kind := "wheat field" if nm.map.get_terrain(center) == TacticalMap.Terrain.WHEAT else "fallow field"
+			nm.landmark("%s %s" % [where, kind], nm.nearest_open(center), 0.2)
 	_clutter(nm, scale, ["rock", "tree"], ["crate", "hay"])
 
 
@@ -135,6 +155,7 @@ static func _town(nm: NaturalMap, scale: float) -> void:
 	for spot: Vector2i in MapGenerator._road_spots(nm, away, 10.0):
 		var station := nm.roadside_house(spot, Vector2i(6, 5), "stone", 2)
 		if station.size != Vector2i.ZERO:
+			nm.tall(station, 2)
 			nm.landmark("Police station", nm.nearest_open(station.get_center()))
 			# Blast walls and a barrier on the street in front.
 			for d: Vector2i in [Vector2i(-2, -2), Vector2i(2, 2), Vector2i(-2, 2), Vector2i(2, -2)]:

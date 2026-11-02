@@ -8,8 +8,8 @@ extends Node2D
 
 const DrawLayer := preload("res://scripts/view/draw_layer.gd")
 
-enum Tool { TERRAIN, OBJECT, EDGE, UNIT, OBJECTIVE, SPAWN, ERASE, MISSION }
-const TOOL_NAMES := ["Ground", "Objects", "Walls", "Units", "Objectives", "Spawns", "Erase", "Mission"]
+enum Tool { TERRAIN, OBJECT, EDGE, UNIT, OBJECTIVE, SPAWN, ERASE, MISSION, HEIGHT }
+const TOOL_NAMES := ["Ground", "Objects", "Walls", "Units", "Objectives", "Spawns", "Erase", "Mission", "Height"]
 const TOOL_HINTS := [
 	"Left paints the ground, right paints grass.",
 	"Left places, right removes.",
@@ -19,7 +19,10 @@ const TOOL_HINTS := [
 	"Reinforcements arrive on these tiles. Left adds a tile to the selected wave, right removes it.",
 	"Clears objects, walls, units and spawns under the brush.",
 	"The win condition. Extraction and assassination: left places the zone or the VIP (pick which below). Demolition: left adds a target, right removes one. Last stand uses the one objective.",
+	"Ground height: left raises the ground under the brush to the level, right levels it to 0. Neighbours a level apart are a slope, two or more a cliff. Storeys: left makes indoor tiles that tall (two or more have a flat roof), right one storey. Stairs: left puts a staircase on an indoor tile, right removes it.",
 ]
+## What the Height tool paints, and its levels.
+const HEIGHT_MODES := ["Ground height", "Storeys", "Stairs"]
 const PANEL_WIDTH := 360.0
 const NEUTRAL := Color("e8e2cf")
 const MUTED := Color(1, 1, 1, 0.6)
@@ -66,6 +69,11 @@ var _terrain: int = TacticalMap.Terrain.ROAD
 var _object_kind := "tree"
 var _edge_kind := "hedge"
 var _brush := 1
+var _height_mode := 0
+var _height_level := 1
+var _storey_count := 2
+## Raised ground, upper floors and upper walls: "t"/"f" + tile or "w" + edge key -> node.
+var _height_nodes := {}
 var _team := 0
 var _role := "Rifleman"
 var _facing := "E"
@@ -169,10 +177,11 @@ func _rebuild_all() -> void:
 			node.queue_free()
 	_chunks.clear()
 	_dirty.clear()
-	for node: Node2D in _object_nodes.values() + _edge_nodes.values():
+	for node: Node2D in _object_nodes.values() + _edge_nodes.values() + _height_nodes.values():
 		node.queue_free()
 	_object_nodes.clear()
 	_edge_nodes.clear()
+	_height_nodes.clear()
 	_faded.clear()
 	if _overlay != null:
 		_overlay.queue_free()
@@ -182,10 +191,11 @@ func _rebuild_all() -> void:
 			_chunks[chunk] = [_layer(GROUND_Z, _paint_ground.bind(chunk)), _layer(SHADOW_Z, _paint_shadows.bind(chunk))]
 	for y in _s.map.height:
 		for x in _s.map.width:
+			_sync_height(Vector2i(x, y))
 			_sync_object(Vector2i(x, y))
 	for key: Vector3i in _s.map.get_edges():
 		_sync_edge(key)
-	_overlay = _layer(OVERLAY_Z, _paint_overlay)
+	_overlay = _layer(TOP_Z - 20 if _s.map.has_height() else OVERLAY_Z, _paint_overlay)
 	_rebuild_units()
 
 
@@ -194,7 +204,7 @@ func _reproject() -> void:
 	for chunk: Vector2i in _chunks:
 		for node: Node2D in _chunks[chunk]:
 			node.queue_redraw()
-	for node: Node2D in _object_nodes.values() + _edge_nodes.values():
+	for node: Node2D in _object_nodes.values() + _edge_nodes.values() + _height_nodes.values():
 		node.z_index = _depth_z(node.get_meta("center"))
 		node.queue_redraw()
 	_rebuild_units()
@@ -202,6 +212,8 @@ func _reproject() -> void:
 
 func _paint_ground(c: CanvasItem, chunk: Vector2i) -> void:
 	for p in _chunk_tiles(chunk):
+		if _s.map.get_elevation(p) > 0:
+			continue  # Raised ground is drawn by its own node (_sync_height).
 		TerrainPainter.draw_tile(c, _proj, _s.map, p)
 		c.draw_polyline(_tile_outline(p), Color(0, 0, 0, 0.1), 1.0)
 
@@ -233,6 +245,42 @@ func _touch(p: Vector2i) -> void:
 	_sync_object(p)
 	for key in [Vector3i(p.x, p.y, 0), Vector3i(p.x, p.y, 1), Vector3i(p.x - 1, p.y, 0), Vector3i(p.x, p.y - 1, 1)]:
 		_sync_edge(key)
+	# Banks and upper walls depend on the neighbours too.
+	for d: Vector2i in [Vector2i.ZERO] + TacticalMap.DIRS4:
+		if _s.map.in_bounds(p + d):
+			_sync_height(p + d)
+	if _overlay != null:
+		_overlay.z_index = TOP_Z - 20 if _s.map.has_height() else OVERLAY_Z
+
+
+## Re-records tile p's raised ground, its upper floors and the upper walls round it.
+func _sync_height(p: Vector2i) -> void:
+	var map := _s.map
+	var center := Vector2(p) + Vector2(0.5, 0.5)
+	var wanted := {}
+	if map.get_elevation(p) > 0:
+		wanted["t%s" % p] = [center, func(c: CanvasItem) -> void: TerrainPainter.draw_terrace(c, _proj, map, p, false)]
+	if map.get_storeys(p) >= 2:
+		wanted["f%s" % p] = [center, func(c: CanvasItem) -> void: TerrainPainter.draw_upper_floors(c, _proj, map, p, 99, false)]
+	for d: Vector2i in TacticalMap.DIRS4:
+		var key := TacticalMap.edge_key(p, p + d)
+		var id := "w%s" % key
+		if _height_nodes.has(id):
+			_height_nodes[id].queue_free()
+			_height_nodes.erase(id)
+		if TerrainPainter.has_upper_walls(map, key):
+			var pair := TacticalMap.edge_tiles(key)
+			wanted[id] = [(Vector2(pair[0]) + Vector2(pair[1])) * 0.5 + Vector2(0.5, 0.5), func(c: CanvasItem) -> void:
+				var kind := map.edge_kind(key) if map.get_edges().has(key) else ""
+				TerrainPainter.draw_upper_walls(c, _proj, map, key, kind, 99, false)]
+	for id in ["t%s" % p, "f%s" % p]:
+		if _height_nodes.has(id):
+			_height_nodes[id].queue_free()
+			_height_nodes.erase(id)
+	for id: String in wanted:
+		var node := _layer(_depth_z(wanted[id][0]), wanted[id][1])
+		node.set_meta("center", wanted[id][0])
+		_height_nodes[id] = node
 
 
 func _sync_object(p: Vector2i) -> void:
@@ -280,6 +328,7 @@ func _paint_unit(c: CanvasItem, i: int) -> void:
 	var u := Unit.create(i, "", entry["role"], entry["team"], entry["pos"], entry["rank"], _s.theatre_id)
 	u.facing = entry["facing"]
 	var g := Vector2(u.pos) + Vector2(0.5, 0.5)
+	_proj.lift = _s.map.get_elevation(u.pos) * TerrainPainter.LEVEL_HEIGHT
 	var pose := {"facing": Vector2(u.facing).normalized(), "walk": 0.0, "phase": 0.0, "crouch": false, "pinned": false,
 			"deployed": false, "wounded": false, "death": 0.0, "flash": 0.0, "breath": i * 1.7, "time": 0.0}
 	var radius := 0.6 if u.vehicle else 0.4
@@ -289,6 +338,7 @@ func _paint_unit(c: CanvasItem, i: int) -> void:
 		VehiclePainter.draw(c, _proj, g, u, pose)
 	else:
 		SoldierPainter.draw(c, _proj, g, u, pose)
+	_proj.lift = 0.0
 
 
 ## Ground markings: brush, hovered wall, objectives, spawns, the centre line and the map border.
@@ -321,11 +371,14 @@ func _paint_overlay(c: CanvasItem) -> void:
 		return
 	var color := Color(1, 1, 1, 0.8)
 	if _tool == Tool.EDGE:
-		var ends := _edge_ends(_hover_edge[0], _hover_edge[1])
-		c.draw_line(_proj.project(ends[0]), _proj.project(ends[1]), Color("ffd84a"), 4.0)
+		var a: Vector2i = _hover_edge[0]
+		var dir: Vector2i = _hover_edge[1]
+		var ends := _edge_ends(a, dir)
+		var lift := maxf(_lift(a), _lift(a + dir))
+		c.draw_line(_proj.project(ends[0], lift), _proj.project(ends[1], lift), Color("ffd84a"), 4.0)
 		return
 	for p in _brush_tiles(_hover):
-		c.draw_polyline(_tile_outline(p), color, 2.0)
+		c.draw_polyline(_tile_outline(p, true), color, 2.0)
 
 
 ## Flags, unit tags and wave labels on top of everything.
@@ -360,8 +413,10 @@ func _label(at: Vector2, text: String, color: Color, width: float, size := 13) -
 	draw_string(_font, at, text, HORIZONTAL_ALIGNMENT_CENTER, width, size, color)
 
 
-func _tile_outline(p: Vector2i) -> PackedVector2Array:
+func _tile_outline(p: Vector2i, lifted := false) -> PackedVector2Array:
+	_proj.lift = _lift(p) if lifted else 0.0
 	var poly := TerrainPainter.tile_poly(_proj, p)
+	_proj.lift = 0.0
 	poly.append(poly[0])
 	return poly
 
@@ -415,7 +470,7 @@ func _update_hover() -> void:
 	var tile := Vector2i(-1, -1)
 	var edge := [Vector2i(-1, -1), Vector2i.ZERO]
 	if get_viewport().get_mouse_position().x < _panel.global_position.x:
-		var g := _proj.unproject(get_local_mouse_position())
+		var g := _pick_point(get_local_mouse_position())
 		_hover_point = g
 		tile = Vector2i(floori(g.x), floori(g.y))
 		if _s.map.in_bounds(tile):
@@ -434,7 +489,7 @@ func _update_hover() -> void:
 		_hover_edge = edge
 		_overlay.queue_redraw()
 		_update_fading()
-		if _stroke != 0 and _tool in [Tool.TERRAIN, Tool.OBJECT, Tool.ERASE] and _s.map.in_bounds(previous) and _s.map.in_bounds(tile):
+		if _stroke != 0 and _tool in [Tool.TERRAIN, Tool.OBJECT, Tool.ERASE, Tool.HEIGHT] and _s.map.in_bounds(previous) and _s.map.in_bounds(tile):
 			# The mouse can skip tiles between frames: paint the whole line.
 			for p in Geometry2D.bresenham_line(previous, tile):
 				_hover = p
@@ -444,12 +499,39 @@ func _update_hover() -> void:
 		_show_hover_status()
 
 
+## The grid point under a screen point: on maps with height, on the first surface (raised ground or a roof)
+## the line of view meets.
+func _pick_point(at: Vector2) -> Vector2:
+	var map := _s.map
+	if not map.has_height() or not _proj.isometric:
+		return _proj.unproject(at)
+	var h := float(TacticalMap.MAX_ELEVATION + TacticalMap.MAX_STOREYS) * TerrainPainter.LEVEL_HEIGHT
+	while h > 0.0:
+		var g := _proj.unproject(at + Vector2(0, h * ViewProjection.HEIGHT_PX))
+		var p := Vector2i(g.floor())
+		if map.in_bounds(p) and map.floor_height(p, map.top_level(p)) * TerrainPainter.LEVEL_HEIGHT >= h - 0.001:
+			return g
+		h -= 0.1
+	return _proj.unproject(at)
+
+
+## How high tile p's top surface (ground or roof) is drawn.
+func _lift(p: Vector2i) -> float:
+	return _s.map.floor_height(p, _s.map.top_level(p)) * TerrainPainter.LEVEL_HEIGHT if _s.map.in_bounds(p) else 0.0
+
+
 func _show_hover_status() -> void:
 	if not _s.map.in_bounds(_hover):
 		return
 	var text := "%d, %d  %s" % [_hover.x, _hover.y, TacticalMap.TERRAIN_NAMES[_s.map.get_terrain(_hover)]]
 	if _s.map.get_object(_hover) != Cover.NONE:
 		text += ", %s" % _s.map.get_object_kind(_hover)
+	if _s.map.get_elevation(_hover) > 0:
+		text += ", height %d" % _s.map.get_elevation(_hover)
+	if _s.map.get_storeys(_hover) > 1:
+		text += ", %d storeys" % _s.map.get_storeys(_hover)
+	if _s.map.has_stairs(_hover):
+		text += ", stairs"
 	var i := _unit_index_at(_hover)
 	if i != -1:
 		text += ", " + _s._who(_s.units[i])
@@ -502,7 +584,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				_toggle_view()
 			KEY_R:
 				_turn_selected_unit()
-			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8:
+			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9:
 				_set_tool(event.keycode - KEY_1)
 			_:
 				return
@@ -599,6 +681,18 @@ func _apply_stroke() -> void:
 		Tool.ERASE:
 			for p in _brush_tiles(_hover):
 				_erase(p)
+		Tool.HEIGHT:
+			for q in _brush_tiles(_hover):
+				match _height_mode:
+					0:
+						_s.map.set_elevation(q, 0 if removing else _height_level)
+					1:
+						if _s.map.get_terrain(q) == TacticalMap.Terrain.INDOOR:
+							_s.map.set_storeys(q, 1 if removing else _storey_count)
+					2:
+						_s.map.set_stairs(q, not removing and _s.map.get_terrain(q) == TacticalMap.Terrain.INDOOR)
+				_touch(q)
+			_rebuild_units()
 		Tool.UNIT:
 			_unit_click(_hover, removing)
 		Tool.OBJECTIVE:
@@ -837,7 +931,7 @@ func _unit_index_at(p: Vector2i) -> int:
 
 func _brush_tiles(center: Vector2i) -> Array[Vector2i]:
 	var tiles: Array[Vector2i] = []
-	if _tool != Tool.TERRAIN and _tool != Tool.ERASE:
+	if _tool != Tool.TERRAIN and _tool != Tool.ERASE and not (_tool == Tool.HEIGHT and _height_mode != 2):
 		tiles.append(center)
 		return tiles
 	var from := -(_brush - 1) / 2
@@ -1051,6 +1145,16 @@ func _show_tool_options() -> void:
 					EDGE_KINDS.find(_edge_kind), func(i: int) -> void: _edge_kind = EDGE_KINDS[i])
 		Tool.ERASE:
 			_brush_choice()
+		Tool.HEIGHT:
+			_choice(_options, "Paint", HEIGHT_MODES, _height_mode, func(i: int) -> void:
+				_height_mode = i
+				_set_tool.call_deferred(Tool.HEIGHT))
+			if _height_mode == 0:
+				_choice(_options, "Level", ["1", "2", "3"], _height_level - 1, func(i: int) -> void: _height_level = i + 1)
+			elif _height_mode == 1:
+				_choice(_options, "Storeys", ["2 (roof to stand on)", "3"], _storey_count - 2, func(i: int) -> void: _storey_count = i + 2)
+			if _height_mode != 2:
+				_brush_choice()
 		Tool.UNIT:
 			_unit_options()
 		Tool.OBJECTIVE:

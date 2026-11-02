@@ -116,7 +116,8 @@ func enemies_of(u: Unit) -> Array[Unit]:
 	return result
 
 
-## Tiles the unit can reach with its remaining actions: {tile: {"cost": float, "prev": Vector2i}}.
+## Tiles the unit can reach with its remaining actions: {tile: {"cost": float, "prev": Vector2i, "level": int}}
+## (see Pathfinder.search: on maps with height, entries also list every floor of the tile in reach).
 func reachable(u: Unit) -> Dictionary:
 	if u == null or not u.is_alive() or u.actions <= 0 or u.is_pinned():
 		return {}
@@ -126,7 +127,7 @@ func reachable(u: Unit) -> Dictionary:
 			blocked[other.pos] = true
 	# Nobody walks into a mine they know about.
 	blocked.merge(known_mines[u.team])
-	return Pathfinder.search(map, u.pos, u.current_mobility() * mini(u.actions, Unit.ACTIONS_PER_TURN), blocked, u.vehicle, u.facing)
+	return Pathfinder.search(map, u.pos, u.current_mobility() * mini(u.actions, Unit.ACTIONS_PER_TURN), blocked, u.vehicle, u.facing, u.level)
 
 
 ## Actions used by a move of the given path cost: one for a normal move, two for a dash.
@@ -139,18 +140,25 @@ func actions_for_cost(u: Unit, cost: float) -> int:
 func can_see(viewer: Unit, target: Unit) -> bool:
 	if is_hidden_from(viewer.pos, target):
 		return false
-	return LineOfSight.can_see(map, viewer.pos, target.pos, viewer.current_sight())
+	return LineOfSight.can_see(map, viewer.pos, target.pos, viewer.current_sight(), true, viewer.level, target.level,
+			Battle.eye_stance(viewer), Battle.eye_stance(target))
+
+
+## The stance whose eye height a unit sees from (and is seen by): tanks count as standing.
+static func eye_stance(u: Unit) -> int:
+	return Unit.Stance.STAND if u.vehicle else u.stance
 
 
 func is_hidden_from(from: Vector2i, target: Unit) -> bool:
-	return Battle.hidden_at(map, from, target, target.pos)
+	return Battle.hidden_at(map, from, target, target.pos, target.level)
 
 
-## Whether a unit standing on `at` would be hidden from someone on `from` by the ground it is in.
-static func hidden_at(p_map: TacticalMap, from: Vector2i, target: Unit, at: Vector2i) -> bool:
+## Whether a unit standing on `at` would be hidden from someone on `from` by the ground it is in. Nothing
+## grows upstairs or on roofs.
+static func hidden_at(p_map: TacticalMap, from: Vector2i, target: Unit, at: Vector2i, level := 0) -> bool:
 	if target.hiding and Vector2(from).distance_to(Vector2(at)) > Mission.HIDING_RANGE:
 		return true
-	if target.fired or target.vehicle:
+	if target.fired or target.vehicle or level > 0:
 		return false
 	var cover := p_map.concealment(at)
 	return not cover.is_empty() and cover["stances"].has(target.stance) and Vector2(from).distance_to(Vector2(at)) > cover["range"]
@@ -179,25 +187,45 @@ func team_sees(team: int, target: Unit) -> bool:
 func team_visible_tiles(team: int) -> Dictionary:
 	var result := {}
 	for u in alive_units(team):
-		result.merge(visible_from(u.pos, u.current_sight()))
+		result.merge(visible_from(u.pos, u.current_sight(), u.level))
 	return result
 
 
-func visible_from(pos: Vector2i, sight: float) -> Dictionary:
+## Tiles in sight from a spot (any floor of them, on maps with height).
+func visible_from(pos: Vector2i, sight: float, level := 0) -> Dictionary:
 	if _vision_revision != map.revision:
 		_vision.clear()
 		_vision_revision = map.revision
-	var key := Vector3i(pos.x, pos.y, roundi(sight * 10))
+	var key := Vector4i(pos.x, pos.y, roundi(sight * 10), level)
 	if not _vision.has(key):
 		var tiles := {}
 		var r := ceili(sight)
+		if map.has_height():
+			# Height sees further (LineOfSight.HEIGHT_SIGHT_BONUS), at most down to the lowest ground.
+			r += ceili(LineOfSight.HEIGHT_SIGHT_BONUS * map.floor_height(pos, level))
 		for y in range(pos.y - r, pos.y + r + 1):
 			for x in range(pos.x - r, pos.x + r + 1):
 				var p := Vector2i(x, y)
-				if map.in_bounds(p) and LineOfSight.can_see(map, pos, p, sight, false):
+				if map.in_bounds(p) and sees_tile(pos, level, p, sight):
 					tiles[p] = true
 		_vision[key] = tiles
 	return _vision[key]
+
+
+## Whether someone standing at (pos, level) sees any floor of tile p.
+func sees_tile(pos: Vector2i, level: int, p: Vector2i, sight: float) -> bool:
+	return target_level(pos, level, p, sight) != -1
+
+
+## The floor of tile p someone at (pos, level) sees: the ground (or ground floor) if he sees it, else the
+## highest he does; -1 if none.
+func target_level(pos: Vector2i, level: int, p: Vector2i, sight: float) -> int:
+	if LineOfSight.can_see(map, pos, p, sight, false, level, 0):
+		return 0
+	for l in range(map.top_level(p), 0, -1):
+		if LineOfSight.can_see(map, pos, p, sight, false, level, l):
+			return l
+	return -1
 
 
 func shot_odds(shooter: Unit, target: Unit, reaction := false, aimed := false) -> Dictionary:
@@ -514,14 +542,20 @@ func can_act(u: Unit) -> String:
 	return ""
 
 
-func can_move(u: Unit, dest: Vector2i) -> String:
+## `level`: the floor to end on (-1: the cheapest to reach).
+func can_move(u: Unit, dest: Vector2i, level := -1) -> String:
 	var err := can_act(u)
 	if err != "":
 		return err
 	if u.is_pinned():
 		return "Pinned down, can't move"
-	if dest == u.pos or not reachable(u).has(dest):
+	var reach := reachable(u)
+	if not reach.has(dest):
 		return "Can't reach that tile"
+	if level < 0:
+		level = reach[dest]["level"]
+	if (dest == u.pos and level == u.level) or Pathfinder.cost_to(reach, dest, level) == INF:
+		return "Can't reach that tile" if level == 0 or not map.can_stand(dest, level) else "Can't reach that floor"
 	return ""
 
 
@@ -633,7 +667,7 @@ func can_shoot_object(u: Unit, tile: Vector2i) -> String:
 		return err
 	if not map.in_bounds(tile) or not map.is_explosive(tile):
 		return "Nothing there to blow up"
-	if not LineOfSight.can_see(map, u.pos, tile, u.current_sight(), false):
+	if not LineOfSight.can_see(map, u.pos, tile, u.current_sight(), false, u.level, 0):
 		return "No line of sight"
 	return ""
 
@@ -645,7 +679,7 @@ func can_clear_mine(u: Unit, tile: Vector2i) -> String:
 		return err
 	if u.vehicle:
 		return "Tanks can't clear mines"
-	if maxi(absi(tile.x - u.pos.x), absi(tile.y - u.pos.y)) != 1:
+	if maxi(absi(tile.x - u.pos.x), absi(tile.y - u.pos.y)) != 1 or u.level != 0:
 		return "Only next to the mine"
 	if is_enemy_tunnel_known(u.team, tile):
 		return ""
@@ -679,7 +713,7 @@ func can_tunnel(u: Unit, dest: Vector2i) -> String:
 		return "Only the Viet Cong use the tunnels"
 	if u.is_pinned():
 		return "Pinned down"
-	if map.tunnel_owner(u.pos) != u.team:
+	if map.tunnel_owner(u.pos) != u.team or u.level != 0:
 		return "Not at a tunnel entrance"
 	if u.actions < Unit.ACTIONS_PER_TURN:
 		return "Going through the tunnels takes both actions"
@@ -699,7 +733,7 @@ func can_detonate(u: Unit, tile: Vector2i) -> String:
 		return "Only the bomb maker sets off IEDs"
 	if not map.has_mine(tile) or map.get_mine_kind(tile) != "ied" or not known_mines[u.team].has(tile):
 		return "No IED of ours there"
-	if Vector2(u.pos).distance_to(Vector2(tile)) > CombatRules.DETONATE_RANGE or not visible_from(u.pos, u.current_sight()).has(tile):
+	if Vector2(u.pos).distance_to(Vector2(tile)) > CombatRules.DETONATE_RANGE or not visible_from(u.pos, u.current_sight(), u.level).has(tile):
 		return "He can't see it from here"
 	return ""
 
@@ -725,7 +759,7 @@ func can_lay_trap(u: Unit, tile: Vector2i) -> String:
 		return err
 	if not u.has_trait("traps") or u.traps <= 0:
 		return "No traps to lay"
-	if maxi(absi(tile.x - u.pos.x), absi(tile.y - u.pos.y)) != 1:
+	if maxi(absi(tile.x - u.pos.x), absi(tile.y - u.pos.y)) != 1 or u.level != 0:
 		return "Only next to the soldier"
 	if not map.is_passable(tile) or unit_at(tile) != null or map.has_mine(tile) or map.has_fire(tile) \
 			or map.tunnel_owner(tile) != -1 or map.get_terrain(tile) == TacticalMap.Terrain.INDOOR:
@@ -744,7 +778,7 @@ func can_hunker(u: Unit) -> String:
 		return err
 	if u.vehicle:
 		return "Tanks can't hunker down"
-	if not map.has_cover(u.pos):
+	if not map.has_cover(u.pos, u.level):
 		return "Needs cover to hunker down"
 	return ""
 
@@ -816,7 +850,7 @@ func can_fire_mortar(u: Unit, tile: Vector2i, kind: String) -> String:
 	if distance > spec["max"]:
 		return "Out of %s range" % what
 	if spec["spotter"] == "self":
-		if not visible_from(u.pos, u.current_sight()).has(tile):
+		if not visible_from(u.pos, u.current_sight(), u.level).has(tile):
 			return "Can't see that tile"
 	elif spec["spotter"] == "team" and not team_visible_tiles(u.team).has(tile):
 		return "Nobody can spot that tile"
@@ -833,7 +867,8 @@ func can_use_medkit(u: Unit, target: Unit) -> String:
 		return "Can only treat allies"
 	if target.vehicle:
 		return "A medic can't fix a tank"
-	if absi(target.pos.x - u.pos.x) > 1 or absi(target.pos.y - u.pos.y) > 1:
+	if absi(target.pos.x - u.pos.x) > 1 or absi(target.pos.y - u.pos.y) > 1 \
+			or map.floor_height(target.pos, target.level) != map.floor_height(u.pos, u.level):
 		return "Must be adjacent"
 	if target.hp >= target.max_hp and not target.is_wounded():
 		return "Not hurt"
@@ -843,50 +878,71 @@ func can_use_medkit(u: Unit, target: Unit) -> String:
 func _check_throw(u: Unit, tile: Vector2i, throw_range: float) -> String:
 	if not map.in_bounds(tile):
 		return "Out of bounds"
-	if not LineOfSight.can_see(map, u.pos, tile, throw_range, false):
+	if aim_level(u, tile, throw_range) == -1:
 		return "Out of range or line of sight"
 	return ""
 
 
+## The floor of `tile` a grenade thrown (or a shot fired) by u goes for: where a unit stands there, else the
+## ground if he can see it, else the highest floor he can. -1 if he can see none of it.
+func aim_level(u: Unit, tile: Vector2i, reach: float) -> int:
+	var occupant := unit_at(tile)
+	if occupant != null and occupant != u:
+		return occupant.level if LineOfSight.can_see(map, u.pos, tile, reach, false, u.level, occupant.level) else -1
+	return target_level(u.pos, u.level, tile, reach)
+
+
 # --- Commands: return [] when not allowed ---
 
-func move(u: Unit, dest: Vector2i) -> Array:
-	if can_move(u, dest) != "":
+func move(u: Unit, dest: Vector2i, level := -1) -> Array:
+	if can_move(u, dest, level) != "":
 		return []
 	var reach := reachable(u)
-	u.actions -= actions_for_cost(u, reach[dest]["cost"])
+	if level < 0:
+		level = reach[dest]["level"]
+	u.actions -= actions_for_cost(u, Pathfinder.cost_to(reach, dest, level))
 	u.deployed = false
 	var events := []
 	var segment: Array[Vector2i] = [u.pos]
 	# Tanks: the hull's heading after each step (they turn, and may back up).
 	var facings: Array = reach[dest].get("facings", [])
 	var segment_facings: Array[Vector2i] = [u.facing]
-	var path := Pathfinder.path_to(reach, dest)
+	var path := Pathfinder.path_to(reach, dest, level)
+	var path_levels := Pathfinder.path_levels(reach, dest, level)
+	# The floor after each step, on maps with height (stairs repeat the tile).
+	var tall := map.has_height()
+	var segment_levels: Array[int] = [u.level]
 	for i in path.size():
 		var step := path[i]
 		var previous := u.pos
 		u.pos = step
-		u.facing = facings[i] if u.vehicle else step - previous
+		u.level = path_levels[i]
+		if u.vehicle:
+			u.facing = facings[i]
+		elif step != previous:
+			u.facing = step - previous
 		var crushed := map.get_object_kind(step) if u.vehicle and map.is_explosive(step) else ""
 		if u.vehicle:
 			_drive(previous, step)
 		# Wheat and tall grass walked through are trampled flat behind the soldier; crawling leaves them standing.
 		# Tanks flatten all of it, and plough jungle into rough ground.
-		if u.stance != Unit.Stance.PRONE and TacticalMap.TRAMPLES.has(map.get_terrain(previous)):
+		if u.stance != Unit.Stance.PRONE and previous != step and TacticalMap.TRAMPLES.has(map.get_terrain(previous)):
 			map.set_terrain(previous, TacticalMap.TRAMPLES[map.get_terrain(previous)])
 		if u.vehicle and TacticalMap.VEHICLE_FLATTENS.has(map.get_terrain(step)) and map.get_terrain(step) != TacticalMap.Terrain.WIRE:
 			map.set_terrain(step, TacticalMap.VEHICLE_FLATTENS[map.get_terrain(step)])
 		segment.append(step)
 		segment_facings.append(u.facing)
+		segment_levels.append(u.level)
 		var hazard := []
 		if crushed != "":
 			hazard.append_array(_detonate(null, step, crushed))
-		if map.has_mine(step):
+		if map.has_mine(step) and u.level == 0:
 			hazard.append_array(_trigger_mine(u, step))
 		if not hazard.is_empty():
-			events.append({"type": "move", "unit": u.id, "path": segment, "facings": segment_facings})
+			events.append(_move_event(u, segment, segment_facings, segment_levels, tall))
 			segment = [step]
 			segment_facings = [u.facing]
+			segment_levels = [u.level]
 			events.append_array(hazard)
 			if u.is_alive():
 				u.actions = 0
@@ -894,15 +950,17 @@ func move(u: Unit, dest: Vector2i) -> Array:
 		if not u.vehicle:
 			var tunnels_found := _spot_tunnels(u)
 			if not tunnels_found.is_empty():
-				events.append({"type": "move", "unit": u.id, "path": segment, "facings": segment_facings})
+				events.append(_move_event(u, segment, segment_facings, segment_levels, tall))
 				segment = [step]
 				segment_facings = [u.facing]
+				segment_levels = [u.level]
 				events.append({"type": "tunnels_spotted", "team": u.team, "unit": u.id, "tiles": tunnels_found})
 			var spotted := _spot_mines(u)
 			if not spotted.is_empty():
-				events.append({"type": "move", "unit": u.id, "path": segment, "facings": segment_facings})
+				events.append(_move_event(u, segment, segment_facings, segment_levels, tall))
 				segment = [step]
 				segment_facings = [u.facing]
+				segment_levels = [u.level]
 				events.append({"type": "mines_spotted", "team": u.team, "unit": u.id, "tiles": spotted})
 				if i + 1 < path.size() and spotted.has(path[i + 1]):
 					# A mine right ahead: he stops short instead of stepping on it.
@@ -910,9 +968,10 @@ func move(u: Unit, dest: Vector2i) -> Array:
 					break
 		for watcher in _overwatchers_seeing(u):
 			if segment.size() > 1:
-				events.append({"type": "move", "unit": u.id, "path": segment, "facings": segment_facings})
+				events.append(_move_event(u, segment, segment_facings, segment_levels, tall))
 				segment = [step]
 				segment_facings = [u.facing]
+				segment_levels = [u.level]
 			events.append_array(_fire(watcher, u, true))
 			if not u.is_alive() or u.is_pinned():
 				break
@@ -924,9 +983,17 @@ func move(u: Unit, dest: Vector2i) -> Array:
 			events.append({"type": "status", "unit": u.id, "text": "Pinned down!"})
 			break
 	if segment.size() > 1:
-		events.append({"type": "move", "unit": u.id, "path": segment, "facings": segment_facings})
+		events.append(_move_event(u, segment, segment_facings, segment_levels, tall))
 	events.append_array(_after_action())
 	return events
+
+
+## A stretch of a move. On maps with height it also carries the floor after each step ("levels").
+func _move_event(u: Unit, segment: Array[Vector2i], facings: Array[Vector2i], levels: Array[int], tall: bool) -> Dictionary:
+	var event := {"type": "move", "unit": u.id, "path": segment, "facings": facings}
+	if tall:
+		event["levels"] = levels
+	return event
 
 
 ## Shooting always ends the unit's turn.
@@ -1128,9 +1195,15 @@ func throw_grenade(u: Unit, tile: Vector2i) -> Array:
 		return []
 	u.actions = 0
 	u.grenades -= 1
+	var aimed_at := aim_level(u, tile, u.def.get("throw_range", CombatRules.GRENADE_RANGE))
 	var landing := _roll_throw(u, tile)
+	var level := landing_level(landing, map.floor_height(tile, aimed_at))
 	var events: Array = [{"type": "throw", "unit": u.id, "target": tile, "center": landing, "kind": "grenade"}]
-	events.append_array(_explode(u, landing, CombatRules.GRENADE_RADIUS, CombatRules.GRENADE_DAMAGE_MIN, CombatRules.GRENADE_DAMAGE_MAX, CombatRules.GRENADE_SHRED))
+	if map.has_height():
+		events[0]["from_level"] = u.level
+		events[0]["level"] = level
+	events.append_array(_explode(u, landing, CombatRules.GRENADE_RADIUS, CombatRules.GRENADE_DAMAGE_MIN, CombatRules.GRENADE_DAMAGE_MAX, CombatRules.GRENADE_SHRED,
+			null, CombatRules.EXPLOSION_VS_ARMOR, level))
 	events.append_array(_after_action())
 	return events
 
@@ -1143,6 +1216,9 @@ func throw_smoke(u: Unit, tile: Vector2i) -> Array:
 	u.smoke_grenades -= 1
 	var landing := _roll_throw(u, tile)
 	var events: Array = [{"type": "throw", "unit": u.id, "target": tile, "center": landing, "kind": "smoke"}]
+	if map.has_height():
+		events[0]["from_level"] = u.level
+		events[0]["level"] = landing_level(landing, map.floor_height(tile, aim_level(u, tile, CombatRules.SMOKE_RANGE)))
 	events.append_array(_make_smoke(u, landing, CombatRules.SMOKE_RADIUS))
 	events.append_array(_after_action())
 	return events
@@ -1196,7 +1272,7 @@ func _apply_command(command: Dictionary) -> Array:
 	var target := get_unit(command.get("target", -1))
 	match cmd:
 		"move":
-			return move(u, tile)
+			return move(u, tile, int(command.get("level", -1)))
 		"pivot":
 			return pivot(u, tile)
 		"shoot":
@@ -1279,7 +1355,7 @@ func _begin_turn(team: int) -> Array:
 	if not burnt_out.is_empty():
 		events.append({"type": "fire_out", "tiles": burnt_out})
 	for u in alive_units(team):
-		if map.has_fire(u.pos):
+		if map.has_fire(u.pos) and u.level == 0:
 			events.append({"type": "status", "unit": u.id, "text": "Burning!"})
 			events.append_array(_damage(u, CombatRules.FIRE_DAMAGE, 0))
 			if u.is_alive():
@@ -1298,7 +1374,7 @@ func _begin_turn(team: int) -> Array:
 			u.under_fire = false
 		elif u.suppression > 0:
 			var recovery := CombatRules.SUPPRESSION_RECOVERY
-			if map.has_cover(u.pos):
+			if map.has_cover(u.pos, u.level):
 				recovery += CombatRules.COVER_RECOVERY_BONUS
 			if u.stance == Unit.Stance.PRONE:
 				recovery += CombatRules.PRONE_RECOVERY_BONUS
@@ -1412,10 +1488,12 @@ func _land_strike(strike: Dictionary) -> Array:
 	var shooter := get_unit(strike["unit"])
 	var events: Array = [{"type": "strike", "unit": shooter.id, "target": target, "center": landing, "kind": strike["kind"]}]
 	var spec := strike_spec(strike)
+	# Shells and bombs come down on the roof (a pitched one gives way: they burst inside).
+	var level := map.top_level(landing)
 	if strike["kind"] == "he":
-		events.append_array(_explode(shooter, landing, spec["radius"], spec["damage"][0], spec["damage"][1], 0))
+		events.append_array(_explode(shooter, landing, spec["radius"], spec["damage"][0], spec["damage"][1], 0, null, CombatRules.EXPLOSION_VS_ARMOR, level))
 	elif strike["kind"] == "napalm":
-		events.append_array(_napalm(shooter, landing))
+		events.append_array(_napalm(shooter, landing, level))
 	else:
 		events.append_array(_make_smoke(shooter, landing, CombatRules.SMOKE_RADIUS + 0.5))
 	return events
@@ -1425,8 +1503,10 @@ func _land_strike(strike: Dictionary) -> Array:
 ## `spared` (the direct-hit target of a tank shell) takes no blast damage on top of the hit.
 ## `source` may be null (a mine, or drums a tank ran over). Fuel drums and oil tanks in the blast go up after it.
 ## `armor_loss`: what a vehicle's armour takes off the blast (less for an IED's shaped charge).
+## `level`: the floor of `center` it goes off on. On maps with height it only hurts those within a level of
+## that floor (shaking those within two), and only tears up cover on the ground.
 func _explode(source: Unit, center: Vector2i, radius: float, damage_min: int, damage_max: int, shred: int, spared: Unit = null,
-		armor_loss := CombatRules.EXPLOSION_VS_ARMOR) -> Array:
+		armor_loss := CombatRules.EXPLOSION_VS_ARMOR, level := 0) -> Array:
 	var caught := []
 	for p in map.tiles_in_radius(center, radius):
 		if map.is_explosive(p):
@@ -1438,13 +1518,19 @@ func _explode(source: Unit, center: Vector2i, radius: float, damage_min: int, da
 		if map.tunnel_owner(p) != -1:
 			for known: Dictionary in known_tunnels:
 				known.erase(p)
-	var destroyed := map.destroy_cover(center, radius)
+	var destroyed := map.destroy_cover(center, radius) if level == 0 else 0
 	var events: Array = [{"type": "explosion", "unit": source.id if source != null else -1, "center": center, "radius": radius, "destroyed": destroyed}]
+	if level != 0:
+		events[0]["level"] = level
+	var blast_height := map.floor_height(center, level)
 	for victim in alive_units():
 		if victim == spared:
 			continue
+		var apart := absf(map.floor_height(victim.pos, victim.level) - blast_height)
+		if apart > 2.0:
+			continue
 		var distance := Vector2(victim.pos).distance_to(Vector2(center))
-		if distance <= radius:
+		if distance <= radius and apart <= 1.0:
 			var damage := rng.randi_range(damage_min, damage_max)
 			if victim.vehicle:
 				damage = maxi(0, damage - armor_loss)
@@ -1459,12 +1545,16 @@ func _explode(source: Unit, center: Vector2i, radius: float, damage_min: int, da
 
 ## Napalm: a sheet of fire. Everyone in it burns and is shaken; jungle, grass, crops and trees burn away,
 ## and the ground stays alight (no one can enter it) for a while. Drums and oil tanks in it go up.
-func _napalm(source: Unit, center: Vector2i) -> Array:
+func _napalm(source: Unit, center: Vector2i, level := 0) -> Array:
 	var tiles := map.tiles_in_radius(center, CombatRules.NAPALM_RADIUS)
 	var events: Array = [{"type": "napalm", "unit": source.id if source != null else -1, "center": center, "tiles": tiles}]
+	var blast_height := map.floor_height(center, level)
 	for victim in alive_units():
+		var apart := absf(map.floor_height(victim.pos, victim.level) - blast_height)
+		if apart > 2.0:
+			continue
 		var distance := Vector2(victim.pos).distance_to(Vector2(center))
-		if distance <= CombatRules.NAPALM_RADIUS:
+		if distance <= CombatRules.NAPALM_RADIUS and apart <= 1.0:
 			var damage := rng.randi_range(CombatRules.NAPALM_DAMAGE_MIN, CombatRules.NAPALM_DAMAGE_MAX)
 			if victim.vehicle:
 				damage = maxi(0, damage - CombatRules.EXPLOSION_VS_ARMOR)
@@ -1564,6 +1654,15 @@ func _spot_tunnels(u: Unit) -> Array[Vector2i]:
 	return found
 
 
+## The floor of tile p closest to the given height: where a grenade aimed at that height comes down.
+func landing_level(p: Vector2i, height: float) -> int:
+	var best := 0
+	for level in range(1, map.top_level(p) + 1):
+		if absf(map.floor_height(p, level) - height) < absf(map.floor_height(p, best) - height):
+			best = level
+	return best
+
+
 ## A random tile next to p, for shells that miss.
 func _near(p: Vector2i) -> Vector2i:
 	var d: Vector2i = TacticalMap.DIRS8[rng.randi_range(0, 7)]
@@ -1651,7 +1750,10 @@ func _stray(shooter: Unit, target: Unit, shot: Dictionary) -> Array:
 	if victim == target or (victim != null and rng.randi_range(0, 99) >= CombatRules.STRAY_HIT_CHANCE):
 		victim = null
 	var radius := weapon.blast_radius if weapon.blast_radius > 0.0 else CombatRules.ROCKET_BLAST_RADIUS
-	events.append_array(_explode(shooter, landing, radius, CombatRules.SPLASH_DAMAGE_MIN, CombatRules.SPLASH_DAMAGE_MAX, 0, victim))
+	var level := landing_level(landing, map.floor_height(target.pos, target.level))
+	if victim != null and victim.level != level:
+		victim = null
+	events.append_array(_explode(shooter, landing, radius, CombatRules.SPLASH_DAMAGE_MIN, CombatRules.SPLASH_DAMAGE_MAX, 0, victim, CombatRules.EXPLOSION_VS_ARMOR, level))
 	if victim != null and victim.is_alive():
 		# A direct hit (after the blast, so a knocked-out tank's wreck survives it).
 		shot["stray_unit"] = victim.id
@@ -1732,7 +1834,8 @@ func _fire(shooter: Unit, target: Unit, reaction: bool, aimed := false) -> Array
 		events.append_array(_stray(shooter, target, events[0]))
 	elif weapon.blast_radius > 0.0 and result != "miss":
 		# High explosive bursts on the target.
-		events.append_array(_explode(shooter, target.pos, weapon.blast_radius, CombatRules.SPLASH_DAMAGE_MIN, CombatRules.SPLASH_DAMAGE_MAX, 0, target))
+		events.append_array(_explode(shooter, target.pos, weapon.blast_radius, CombatRules.SPLASH_DAMAGE_MIN, CombatRules.SPLASH_DAMAGE_MAX, 0, target,
+				CombatRules.EXPLOSION_VS_ARMOR, target.level))
 	if target.is_alive():
 		var suppression := shooter.weapon.suppression + (CombatRules.HIT_SUPPRESSION_BONUS if result != "miss" else 0)
 		events.append_array(_suppress(target, suppression))

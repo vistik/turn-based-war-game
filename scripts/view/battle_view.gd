@@ -68,6 +68,8 @@ const OVERLAY_Z := -1
 const FLOOR_STEP_DELAY := 0.18
 ## Camera movement per unit of a trackpad's two-finger pan.
 const PAN_GESTURE_SPEED := 14.0
+## How far (in pixels) the mouse must move with the left button held before a press becomes a map drag.
+const LEFT_DRAG_THRESHOLD := 6.0
 ## Tile corners in the order of TacticalMap.DIRS4's sides (north side runs from the first to the second).
 const REGION_CORNERS := [Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)]
 const DEPTH_Z := 40.0
@@ -109,6 +111,10 @@ var _see_through_key := []
 var _unit_nodes := {}
 var _smoke_nodes := {}
 var _dragging := false
+## Left button held with no soldier selected: the press either becomes a map drag or, released in place, a click.
+var _left_press := false
+var _left_press_pos := Vector2.ZERO
+var _left_dragging := false
 var _speed_index := 0
 var _mortar_kind := "he"
 ## In shooting mode: the command a click on a target gives (shoot, aimed_shot or suppress).
@@ -345,6 +351,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _handle_camera_input(event):
 		get_viewport().set_input_as_handled()
 		return
+	if _handle_left_drag(event):
+		get_viewport().set_input_as_handled()
+		return
 	if busy or not _is_human_turn():
 		return
 	if event is InputEventMouseButton and event.pressed:
@@ -416,6 +425,35 @@ func _handle_camera_input(event: InputEvent) -> bool:
 				_change_speed(-1)
 			_:
 				return false
+		return true
+	return false
+
+
+## With no soldier selected, the left button drags the map. A press released without moving
+## past LEFT_DRAG_THRESHOLD still counts as a click (on release). Returns true when the event was used.
+func _handle_left_drag(event: InputEvent) -> bool:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			if selected != null:
+				return false
+			_left_press = true
+			_left_dragging = false
+			_left_press_pos = event.position
+			return true
+		if not _left_press:
+			return false
+		var was_drag := _left_dragging
+		_left_press = false
+		_left_dragging = false
+		if not was_drag and not busy and _is_human_turn():
+			_on_click(_mouse_tile())
+		return true
+	if event is InputEventMouseMotion and _left_press:
+		if not _left_dragging:
+			if event.position.distance_to(_left_press_pos) < LEFT_DRAG_THRESHOLD:
+				return false
+			_left_dragging = true
+		_camera.position -= event.relative / _camera.zoom
 		return true
 	return false
 

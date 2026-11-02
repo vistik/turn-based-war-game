@@ -234,7 +234,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 | 1 on drums / an oil tank | In shoot mode, click fuel drums or an oil tank to blow them up |
 | H / Shift+H | Suggest a move / suggest for the selected soldier |
 | Tab / Enter | Next soldier / end turn (the camera centres on each newly selected soldier) |
-| WASD, arrows, middle drag | Pan |
+| WASD, arrows, middle drag, left drag (no soldier selected) | Pan |
 | Wheel | On maps with tall buildings: the cursor up or down a floor (the building under it opens at that floor). Elsewhere: zoom |
 | Ctrl/Cmd + wheel, pinch / F | Zoom / focus the selected soldier |
 | Two-finger swipe | Pan (trackpad) |

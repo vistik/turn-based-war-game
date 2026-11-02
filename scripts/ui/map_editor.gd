@@ -2,7 +2,6 @@ extends Node2D
 ## The map and scenario editor. Paint ground, place cover, walls, hedges and fences, both sides' units,
 ## objectives and reinforcement spawns on the same isometric view the battles use; set the rules; save and
 ## load scenario files (user://scenarios/), play them, or let the AI play a few games to check the balance.
-## With mirroring on, every edit is copied onto the other half of the map, so both sides get the same ground.
 ##
 ## Mouse: left paints or places, right removes, middle drag pans, wheel zooms. Keys: Q/E rotate, V iso or
 ## top-down, WASD/arrows pan, 1-7 pick a tool, R turns the selected unit, Ctrl+Z undoes, Ctrl+S saves.
@@ -95,7 +94,6 @@ var _load_choice: OptionButton
 var _size_choice: OptionButton
 var _vp_spin: SpinBox
 var _rounds_spin: SpinBox
-var _mirror_check: CheckBox
 var _briefing_edit: TextEdit
 var _wave_choice: OptionButton
 var _wave_box: VBoxContainer
@@ -300,10 +298,6 @@ func _paint_overlay(c: CanvasItem) -> void:
 		TerrainPainter.draw_trap(c, _proj, p, _s.map.get_mine_kind(p))
 	for p: Vector2i in _s.map.get_tunnels():
 		TerrainPainter.draw_tunnel(c, _proj, p)
-	if _s.mirrored:
-		for y in h:
-			if y % 2 == 0:
-				c.draw_line(_proj.project(Vector2(w * 0.5, y)), _proj.project(Vector2(w * 0.5, y + 1)), Color(1, 1, 1, 0.45), 2.0)
 	for i in _s.objectives.size():
 		var objective: Dictionary = _s.objectives[i]
 		var selected := i == _selected_objective
@@ -318,15 +312,11 @@ func _paint_overlay(c: CanvasItem) -> void:
 		return
 	var color := Color(1, 1, 1, 0.8)
 	if _tool == Tool.EDGE:
-		for edge in _with_mirror_edges(_hover_edge[0], _hover_edge[1]):
-			var a: Vector2i = edge[0]
-			var dir: Vector2i = edge[1]
-			var ends := _edge_ends(a, dir)
-			c.draw_line(_proj.project(ends[0]), _proj.project(ends[1]), Color("ffd84a"), 4.0)
+		var ends := _edge_ends(_hover_edge[0], _hover_edge[1])
+		c.draw_line(_proj.project(ends[0]), _proj.project(ends[1]), Color("ffd84a"), 4.0)
 		return
 	for p in _brush_tiles(_hover):
-		for q in _with_mirror(p):
-			c.draw_polyline(_tile_outline(q), color if q == p else Color(1, 1, 1, 0.35), 2.0)
+		c.draw_polyline(_tile_outline(p), color, 2.0)
 
 
 ## Flags, unit tags and wave labels on top of everything.
@@ -574,30 +564,27 @@ func _apply_stroke() -> void:
 	match _tool:
 		Tool.TERRAIN:
 			for p in _brush_tiles(_hover):
-				for q in _with_mirror(p):
-					_s.map.set_terrain(q, TacticalMap.Terrain.FLOOR if removing else _terrain)
-					_touch(q)
+				_s.map.set_terrain(p, TacticalMap.Terrain.FLOOR if removing else _terrain)
+				_touch(p)
 		Tool.OBJECT:
-			for q in _with_mirror(_hover):
-				if removing:
-					_s.map.set_object(q, Cover.NONE)
-					_s.map.set_mine(q, false)
-				elif _object_kind == "mine":
-					_s.map.set_mine(q, _s.map.is_passable(q))
-				elif _unit_index_at(q) == -1:
-					_s.map.set_object(q, Scenario.OBJECT_COVER[_object_kind], _object_kind)
-				_touch(q)
+			var q := _hover
+			if removing:
+				_s.map.set_object(q, Cover.NONE)
+				_s.map.set_mine(q, false)
+			elif _object_kind == "mine":
+				_s.map.set_mine(q, _s.map.is_passable(q))
+			elif _unit_index_at(q) == -1:
+				_s.map.set_object(q, Scenario.OBJECT_COVER[_object_kind], _object_kind)
+			_touch(q)
 		Tool.EDGE:
-			for edge in _with_mirror_edges(_hover_edge[0], _hover_edge[1]):
-				var a: Vector2i = edge[0]
-				var b: Vector2i = a + edge[1]
-				_s.map.set_edge(a, b, Cover.NONE if removing else Scenario.EDGE_COVER[_edge_kind], "" if removing else _edge_kind)
-				_touch(a)
-				_touch(b)
+			var a: Vector2i = _hover_edge[0]
+			var b: Vector2i = a + _hover_edge[1]
+			_s.map.set_edge(a, b, Cover.NONE if removing else Scenario.EDGE_COVER[_edge_kind], "" if removing else _edge_kind)
+			_touch(a)
+			_touch(b)
 		Tool.ERASE:
 			for p in _brush_tiles(_hover):
-				for q in _with_mirror(p):
-					_erase(q)
+				_erase(p)
 		Tool.UNIT:
 			_unit_click(_hover, removing)
 		Tool.OBJECTIVE:
@@ -628,12 +615,7 @@ func _unit_click(p: Vector2i, removing: bool) -> void:
 	var i := _unit_index_at(p)
 	if removing:
 		if i != -1:
-			var entry: Dictionary = _s.units[i]
 			_s.units.remove_at(i)
-			if _s.mirrored:
-				var twin := _unit_index_at(_s.mirror_tile(p))
-				if twin != -1 and _s.units[twin]["team"] != entry["team"] and _s.units[twin]["role"] == entry["role"]:
-					_s.units.remove_at(twin)
 			_selected_unit = -1
 	elif i != -1:
 		_selected_unit = i
@@ -647,8 +629,6 @@ func _unit_click(p: Vector2i, removing: bool) -> void:
 		var entry := Scenario.unit_entry(_team, _role, p, facing)
 		_s.units.append(entry)
 		_selected_unit = _s.units.size() - 1
-		if _s.mirrored and _s.mirror_tile(p) != p and _unit_index_at(_s.mirror_tile(p)) == -1 and _s.map.is_passable(_s.mirror_tile(p)):
-			_s.units.append(_s.mirrored_unit(entry))
 	else:
 		_flash("Units can't stand on objects")
 	_rebuild_units()
@@ -667,21 +647,8 @@ func _turn_selected_unit() -> void:
 
 
 func _set_unit_facing(entry: Dictionary, facing: Vector2i) -> void:
-	var twin: Variant = _mirror_twin(entry)
 	entry["facing"] = facing
-	if twin != null:
-		twin["facing"] = Vector2i(-facing.x, facing.y)
 	_rebuild_units()
-
-
-## With mirroring on: the other side's unit on the mirror tile with the same role, or null.
-func _mirror_twin(entry: Dictionary) -> Variant:
-	if not _s.mirrored:
-		return null
-	var i := _unit_index_at(_s.mirror_tile(entry["pos"]))
-	if i == -1 or _s.units[i] == entry or _s.units[i]["team"] == entry["team"] or _s.units[i]["role"] != entry["role"]:
-		return null
-	return _s.units[i]
 
 
 func _objective_click(p: Vector2i, removing: bool) -> void:
@@ -696,21 +663,16 @@ func _objective_click(p: Vector2i, removing: bool) -> void:
 	else:
 		_s.objectives.append({"name": "Objective %d" % (_s.objectives.size() + 1), "center": at, "radius": 2.5})
 		_selected_objective = _s.objectives.size() - 1
-		if _s.mirrored and absf(at.x - _s.map.width * 0.5) > 0.01:
-			_s.objectives.append({"name": "Objective %d" % (_s.objectives.size() + 1), "center": _s.mirror_point(at), "radius": 2.5})
 	_show_tool_options()
 	queue_redraw()
 	_after_edit()
 
 
-## Where a new objective goes: the mouse position to the nearest half tile, or onto the centre line
-## when mirroring and close to it, so a shared objective sits exactly between the two sides.
+## Where a new objective goes: the mouse position to the nearest half tile.
 func _objective_point(p: Vector2i) -> Vector2:
 	var at := Vector2(p) + Vector2(0.5, 0.5)
 	if Rect2(Vector2(p), Vector2.ONE).grow(0.01).has_point(_hover_point):
 		at = (_hover_point * 2.0).round() * 0.5
-	if _s.mirrored and absf(at.x - _s.map.width * 0.5) <= 0.75:
-		at.x = _s.map.width * 0.5
 	return at
 
 
@@ -756,25 +718,6 @@ func _brush_tiles(center: Vector2i) -> Array[Vector2i]:
 			if _s.map.in_bounds(p):
 				tiles.append(p)
 	return tiles
-
-
-## The tile and, with mirroring on, its mirror image.
-func _with_mirror(p: Vector2i) -> Array[Vector2i]:
-	var tiles: Array[Vector2i] = [p]
-	if _s.mirrored and _s.mirror_tile(p) != p:
-		tiles.append(_s.mirror_tile(p))
-	return tiles
-
-
-func _with_mirror_edges(p: Vector2i, dir: Vector2i) -> Array:
-	var edges := [[p, dir]]
-	if _s.mirrored:
-		var m := _s.mirror_tile(p)
-		var m_dir := Vector2i(-dir.x, dir.y)
-		# An edge on the centre line is its own mirror image.
-		if not (m == p + dir and m + m_dir == p) and m != p:
-			edges.append([m, m_dir])
-	return edges
 
 
 ## Remembers the scenario before a change, for Ctrl+Z.
@@ -852,14 +795,6 @@ func _build_ui() -> void:
 	_options = VBoxContainer.new()
 	box.add_child(_options)
 	_hint = _text(box, "", MUTED, 12, true)
-	_mirror_check = CheckBox.new()
-	_mirror_check.text = "Mirror edits onto the other half"
-	_mirror_check.toggled.connect(func(on: bool) -> void:
-		if not _syncing:
-			_s.mirrored = on
-			_overlay.queue_redraw())
-	box.add_child(_mirror_check)
-	_button(box, "Copy west half onto east half now", _mirror_now)
 
 	_section(box, "Scenario")
 	_title_edit = _line(box, "Title", func(text: String) -> void: _s.title = text)
@@ -952,7 +887,6 @@ func _sync_panel() -> void:
 	_title_edit.text = _s.title
 	_vp_spin.value = _s.vp_to_win
 	_rounds_spin.value = _s.max_rounds
-	_mirror_check.button_pressed = _s.mirrored
 	_briefing_edit.text = _s.briefing
 	_file_edit.text = edited_path.get_file().get_basename() if edited_path.begins_with(Scenario.USER_DIR) else _slug(_s.title)
 	_syncing = false
@@ -1029,10 +963,7 @@ func _unit_options() -> void:
 		_role = roles[i]
 		if entry != null:
 			_checkpoint()
-			var twin: Variant = _mirror_twin(entry)
 			entry["role"] = _role
-			if twin != null:
-				twin["role"] = _role
 			_rebuild_units())
 	var facings: Array = Scenario.FACINGS.keys()
 	_choice(_options, "Facing", facings, facings.find(_facing), func(i: int) -> void:
@@ -1041,7 +972,7 @@ func _unit_options() -> void:
 			_checkpoint()
 			_set_unit_facing(entry, Scenario.FACINGS[_facing]))
 	if entry == null:
-		_text(_options, "No unit selected: left click places a new one%s." % (" (and its mirror twin)" if _s.mirrored else ""), MUTED, 12, true)
+		_text(_options, "No unit selected: left click places a new one.", MUTED, 12, true)
 		return
 	_text(_options, "Selected: %s at %d, %d" % [_s._who(entry), entry["pos"].x, entry["pos"].y], _team_color(entry["team"]), 13)
 	_line(_options, "Name (empty = from the seed)", func(text: String) -> void:
@@ -1137,16 +1068,6 @@ func _remove_wave() -> void:
 	_sync_waves()
 	_overlay.queue_redraw()
 	_after_edit()
-
-
-func _mirror_now() -> void:
-	_checkpoint()
-	_s.mirror_west_to_east()
-	_s.mirrored = true
-	var view := _focused_grid()
-	_open(_s, edited_path)
-	_focus(view)
-	_flash("East half rebuilt from the west half")
 
 
 # --- Files ---

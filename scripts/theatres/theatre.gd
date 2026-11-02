@@ -139,9 +139,15 @@ func trap_team() -> int:
 
 # --- Content: each theatre overrides these ---
 
-## A random battlefield: {"map", "objectives", "spawns", "reinforcement_spawns"} (see BattleFactory).
-func generate_map(_seed: int, _size: Vector2i) -> Dictionary:
+## A random battlefield: {"map", "objectives", "spawns", "reinforcement_spawns", "style"} (see BattleFactory).
+## `style` is one of map_styles()' ids; "" lets the seed pick one.
+func generate_map(_seed: int, _size: Vector2i, _style := "") -> Dictionary:
 	return {}
+
+
+## The kinds of random map the theatre makes: [{"id", "title", "blurb"}], as offered in skirmish.
+func map_styles() -> Array:
+	return []
 
 
 ## Whether a generated layout is connected enough to play.

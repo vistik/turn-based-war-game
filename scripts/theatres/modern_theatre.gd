@@ -147,12 +147,16 @@ static func _insurgent_roles() -> Dictionary:
 	}
 
 
-func generate_map(seed: int, size: Vector2i) -> Dictionary:
-	return ModernMapGenerator.generate(seed, size)
+func generate_map(seed: int, size: Vector2i, style := "") -> Dictionary:
+	return ModernMapGenerator.generate(seed, size, style)
+
+
+func map_styles() -> Array:
+	return ModernMapGenerator.STYLES
 
 
 func is_playable(layout: Dictionary) -> bool:
-	return MapGenerator.is_playable(layout)
+	return NaturalMap.is_playable(layout)
 
 
 func skirmish_forces(size: int) -> Dictionary:

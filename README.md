@@ -111,8 +111,17 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   - Each side also picks a deployment: balanced, left or right flank, and offensive (deployed further
     forward) or defensive (further back, behind sandbags, crouched).
   - Win a map to take its points; a draw splits them. Most points wins.
-- **Skirmish** on the hand-made Normandy village, a random map (standard 44x44, large 64x64, huge 84x84 with
-  bigger forces), or your own scenarios. Play vs AI, hotseat, watch AI vs AI, or let an AI agent play a side
+- **Skirmish** on the hand-made Normandy village, a random map, or your own scenarios.
+  - Random maps come in several kinds per theatre, picked by name, in three sizes (standard 44x44, large
+    64x64, huge 84x84 with bigger forces):
+    - Normandy: bocage crossroads, hedgerow hamlets, a shelled market town, a forest edge.
+    - Vietnam: a paddy valley, a jungle trail, delta hamlets.
+    - Afghanistan & Iraq: the Helmand green zone, an Iraqi town, a desert village with a wadi and a checkpoint.
+  - A minimap shows the very map you are about to play (ground, woods, hedges and walls, buildings,
+    objectives and both sides' starts); "Another map" rolls a new one of the same kind.
+  - No map is a mirror image. Roads wind round rough ground, villages grow along them, fields are an
+    irregular patchwork, and each side's half is its own. Objectives are picked from the map's landmarks
+    (church, crossroads, farm, bazaar, landing zone...) so that both sides walk about as far to them. Play vs AI, hotseat, watch AI vs AI, or let an AI agent play a side
   (Agent vs AI, Me vs agent). On the village and random
   maps each side picks a deployment, as in the two-player campaign: the usual spawns, balanced or massed on
   the left or right flank, offensive (further forward) or defensive (further back, behind sandbags,
@@ -128,7 +137,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   - After every order both games check they hold the identical battle. Online games save at each agreed turn
     and can be continued later with the same opponent.
 - **Map and scenario editor**: paint terrain, cover and walls, place units, objectives and reinforcement
-  spawns, mirror one half onto the other, and save scenarios as JSON. Play or test them with the AI straight away.
+  spawns, and save scenarios as JSON. Play or test them with the AI straight away.
 
 **AI**
 - A utility AI that plays fair: it only knows what its side can see. It weighs cover facing the enemy,
@@ -242,7 +251,7 @@ A single online match between two processes, with the AI on both sides:
 | `scripts/theatres/` | The theatres: each one's sides, units, weapons, looks, skirmish forces, campaign and map generator choice |
 | `scripts/combat/` | The rules engine: battle, map, line of sight, pathfinding, units, weapons, AI, map generators, scenarios |
 | `scripts/view/` | Battle scene, isometric projection and procedural painters for terrain, soldiers and tanks |
-| `scripts/ui/` | Main menu and campaign screens, settings, theme, map editor |
+| `scripts/ui/` | Main menu and campaign screens, map minimap preview, settings, theme, map editor |
 | `scripts/campaign/` | The campaign |
 | `scripts/replay/` | Recording battles and replay files (the viewer is `scripts/view/replay_controls.gd`) |
 | `scripts/net/` | Online play |

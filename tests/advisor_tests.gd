@@ -90,7 +90,7 @@ func test_advisor_does_not_know_the_enemy_start() -> void:
 	# Mid-battle, the opponent AI's starting guess would be the enemy's real position; the advisor's isn't.
 	var battle := make_battle([["Rifleman", 0, Vector2i(2, 8)], ["Rifleman", 1, Vector2i(30, 30)]], Vector2i(32, 32))
 	var advisor := AdvisorAI.new(battle, 0)
-	check_eq(advisor._objective, Vector2(29, 8), "guesses from the mirrored map")
+	check_eq(advisor._objective, Vector2(29, 8), "guesses the enemy started across the map")
 
 
 # --- Suggestions ---

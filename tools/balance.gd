@@ -11,8 +11,8 @@ extends SceneTree
 ##   --csv PATH        write one row per game; --json PATH writes the games and the summary
 ##   --quiet           only print the summary
 ##
-## The Allies always move first. On a mirrored map with the same forces, the Allied share of decided games
-## is the first mover's advantage; --swap tells it apart from an uneven map or scenario.
+## The Allies always move first, and no map is a mirror image, so the Allied share of decided games mixes the
+## first mover's advantage with the ground's; --swap plays each game again from the other edge to tell them apart.
 
 var _scenario_data := {}
 var _map := "village"

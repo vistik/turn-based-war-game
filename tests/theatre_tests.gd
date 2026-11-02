@@ -124,7 +124,8 @@ func test_vietnam_maps_are_playable_and_prepared_by_the_vc() -> void:
 				check(counts.get(t, 0) > 0, "seed %d %dx%d has %s" % [seed, size, size, TacticalMap.TERRAIN_NAMES[t]])
 			check(map.get_tunnels().size() >= 4, "seed %d: tunnels dug" % seed)
 			for p: Vector2i in map.get_tunnels():
-				check(map.tunnel_owner(p) == 1 and p.x >= map.width / 2, "tunnel %s is the VC's, on their half" % p)
+				# Behind the objectives or towards the VC's edge, never in the Americans' end of the map.
+				check(map.tunnel_owner(p) == 1 and p.x >= int(map.width * 0.4), "tunnel %s is the VC's, on their side" % p)
 			var traps := map.get_mines().keys().filter(func(p: Vector2i) -> bool: return map.get_mine_kind(p) == "punji")
 			check(not traps.is_empty(), "seed %d: punji traps laid" % seed)
 	var battle: Battle = GameSession.build_skirmish({"theatre": "vietnam", "map": "random", "size": 44, "seed": 5})[0]
@@ -331,16 +332,20 @@ func test_vietnam_scenarios_round_trip() -> void:
 
 # --- Afghanistan & Iraq ---
 
-func test_modern_maps_come_in_two_styles_with_ieds() -> void:
-	for style in ModernMapGenerator.STYLES:
+func test_modern_maps_come_in_three_styles_with_ieds() -> void:
+	for entry: Dictionary in ModernMapGenerator.STYLES:
+		var style: String = entry["id"]
 		for size in [36, 44, 64]:
 			var layout := ModernMapGenerator.generate(11, Vector2i(size, size), style)
 			var map: TacticalMap = layout["map"]
 			check(MapGenerator.is_playable(layout), "%s %dx%d is playable" % [style, size, size])
 			var ieds := map.get_mines().keys().filter(func(p: Vector2i) -> bool: return map.get_mine_kind(p) == "ied")
 			check(ieds.size() >= 2, "%s %dx%d: IEDs buried (%d)" % [style, size, size, ieds.size()])
+			var front := 0.0
+			for objective: Dictionary in layout["objectives"]:
+				front = maxf(front, objective["center"].x)
 			for p: Vector2i in ieds:
-				check(p.x < map.width / 2, "IED %s is on the Coalition's way in" % p)
+				check(p.x < front, "IED %s is on the Coalition's way in" % p)
 	check(ModernMapGenerator.generate(2, Vector2i(44, 44))["style"] != ModernMapGenerator.generate(3, Vector2i(44, 44))["style"], "the seed picks the style")
 	for size in [44, 64, 84]:
 		var battle: Battle = GameSession.build_skirmish({"theatre": "modern", "map": "random", "size": size, "seed": 21})[0]

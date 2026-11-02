@@ -15,8 +15,8 @@ const COVER_NAMES := {
 func _init(p_battle: Battle, p_team: int) -> void:
 	super(p_battle, p_team)
 	# The opponent AI guesses where the enemy is from their real starting positions. An advisor may be
-	# created mid-battle, when that would give enemy positions away, so it guesses from the mirrored map:
-	# the enemy started opposite our own side.
+	# created mid-battle, when that would give enemy positions away, so it guesses: the enemy started across
+	# the map from our own side.
 	var sum := Vector2.ZERO
 	var count := 0
 	for u in battle.alive_units(team):

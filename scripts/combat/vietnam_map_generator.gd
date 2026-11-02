@@ -106,6 +106,8 @@ static func _generate(seed: int, size: Vector2i) -> Dictionary:
 		if rng.randf() < 0.3:
 			b.object(rect.position + Vector2i(-1, rng.randi_range(0, rect.size.y - 1)), Cover.FULL, "palm")
 	reserved.merge(paddies)
+	# Ridges and knolls rise out of the jungle; the paddies, hamlet, landing zone and trails stay level.
+	var flat := reserved.duplicate()
 
 	# Jungle: blobs of thick undergrowth with tall trees and bamboo, mostly on the flanks and edges.
 	for i in int(JUNGLE_BLOBS * area_scale):
@@ -148,6 +150,8 @@ static func _generate(seed: int, size: Vector2i) -> Dictionary:
 	for i in int(rng.randi_range(1, 2) * area_scale):
 		b.object(MapGenerator._open_tile(b, rng, reserved, mid), Cover.HALF, "rice_sacks")
 	b.object(MapGenerator._open_tile(b, rng, reserved, mid), Cover.HALF, "fuel")
+
+	HeightGenerator.raise_hills(b, rng, flat, maxi(1, int(rng.randi_range(2, 4) * area_scale)), 3)
 
 	var tunnels := _dig_tunnels(b, rng, [hamlet + 2, trail + 1, lz])
 	_lay_traps(b, rng, trail, int(rng.randi_range(4, 6) * area_scale))

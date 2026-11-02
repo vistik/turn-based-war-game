@@ -48,7 +48,10 @@ static func _generate(seed: int, size: Vector2i, style: String) -> Dictionary:
 	if style == "town":
 		names = _town(b, rng, reserved, road, north, south)
 	else:
-		names = _helmand(b, rng, reserved, road, north, south)
+		var flat := {}
+		names = _helmand(b, rng, reserved, road, north, south, flat)
+		# Low hills on the valley floor, off the compounds, fields and tracks.
+		HeightGenerator.raise_hills(b, rng, flat, maxi(1, int(rng.randi_range(1, 3) * float(w * h) / 1600.0)), 2)
 	_bury_ieds(b, rng, road, int(rng.randi_range(3, 5) * float(w * h) / 1600.0))
 
 	var spawns: Array[Vector2i] = []
@@ -70,7 +73,8 @@ static func _generate(seed: int, size: Vector2i, style: String) -> Dictionary:
 
 ## The green zone: a walled compound, the bazaar on the crossing and the mosque; mud-walled compounds, wheat
 ## fields edged with irrigation ditches, tree lines. Returns the objectives' names.
-static func _helmand(b: MapBuilder, rng: RandomNumberGenerator, reserved: Dictionary, road: int, north: int, south: int) -> Array:
+## `flat` is filled with the ground that must stay level (everything built on).
+static func _helmand(b: MapBuilder, rng: RandomNumberGenerator, reserved: Dictionary, road: int, north: int, south: int, flat: Dictionary) -> Array:
 	var w := b.map.width
 	var h := b.map.height
 	var mid := w / 2
@@ -80,6 +84,8 @@ static func _helmand(b: MapBuilder, rng: RandomNumberGenerator, reserved: Dictio
 			[[Vector2i(mid - 1, north + 7), MapBuilder.S, Cover.NONE, ""], [Vector2i(mid - 6, north + 4), MapBuilder.W, Cover.NONE, ""]], true, [MapBuilder.E])
 	b.building(Rect2i(mid - 5, north + 1, 4, 3), [[Vector2i(mid - 3, north + 3), MapBuilder.S]],
 			[[Vector2i(mid - 5, north + 2), MapBuilder.W]], [], "mud")
+	# A flat roof over two storeys to watch the valley from.
+	b.tall_building(Rect2i(mid - 5, north + 1, 4, 3), 2, Vector2i(mid - 2, north + 1))
 	b.object(Vector2i(mid - 4, north + 6), Cover.HALF, "hay")
 	b.terrain(Rect2i(mid - 1, north + 8, 2, road - north - 8), TacticalMap.Terrain.ROAD, false)
 	MapGenerator._reserve(reserved, Rect2i(mid - 7, maxi(0, north - 1), 7, 10))
@@ -113,10 +119,13 @@ static func _helmand(b: MapBuilder, rng: RandomNumberGenerator, reserved: Dictio
 		b.enclose(rect, Cover.FULL, "mud_wall", gates)
 		var house := Rect2i(rect.position + Vector2i(1, 1), Vector2i(rect.size.x - 2, 3))
 		b.building(house, [[Vector2i(house.position.x + 1, house.end.y - 1), MapBuilder.S]], [[Vector2i(house.end.x - 1, house.position.y + 1), MapBuilder.E]], [], "mud")
+		if rng.randf() < 0.3:
+			b.tall_building(house, 2, house.position)
 		if rng.randf() < 0.6:
 			b.object(Vector2i(rect.position.x + 1, rect.end.y - 2), Cover.HALF, "hay" if rng.randf() < 0.5 else "crate")
 		MapGenerator._reserve(reserved, rect.grow(1))
 
+	flat.merge(reserved)
 	# Fields of wheat (or poppies), ditches along their edges, tree lines on the banks.
 	var fields := {}
 	for attempt in int(FIELD_ATTEMPTS * area_scale):
@@ -139,8 +148,8 @@ static func _helmand(b: MapBuilder, rng: RandomNumberGenerator, reserved: Dictio
 	return ["Compound", "Bazaar", "Mosque"]
 
 
-## An Iraqi town: a street grid of stone houses with courtyards, the mosque, the market square and the police
-## station. Returns the objectives' names.
+## An Iraqi town: a street grid of flat-roofed stone houses of one to three storeys with courtyards, the
+## mosque, the market square and the police station. Returns the objectives' names.
 static func _town(b: MapBuilder, rng: RandomNumberGenerator, reserved: Dictionary, road: int, north: int, south: int) -> Array:
 	var w := b.map.width
 	var h := b.map.height
@@ -178,6 +187,7 @@ static func _town(b: MapBuilder, rng: RandomNumberGenerator, reserved: Dictionar
 	MapGenerator._reserve(reserved, Rect2i(mid - 8, road - 3, 8, 7))
 	b.building(Rect2i(mid - 5, south + 2, 5, 4), [[Vector2i(mid - 3, south + 2), MapBuilder.N]],
 			[[Vector2i(mid - 5, south + 3), MapBuilder.W], [Vector2i(mid - 4, south + 5), MapBuilder.S]], [MapBuilder.E])
+	b.tall_building(Rect2i(mid - 5, south + 2, 5, 4), 2, Vector2i(mid - 5, south + 5))
 	for p in [Vector2i(mid - 5, south), Vector2i(mid - 2, south)]:
 		b.object(p, Cover.FULL, "hesco")
 	b.object(Vector2i(mid - 6, south + 1), Cover.HALF, "jersey")
@@ -192,6 +202,9 @@ static func _town(b: MapBuilder, rng: RandomNumberGenerator, reserved: Dictionar
 			continue
 		b.building(house, [[Vector2i(house.position.x + rng.randi_range(0, house.size.x - 1), house.end.y - 1), MapBuilder.S]],
 				[[Vector2i(house.position.x, house.position.y + 1), MapBuilder.W], [Vector2i(house.end.x - 1, house.position.y + 1), MapBuilder.E]])
+		var roll := rng.randf()
+		if roll < 0.75:
+			b.tall_building(house, 3 if roll < 0.2 else 2, house.position)
 		if rng.randf() < 0.6:
 			b.enclose(yard, Cover.HALF, "stone", [[Vector2i(yard.position.x + yard.size.x / 2, yard.end.y - 1), MapBuilder.S, Cover.NONE, ""]], true, [MapBuilder.N])
 		MapGenerator._reserve(reserved, plot.grow(1))

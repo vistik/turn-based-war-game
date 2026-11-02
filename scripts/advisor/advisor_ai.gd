@@ -103,7 +103,9 @@ func _reasons(u: Unit, plan: Dictionary, seen: Array[Unit]) -> Array[String]:
 	var target: Unit = plan["target"]
 	match plan["kind"]:
 		"move":
+			_at_level = plan.get("level", -1)
 			reasons = _move_reasons(u, plan["tile"], seen)
+			_at_level = -1
 		"shoot", "aimed_shot":
 			var odds := battle.shot_odds(u, target, false, plan["kind"] == "aimed_shot")
 			reasons.append("%d%% hit" % odds["hit"])
@@ -187,7 +189,7 @@ func _move_reasons(u: Unit, tile: Vector2i, seen: Array[Unit]) -> Array[String]:
 		if seen.is_empty():
 			var best := Cover.NONE
 			for d: Vector2i in TacticalMap.DIRS4:
-				best = maxi(best, battle.map.cover_toward(tile, d))
+				best = maxi(best, battle.map.cover_toward(tile, d, _level_of(u, tile)))
 			reasons.append("%s cover" % Cover.NAMES[best].to_lower() if best != Cover.NONE else "in the open")
 		else:
 			var counts := _cover_counts(tile, seen)
@@ -199,7 +201,15 @@ func _move_reasons(u: Unit, tile: Vector2i, seen: Array[Unit]) -> Array[String]:
 				reasons.append("exposed to %s" % _enemies(counts[2]))
 			elif counts[0] + counts[1] == 0:
 				reasons.append("out of sight of the enemy")
+	var level := _level_of(u, tile)
+	if battle.map.has_height() and level > 0:
+		reasons.insert(0, "up on the roof" if battle.map.is_roof(tile, level) else "upstairs (floor %d)" % level)
+	elif battle.map.has_height() and battle.map.get_elevation(tile) > battle.map.floor_height(u.pos, u.level):
+		reasons.insert(0, "higher ground")
+	var at_level := _at_level
+	_at_level = -1
 	var here := _danger(u, u.pos, seen)[0]
+	_at_level = at_level
 	var there := _danger(u, tile, seen)[0]
 	if there + 1.0 < here * 0.7:
 		reasons.append("safer than where %s stands" % ("it" if u.vehicle else "he"))
@@ -215,15 +225,17 @@ func _move_reasons(u: Unit, tile: Vector2i, seen: Array[Unit]) -> Array[String]:
 		# The follow-up the AI counted on: the best shot from the new spot.
 		var best_target: Unit = null
 		var best_hit := -1
-		var saved := u.pos
+		var saved := [u.pos, u.level]
+		u.level = level
 		u.pos = tile
 		for e in seen:
-			if _can_see(tile, e.pos, u.sight):
+			if _can_see(tile, e.pos, u.sight, level, e.level):
 				var hit: int = battle.shot_odds(u, e)["hit"]
 				if hit > best_hit:
 					best_hit = hit
 					best_target = e
-		u.pos = saved
+		u.pos = saved[0]
+		u.level = saved[1]
 		if best_target != null:
 			reasons.append("then shoot %s at %d%%" % [best_target.name, best_hit])
 	return reasons
@@ -232,10 +244,11 @@ func _move_reasons(u: Unit, tile: Vector2i, seen: Array[Unit]) -> Array[String]:
 ## [enemies the tile has full cover against, half cover against, no cover against (and that can see it)].
 func _cover_counts(tile: Vector2i, seen: Array[Unit]) -> Array[int]:
 	var counts: Array[int] = [0, 0, 0]
+	var level := _level_of(null, tile) if _at_level >= 0 else 0
 	for e in seen:
-		if not _can_see(e.pos, tile, e.sight):
+		if not _can_see(e.pos, tile, e.sight, e.level, level):
 			continue
-		match battle.map.cover_against(tile, e.pos):
+		match battle.map.cover_against(tile, e.pos, level, e.level):
 			Cover.FULL:
 				counts[0] += 1
 			Cover.HALF:

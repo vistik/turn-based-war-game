@@ -79,3 +79,37 @@ func building(rect: Rect2i, doors: Array, windows: Array, skip: Array = [], styl
 	for w: Array in windows:
 		overrides.append([w[0], w[1], Cover.HALF, window])
 	enclose(rect, Cover.FULL, wall, overrides, mirrored, skip)
+
+
+## A building of two storeys or more (see building()), with stairs on `stairs_at` up to its floors and roof.
+func tall_building(rect: Rect2i, count: int, stairs_at: Vector2i, mirrored := true) -> void:
+	storeys(rect, count, mirrored)
+	stairs(stairs_at, mirrored)
+
+
+## Makes every indoor tile of the rect a building of that many storeys (two or more: a flat roof to stand on).
+func storeys(rect: Rect2i, count: int, mirrored := true) -> void:
+	for y in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			var p := Vector2i(x, y)
+			if map.in_bounds(p):
+				map.set_storeys(p, count)
+				if mirrored:
+					map.set_storeys(mirror(p), count)
+
+
+func stairs(p: Vector2i, mirrored := true) -> void:
+	map.set_stairs(p, true)
+	if mirrored:
+		map.set_stairs(mirror(p), true)
+
+
+## Raises the ground of the rect to `level` (never lowers it).
+func raise(rect: Rect2i, level: int, mirrored := true) -> void:
+	for y in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			var p := Vector2i(x, y)
+			if map.in_bounds(p) and map.get_elevation(p) < level:
+				map.set_elevation(p, level)
+				if mirrored:
+					map.set_elevation(mirror(p), level)

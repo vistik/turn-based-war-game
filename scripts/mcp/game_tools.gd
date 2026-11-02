@@ -31,7 +31,7 @@ const LEGEND := {
 	"smoke": "* smoke (blocks sight)",
 	"edges": "Each tile is two characters: the tile, then its east edge. Between tile rows, a line shows each tile's south edge. | or - wall/hedge (full cover, blocks sight), ! or : fence/low wall/window (half cover)",
 }
-const COMMAND_HELP := "Commands: {\"cmd\": \"move\", \"unit\": id, \"tile\": [x, y]} | {\"cmd\": \"shoot\", \"unit\": id, \"target\": enemy id} | " \
+const COMMAND_HELP := "Commands: {\"cmd\": \"move\", \"unit\": id, \"tile\": [x, y], \"level\": floor (optional, maps with height)} | {\"cmd\": \"shoot\", \"unit\": id, \"target\": enemy id} | " \
 		+ "{\"cmd\": \"overwatch\"|\"hunker\"|\"reload\"|\"set_up\"|\"rally\", \"unit\": id} | {\"cmd\": \"grenade\"|\"smoke\", \"unit\": id, \"tile\": [x, y]} | " \
 		+ "{\"cmd\": \"mortar\", \"unit\": id, \"tile\": [x, y], \"kind\": \"he\"|\"smoke\"|\"napalm\"} | {\"cmd\": \"tunnel\"|\"trap\"|\"detonate\", \"unit\": id, \"tile\": [x, y]} | {\"cmd\": \"medkit\", \"unit\": id, \"target\": ally id} | " \
 		+ "{\"cmd\": \"aimed_shot\"|\"suppress\", \"unit\": id, \"target\": enemy id} | {\"cmd\": \"stance\", \"unit\": id, \"stance\": 0 stand, 1 crouch, 2 prone} | " \
@@ -70,6 +70,11 @@ func player_team() -> int:
 
 
 ## The rules an agent keeps tripping over, said once for instructions() and the tool descriptions.
+const HEIGHT_RULES := "Height (maps with hills or tall buildings): ground rises in levels (one level = one storey). Climbing a level costs 1 extra movement, going down is free, and ground 2+ levels apart is a cliff. " \
+		+ "Buildings of 2-3 storeys have stairs (on stairs tiles) up to their upper floors and a flat roof; a move takes \"level\" (the floor to end on: 0 ground, a building's storey count is its roof; default the cheapest). " \
+		+ "Only one unit per tile, whatever its floor. Upstairs, cover is the building's walls and windows; a roof's edge (parapet) is half cover. " \
+		+ "Shooting down from a level or more above gives +10 aim (High ground) and ignores low (half) cover; from two levels above, full cover only counts as half. " \
+		+ "Standing higher sees 2 tiles further per level and sees over walls and hedges; ridges, floors and roofs block sight. Blasts only hurt those within a level of where they go off; shells land on roofs. "
 const RULES := "Rules in brief: 2 actions per turn; a move within the unit's mobility uses 1 action, a longer one (a dash) uses both, so a unit that dashes can't shoot that turn. " \
 		+ "Shooting, overwatch, hunkering, grenades, smoke and the mortar end the unit's turn. " \
 		+ "Cover is directional: half -20, full -40 to hit; no cover from the shooter's side means flanked (+40 crit). Range, hunkering and crouching behind cover lower the odds further. " \
@@ -93,10 +98,10 @@ func instructions() -> String:
 			+ "in cover from an enemy, or with a shot at a target) and preview (suggest_move gives the game's own AI opinion). " \
 			+ "Then give your orders with execute_command: send several at once as a commands list; it plays them in order and stops early if something unexpected happens " \
 			+ "(one of your units is shot at or hurt, or a new enemy comes into sight), so you can rethink. Set fast to skip the playback. " \
-			+ "End your turn with {\"cmd\": \"end_turn\"} (it also ends once no unit can act). " + RULES
+			+ "End your turn with {\"cmd\": \"end_turn\"} (it also ends once no unit can act). " + RULES + (HEIGHT_RULES if battle.map.has_height() else "")
 	return "You are helping a player of Normandy 1944, a turn-based WW2 squad tactics game (like XCOM) on a square grid. " \
 		+ "Call get_state first, then get_unit_options or preview to weigh moves, suggest_move for the game's own AI opinion, " \
-		+ "and propose_move to put your recommendation on the player's screen; the player decides whether to accept it. " + RULES
+		+ "and propose_move to put your recommendation on the player's screen; the player decides whether to accept it. " + RULES + (HEIGHT_RULES if battle.map.has_height() else "")
 
 
 func tool_list() -> Array:
@@ -108,6 +113,7 @@ func tool_list() -> Array:
 			"cmd": {"type": "string", "enum": ["move", "shoot", "aimed_shot", "suppress", "stance", "shoot_object", "clear_mine", "overwatch", "hunker", "reload", "set_up", "rally", "grenade", "smoke", "mortar", "medkit", "pivot", "tunnel", "trap", "detonate", "end_turn"]},
 			"unit": {"type": "integer"}, "target": {"type": "integer"}, "tile": tile_arg, "kind": {"type": "string", "enum": ["he", "smoke", "napalm"]},
 			"stance": {"type": "integer", "enum": [0, 1, 2], "description": "0 stand, 1 crouch, 2 prone"},
+			"level": {"type": "integer", "minimum": 0, "description": "move: the floor to end on (0 ground, a building's storey count its roof); default the cheapest"},
 		},
 		"required": ["cmd"],
 	}
@@ -136,7 +142,8 @@ func tool_list() -> Array:
 			"annotations": read_only},
 		{"name": "preview", "title": "Preview a position",
 			"description": "What a unit would face standing on a tile: path cost and the actions the move would use (not the actions left), cover on each side, cover and exposure against each enemy in sight, shots it could take from there, and the AI's danger estimate. Changes nothing.",
-			"inputSchema": {"type": "object", "properties": {"unit": unit_arg, "tile": tile_arg}, "required": ["unit", "tile"]},
+			"inputSchema": {"type": "object", "properties": {"unit": unit_arg, "tile": tile_arg,
+				"level": {"type": "integer", "minimum": 0, "description": "The floor of the tile (maps with height; default the cheapest to reach)"}}, "required": ["unit", "tile"]},
 			"annotations": read_only},
 		{"name": "suggest_move", "title": "Ask the game's AI",
 			"description": "The built-in tactical AI's suggestion for the player's next move (or for one unit), with its reasons. It only knows what the player's side can see. Set show to also put it on the player's screen.",
@@ -181,7 +188,7 @@ func call_tool(name: String, args: Dictionary) -> Dictionary:
 		"get_unit_options":
 			return unit_options(int(args.get("unit", -1)), bool(args.get("all_tiles", false)), args)
 		"preview":
-			return preview(int(args.get("unit", -1)), args.get("tile"))
+			return preview(int(args.get("unit", -1)), args.get("tile"), int(args.get("level", -1)))
 		"suggest_move":
 			return suggest(int(args.get("unit", -1)), bool(args.get("show", false)))
 		"propose_move":
@@ -255,7 +262,7 @@ func _threats(side: int) -> Array:
 			if u.vehicle:
 				entry["armour_facing_them"] = CombatRules.armor_side(u, e.pos)
 			else:
-				entry["your_cover"] = Cover.NAMES[battle.map.cover_against(u.pos, e.pos)].to_lower()
+				entry["your_cover"] = Cover.NAMES[battle.map.cover_against(u.pos, e.pos, u.level, e.level)].to_lower()
 			by.append(entry)
 		if not by.is_empty():
 			result.append({"unit": u.id, "name": u.name, "seen_by": by})
@@ -268,8 +275,9 @@ func _own_unit(u: Unit) -> Dictionary:
 		"actions": u.actions, "mobility": u.current_mobility(), "aim": u.aim, "sight": u.sight,
 		"weapon": {"name": u.weapon.name, "damage": [u.weapon.damage_min, u.weapon.damage_max], "ammo": u.ammo, "clip": u.weapon.clip_size,
 				"needs_setup": u.weapon.needs_setup, "anti_tank": u.weapon.anti_tank},
-		"suppression": u.suppression, "status": _status(u), "cover_here": _cover_sides(u.pos),
+		"suppression": u.suppression, "status": _status(u), "cover_here": _cover_sides(u.pos, u.level),
 	}
+	_add_height(data, u)
 	var kit := {}
 	for item: Array in [["grenades", u.grenades], ["smoke_grenades", u.smoke_grenades], ["medkits", u.medkits], ["mortar_he", u.mortar_rounds], ["mortar_smoke", u.mortar_smoke]]:
 		if item[1] > 0:
@@ -284,10 +292,20 @@ func _own_unit(u: Unit) -> Dictionary:
 ## What the screen shows of an enemy: no ammo, no kit.
 func _enemy_unit(e: Unit) -> Dictionary:
 	var data := {"id": e.id, "name": e.name, "role": e.role, "weapon": e.weapon.name, "pos": _tile(e.pos), "hp": e.hp, "max_hp": e.max_hp,
-			"suppression": e.suppression, "status": _status(e), "cover_here": _cover_sides(e.pos)}
+			"suppression": e.suppression, "status": _status(e), "cover_here": _cover_sides(e.pos, e.level)}
+	_add_height(data, e)
 	if e.vehicle:
 		data["facing"] = _tile(e.facing)
 	return data
+
+
+## On maps with height: the unit's floor ("level", 0 ground) and how high it stands ("height", in levels).
+func _add_height(data: Dictionary, u: Unit) -> void:
+	if battle.map.has_height():
+		data["level"] = u.level
+		data["height"] = battle.map.floor_height(u.pos, u.level)
+		if battle.map.is_roof(u.pos, u.level):
+			data["on_roof"] = true
 
 
 func _status(u: Unit) -> Array:
@@ -305,10 +323,10 @@ func _status(u: Unit) -> Array:
 
 
 ## Cover on each side of a tile: {"N": "full", ...}, only the sides that have some.
-func _cover_sides(p: Vector2i) -> Dictionary:
+func _cover_sides(p: Vector2i, level := 0) -> Dictionary:
 	var sides := {}
 	for i in 4:
-		var c := battle.map.cover_toward(p, TacticalMap.DIRS4[i])
+		var c := battle.map.cover_toward(p, TacticalMap.DIRS4[i], level)
 		if c != Cover.NONE:
 			sides[["N", "E", "S", "W"][i]] = Cover.NAMES[c].to_lower()
 	return sides
@@ -351,7 +369,29 @@ func _map_view(args: Dictionary, side: int, glyphs: Dictionary, remembered: Arra
 		rows.append(line.rstrip(" "))
 		if under.strip_edges() != "":
 			rows.append(under.rstrip(" "))
-	return {"origin": _tile(rect.position), "size": _tile(rect.size), "full_size": [map.width, map.height], "rows": rows, "legend": LEGEND}
+	var view := {"origin": _tile(rect.position), "size": _tile(rect.size), "full_size": [map.width, map.height], "rows": rows, "legend": LEGEND}
+	if map.has_height():
+		# Ground height, one digit per tile; then the tall buildings and stairs in the window.
+		var heights := PackedStringArray()
+		var tall := []
+		var stairs := []
+		for y in range(rect.position.y, rect.end.y):
+			var line := ""
+			for x in range(rect.position.x, rect.end.x):
+				var p := Vector2i(x, y)
+				line += str(map.get_elevation(p))
+				if map.get_storeys(p) > 1:
+					tall.append([x, y, map.get_storeys(p)])
+				if map.has_stairs(p):
+					stairs.append(_tile(p))
+			heights.append(line)
+		view["ground_height_rows"] = heights
+		if not tall.is_empty():
+			view["tall_building_tiles"] = tall
+		if not stairs.is_empty():
+			view["stairs"] = stairs
+		view["legend_height"] = "ground_height_rows: the ground's height in levels per tile, row by row over the same window. tall_building_tiles: [x, y, storeys] (a building of 2+ storeys has a roof to stand on, level = storeys). stairs: tiles with a staircase between all floors."
+	return view
 
 
 func _glyph(p: Vector2i, glyphs: Dictionary, last_seen: Dictionary) -> String:
@@ -418,6 +458,7 @@ func unit_options(id: int, all_tiles := false, filters := {}) -> Dictionary:
 		if tile == u.pos:
 			continue
 		var cost: float = reach[tile]["cost"]
+		var level: int = reach[tile]["level"]
 		var actions := battle.actions_for_cost(u, cost)
 		if actions == 1:
 			one_action += 1
@@ -426,28 +467,39 @@ func unit_options(id: int, all_tiles := false, filters := {}) -> Dictionary:
 		var objective: Variant = _objective_at(tile)
 		if objective_name != "" and (objective == null or str(objective).to_lower() != objective_name):
 			continue
-		if covered_from != null and LineOfSight.can_see(battle.map, covered_from.pos, tile, covered_from.sight) \
-				and battle.map.cover_against(tile, covered_from.pos) == Cover.NONE:
+		if covered_from != null and LineOfSight.can_see(battle.map, covered_from.pos, tile, covered_from.sight, true, covered_from.level, level) \
+				and battle.map.cover_against(tile, covered_from.pos, level, covered_from.level) == Cover.NONE:
 			continue
 		var shot_odds := 0
 		if shoot_target != null:
 			if actions > 1 or not _can_shoot_after_moving(u):
 				continue
-			var odds: Variant = _odds_from(u, tile, shoot_target)
+			var odds: Variant = _odds_from(u, tile, shoot_target, level)
 			if odds == null or odds["hit"] <= 0:
 				continue
 			shot_odds = odds["hit"]
-		var counts := _cover_counts(tile, seen)
+		var counts := _cover_counts(tile, seen, level)
 		var best := Cover.NONE
 		for d: Vector2i in TacticalMap.DIRS4:
-			best = maxi(best, battle.map.cover_toward(tile, d))
+			best = maxi(best, battle.map.cover_toward(tile, d, level))
 		var rank := counts[0] * 2.0 + counts[1] - counts[2] * 3.0 + best * 0.5 - cost * 0.05 - (actions - 1) * 0.5 + shot_odds * 0.05
-		spots.append({"tile": tile, "cost": snappedf(cost, 0.01), "actions": actions, "best_cover": Cover.NAMES[best].to_lower(),
-				"vs_enemies_in_sight": {"full": counts[0], "half": counts[1], "exposed": counts[2]}, "objective": objective, "_rank": rank})
+		var spot := {"tile": tile, "cost": snappedf(cost, 0.01), "actions": actions, "best_cover": Cover.NAMES[best].to_lower(),
+				"vs_enemies_in_sight": {"full": counts[0], "half": counts[1], "exposed": counts[2]}, "objective": objective, "_rank": rank, "_level": level}
+		if battle.map.has_height():
+			spot["level"] = level
+			if reach[tile].get("levels", {}).size() > 1:
+				# Other floors of the tile in reach (preview or move with "level" for them): {level: path cost}.
+				var floors := {}
+				for l: int in reach[tile]["levels"]:
+					floors[str(l)] = snappedf(reach[tile]["levels"][l], 0.01)
+				spot["floors"] = floors
+		spots.append(spot)
 	spots.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a["_rank"] > b["_rank"])
 	spots = spots.slice(0, limit)
 	for spot: Dictionary in spots:
 		spot.erase("_rank")
+		var spot_level: int = spot["_level"]
+		spot.erase("_level")
 		if spot["objective"] == null:
 			spot.erase("objective")
 		var tile: Vector2i = spot["tile"]
@@ -458,7 +510,7 @@ func unit_options(id: int, all_tiles := false, filters := {}) -> Dictionary:
 			for e in seen:
 				if shoot_target != null and e != shoot_target:
 					continue
-				var odds: Variant = _odds_from(u, tile, e)
+				var odds: Variant = _odds_from(u, tile, e, spot_level)
 				if odds != null:
 					shots.append({"target": e.id, "hit": odds["hit"], "crit": odds["crit"], "flanked": odds["flanked"]})
 			if not shots.is_empty():
@@ -508,7 +560,7 @@ func unit_options(id: int, all_tiles := false, filters := {}) -> Dictionary:
 	return {"result": result}
 
 
-func preview(id: int, tile_value: Variant) -> Dictionary:
+func preview(id: int, tile_value: Variant, level := -1) -> Dictionary:
 	var side := player_team()
 	var u := battle.get_unit(id)
 	if u == null or u.team != side or not u.is_alive():
@@ -518,26 +570,38 @@ func preview(id: int, tile_value: Variant) -> Dictionary:
 		return {"error": "tile must be [x, y] inside the %dx%d map" % [battle.map.width, battle.map.height]}
 	var map := battle.map
 	var reach := battle.reachable(u)
+	if level < 0:
+		level = u.level if tile == u.pos else (reach[tile]["level"] if reach.has(tile) else 0)
+	if level > 0 and not map.can_stand(tile, level):
+		return {"error": "Nobody can stand on level %d there (its top level is %d)" % [level, map.top_level(tile)]}
 	var result := {"unit": u.id, "tile": _tile(tile), "terrain": TacticalMap.TERRAIN_NAMES[map.get_terrain(tile)],
-			"in_sight_now": battle.team_visible_tiles(side).has(tile), "cover": _cover_sides(tile)}
+			"in_sight_now": battle.team_visible_tiles(side).has(tile), "cover": _cover_sides(tile, level)}
+	if map.has_height():
+		result["level"] = level
+		result["height"] = map.floor_height(tile, level)
+		if map.is_roof(tile, level):
+			result["on_roof"] = true
 	if map.get_object(tile) != Cover.NONE:
 		result["blocked_by"] = map.get_object_kind(tile)
-	if tile == u.pos:
+	if tile == u.pos and level == u.level:
 		result["reachable"] = true
 		result["cost"] = 0.0
-	elif reach.has(tile) and battle.can_move(u, tile) == "":
+	elif reach.has(tile) and battle.can_move(u, tile, level) == "":
+		var cost := Pathfinder.cost_to(reach, tile, level)
 		result["reachable"] = true
-		result["cost"] = snappedf(reach[tile]["cost"], 0.01)
-		result["actions"] = battle.actions_for_cost(u, reach[tile]["cost"])
+		result["cost"] = snappedf(cost, 0.01)
+		result["actions"] = battle.actions_for_cost(u, cost)
 		var path := []
-		for p in Pathfinder.path_to(reach, tile):
-			path.append(_tile(p))
+		var path_levels := Pathfinder.path_levels(reach, tile, level)
+		var steps := Pathfinder.path_to(reach, tile, level)
+		for i in steps.size():
+			path.append(_tile(steps[i]) + ([path_levels[i]] if map.has_height() else []))
 		result["path"] = path
 		if u.vehicle:
 			result["facing_after"] = _tile(reach[tile]["facing"])
 	else:
 		result["reachable"] = false
-		result["why_not"] = battle.can_move(u, tile) if battle.can_act(u) == "" else battle.can_act(u)
+		result["why_not"] = battle.can_move(u, tile, level) if battle.can_act(u) == "" else battle.can_act(u)
 	var objective: Variant = _objective_at(tile)
 	if objective != null:
 		result["objective"] = objective
@@ -545,29 +609,34 @@ func preview(id: int, tile_value: Variant) -> Dictionary:
 	var advisor := advisor_for(side)
 	var seen := _seen_enemies(side)
 	var saved_pos := u.pos
+	var saved_level := u.level
 	var saved_facing := u.facing
 	if result.get("facing_after") != null:
 		u.facing = reach[tile]["facing"]
 	u.pos = tile
+	u.level = level
 	var against := []
 	for e in seen:
 		var entry := {"id": e.id, "name": e.name, "role": e.role, "distance": snappedf(Vector2(tile).distance_to(Vector2(e.pos)), 0.1)}
-		var they_see := LineOfSight.can_see(map, e.pos, tile, e.sight)
+		var they_see := battle.can_see(e, u)
 		entry["can_see_you"] = they_see
 		if not u.vehicle:
-			var cover := map.cover_against(tile, e.pos)
+			var cover := map.cover_against(tile, e.pos, level, e.level)
 			entry["your_cover"] = Cover.NAMES[cover].to_lower()
 			entry["flanked"] = they_see and cover == Cover.NONE
 		else:
 			entry["armour_facing_them"] = CombatRules.armor_side(u, e.pos)
 		if they_see:
 			entry["their_hit_chance"] = battle.shot_odds(e, u)["hit"]
-		if LineOfSight.can_see(map, tile, e.pos, u.sight):
+		if battle.can_see(u, e):
 			var odds := battle.shot_odds(u, e)
 			entry["your_shot"] = {"hit": odds["hit"], "crit": odds["crit"], "flanked": odds["flanked"]}
 		against.append(entry)
+	advisor._at_level = level
 	var danger: float = advisor._danger(u, tile, seen)[0]
+	advisor._at_level = -1
 	u.pos = saved_pos
+	u.level = saved_level
 	u.facing = saved_facing
 	result["enemies_in_sight"] = against
 	result["danger"] = snappedf(danger / 10.0, 0.01)
@@ -882,6 +951,8 @@ func command_from_json(value: Variant) -> Dictionary:
 		command["kind"] = str(value["kind"])
 	if value.has("stance"):
 		command["stance"] = int(value["stance"])
+	if value.has("level"):
+		command["level"] = int(value["level"])
 	return command
 
 
@@ -914,7 +985,7 @@ func validate(command: Dictionary) -> String:
 		return "%s needs a tile" % cmd
 	match cmd:
 		"move":
-			return battle.can_move(u, tile)
+			return battle.can_move(u, tile, int(command.get("level", -1)))
 		"shoot", "aimed_shot", "suppress":
 			if target == null or target.team == side or not target.is_alive() or not battle.team_sees(side, target):
 				return "Unknown target: not an enemy in sight"
@@ -968,6 +1039,9 @@ func describe(command: Dictionary) -> String:
 		text += " " + target.name
 	if command.get("tile") is Vector2i:
 		text += " (%d, %d)" % [command["tile"].x, command["tile"].y]
+		if cmd == "move" and int(command.get("level", 0)) > 0:
+			var level: int = command["level"]
+			text += " roof" if battle.map.is_roof(command["tile"], level) else " floor %d" % level
 	if cmd == "stance" and command.get("stance", -1) in [0, 1, 2]:
 		text = "%s: %s" % [u.name, ["stand up", "crouch", "go prone"][command["stance"]]]
 	return text
@@ -1009,24 +1083,26 @@ func _can_shoot_after_moving(u: Unit) -> bool:
 
 ## The unit's odds against an enemy if it stood on `tile` ({hit, crit, flanked}), or null without a line of sight.
 ## Puts the unit back afterwards.
-func _odds_from(u: Unit, tile: Vector2i, e: Unit) -> Variant:
-	var saved := u.pos
+func _odds_from(u: Unit, tile: Vector2i, e: Unit, level := 0) -> Variant:
+	var saved := [u.pos, u.level]
 	u.pos = tile
+	u.level = level
 	var result: Variant = null
 	if battle.can_see(u, e):
 		var odds := battle.shot_odds(u, e)
 		result = {"hit": odds["hit"], "crit": odds["crit"], "flanked": odds["flanked"]}
-	u.pos = saved
+	u.pos = saved[0]
+	u.level = saved[1]
 	return result
 
 
 ## [full, half, exposed]: enemies in sight that the tile has full cover from, half cover from, or none (and that can see it).
-func _cover_counts(tile: Vector2i, seen: Array[Unit]) -> Array[int]:
+func _cover_counts(tile: Vector2i, seen: Array[Unit], level := 0) -> Array[int]:
 	var counts: Array[int] = [0, 0, 0]
 	for e in seen:
-		if not LineOfSight.can_see(battle.map, e.pos, tile, e.sight):
+		if not LineOfSight.can_see(battle.map, e.pos, tile, e.sight, true, e.level, level):
 			continue
-		counts[2 - battle.map.cover_against(tile, e.pos)] += 1
+		counts[2 - battle.map.cover_against(tile, e.pos, level, e.level)] += 1
 	return counts
 
 

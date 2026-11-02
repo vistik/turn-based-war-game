@@ -19,6 +19,9 @@ extends RefCounted
 ##     "edges": [[0, 1, "E", "hedge"], [3, 0, "S", "wall"]], ([x, y, side N/E/S/W of that tile, kind])
 ##     "mines": [[2, 0], [3, 1, "punji"]]                     (buried mines or punji traps; optional)
 ##     "tunnels": [[5, 2, "Viet Cong"]]                       (tunnel entrances and whose they are; optional)
+##     "elevation": ["0011", "0012", "0001"]                  (ground height in levels, one digit per tile; optional)
+##     "storeys": [[1, 1, 2]]                                 ([x, y, storeys] for building tiles taller than one; optional)
+##     "stairs": [[1, 1]]                                     (staircases up through a building to its roof; optional)
 ##   },
 ##   "objectives": [{"name": "Crossroads", "center": [2, 1.5], "radius": 2.5}],
 ##   "units": [{"team": "Allies", "role": "Officer", "pos": [0, 1], "facing": "E", "name": "Lt. Adams", "rank": 1}],
@@ -161,10 +164,21 @@ static func copy_map(source: TacticalMap) -> TacticalMap:
 				copy.set_mine(p, true, source.get_mine_kind(p))
 			if source.tunnel_owner(p) != -1:
 				copy.set_tunnel(p, source.tunnel_owner(p))
+			_copy_height(source, p, copy, p)
 	for key in _sorted_edges(source):
 		var pair := TacticalMap.edge_tiles(key)
 		copy.set_edge(pair[0], pair[1], source.get_edges()[key], source.edge_kind(key))
 	return copy
+
+
+## Copies tile p's elevation, storeys and stairs onto tile q of another (or the same) map.
+static func _copy_height(source: TacticalMap, p: Vector2i, target: TacticalMap, q: Vector2i) -> void:
+	if source.get_elevation(p) != target.get_elevation(q):
+		target.set_elevation(q, source.get_elevation(p))
+	if source.get_tall_buildings().has(p) or target.get_tall_buildings().has(q):
+		target.set_storeys(q, source.get_tall_buildings().get(p, 1))
+	if source.has_stairs(p) != target.has_stairs(q):
+		target.set_stairs(q, source.has_stairs(p))
 
 
 static func _sorted_edges(source: TacticalMap) -> Array[Vector3i]:
@@ -201,7 +215,8 @@ func is_symmetric() -> bool:
 			var p := Vector2i(x, y)
 			var m := mirror_tile(p)
 			if map.get_terrain(p) != map.get_terrain(m) or map.get_object(p) != map.get_object(m) or map.get_object_kind(p) != map.get_object_kind(m) \
-					or map.has_mine(p) != map.has_mine(m):
+					or map.has_mine(p) != map.has_mine(m) or map.get_elevation(p) != map.get_elevation(m) \
+					or map.get_storeys(p) != map.get_storeys(m) or map.has_stairs(p) != map.has_stairs(m):
 				return false
 	for key: Vector3i in map.get_edges():
 		var pair := TacticalMap.edge_tiles(key)
@@ -223,6 +238,7 @@ func mirror_west_to_east() -> void:
 				map.set_terrain(m, map.get_terrain(p))
 				map.set_object(m, map.get_object(p), map.get_object_kind(p) if map.get_object(p) != Cover.NONE else "")
 				map.set_mine(m, map.has_mine(p), map.get_mine_kind(p))
+				_copy_height(map, p, map, m)
 	for key: Vector3i in map.get_edges().keys():
 		if _edge_half(key) > 0:
 			var pair := TacticalMap.edge_tiles(key)
@@ -281,6 +297,9 @@ func swapped() -> Scenario:
 			s.map.set_terrain(m, map.get_terrain(p))
 			if map.get_object(p) != Cover.NONE:
 				s.map.set_object(m, map.get_object(p), map.get_object_kind(p))
+	for y in map.height:
+		for x in map.width:
+			_copy_height(map, Vector2i(x, y), s.map, mirror_tile(Vector2i(x, y)))
 	for key in _sorted_edges(map):
 		var pair := TacticalMap.edge_tiles(key)
 		s.map.set_edge(mirror_tile(pair[0]), mirror_tile(pair[1]), map.get_edges()[key], map.edge_kind(key))
@@ -396,6 +415,26 @@ func to_data() -> Dictionary:
 				tunnels.append([x, y, theatre().team_name(map.tunnel_owner(Vector2i(x, y)))])
 	if not tunnels.is_empty():
 		map_data["tunnels"] = tunnels
+	if map.has_height():
+		var heights := []
+		var storeys := []
+		var stairs := []
+		for y in map.height:
+			var row := ""
+			for x in map.width:
+				var p := Vector2i(x, y)
+				row += str(map.get_elevation(p))
+				if map.get_storeys(p) > 1:
+					storeys.append([x, y, map.get_storeys(p)])
+				if map.has_stairs(p):
+					stairs.append([x, y])
+			heights.append(row)
+		if heights.any(func(row: String) -> bool: return row.count("0") != row.length()):
+			map_data["elevation"] = heights
+		if not storeys.is_empty():
+			map_data["storeys"] = storeys
+		if not stairs.is_empty():
+			map_data["stairs"] = stairs
 	var data := {
 		"format": FORMAT, "version": VERSION,
 		"title": title, "briefing": briefing,
@@ -478,6 +517,20 @@ static func from_data(data: Variant) -> Scenario:
 		var p := Vector2i(int(entry[0]), int(entry[1]))
 		if s.map.in_bounds(p) and entry.size() > 2:
 			s.map.set_tunnel(p, s._team(entry[2]))
+	var heights: Array = m.get("elevation", [])
+	for y in mini(heights.size(), height):
+		var row := str(heights[y])
+		for x in mini(row.length(), width):
+			if row[x].is_valid_int() and int(row[x]) > 0:
+				s.map.set_elevation(Vector2i(x, y), int(row[x]))
+	for entry in m.get("storeys", []):
+		var p := Vector2i(int(entry[0]), int(entry[1]))
+		if s.map.in_bounds(p) and entry.size() > 2:
+			s.map.set_storeys(p, int(entry[2]))
+	for entry in m.get("stairs", []):
+		var p := Vector2i(int(entry[0]), int(entry[1]))
+		if s.map.in_bounds(p):
+			s.map.set_stairs(p, true)
 	for o in data.get("objectives", []):
 		s.objectives.append({"name": str(o.get("name", "Objective")), "center": _vec2(o.get("center", [0, 0])), "radius": float(o.get("radius", 2.5))})
 	for u in data.get("units", []):

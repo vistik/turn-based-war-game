@@ -11,6 +11,9 @@ const TOP_DOWN_TILE := 40.0
 var isometric := true
 ## Quarter turns clockwise.
 var rotation := 0
+## Extra height (in height units) added to everything projected while it is set: painters lift what they draw
+## onto raised ground, upper floors and roofs, and put it back to 0 when done.
+var lift := 0.0
 var size: Vector2
 
 
@@ -43,7 +46,7 @@ func unrotate_grid(r: Vector2) -> Vector2:
 ## Projects an already rotated grid point. Height only shows in the isometric view.
 func project_rotated(r: Vector2, height := 0.0) -> Vector2:
 	if isometric:
-		return Vector2((r.x - r.y) * TILE_W * 0.5, (r.x + r.y) * TILE_H * 0.5 - height * HEIGHT_PX)
+		return Vector2((r.x - r.y) * TILE_W * 0.5, (r.x + r.y) * TILE_H * 0.5 - (height + lift) * HEIGHT_PX)
 	return r * TOP_DOWN_TILE
 
 

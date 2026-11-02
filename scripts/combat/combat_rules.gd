@@ -142,6 +142,11 @@ const SUPPRESSIVE_FIRE_FACTOR := 1.5
 const SUPPRESSIVE_FIRE_RADIUS := 1.5
 const SUPPRESSIVE_FIRE_AMMO := 2
 
+# --- Height ---
+## Aim bonus for shooting down at a target a level or more below (see TacticalMap.cover_against for what
+## height does to cover).
+const HIGH_GROUND_AIM := 10
+
 # --- Tanks ---
 ## Damage each armour side stops from anti-tank hits, unless the vehicle's role says otherwise (Unit.hull_armor).
 const VEHICLE_ARMOR := {"front": 3, "side": 1, "rear": 0}
@@ -236,7 +241,11 @@ static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction :=
 		modifiers.append(["%s, steady aim" % Unit.STANCE_NAMES[shooter.stance], steady])
 		hit += steady
 
-	var cover := Cover.NONE if reaction else map.cover_against(target.pos, shooter.pos)
+	if map.has_height() and map.floor_height(shooter.pos, shooter.level) - map.floor_height(target.pos, target.level) >= 1.0:
+		modifiers.append(["High ground", HIGH_GROUND_AIM])
+		hit += HIGH_GROUND_AIM
+
+	var cover := Cover.NONE if reaction else map.cover_against(target.pos, shooter.pos, target.level, shooter.level)
 	if cover != Cover.NONE:
 		var defense: int = COVER_DEFENSE[cover]
 		modifiers.append(["%s cover" % Cover.NAMES[cover], -defense])
@@ -254,7 +263,7 @@ static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction :=
 	if target.vehicle:
 		modifiers.append(["Large target", LARGE_TARGET_BONUS])
 		hit += LARGE_TARGET_BONUS
-	elif not map.concealment(target.pos).is_empty() and distance > map.concealment(target.pos)["range"]:
+	elif target.level == 0 and not map.concealment(target.pos).is_empty() and distance > map.concealment(target.pos)["range"]:
 		var hidden := map.concealment(target.pos)
 		modifiers.append([hidden["label"], -hidden["defense"]])
 		hit -= hidden["defense"]
@@ -290,7 +299,7 @@ static func _stance_defense(map: TacticalMap, target: Unit, cover: int, distance
 		return ["Crouched", -CROUCH_DEFENSE]
 	if distance <= PRONE_CLOSE_RANGE:
 		return ["Prone, close range", PRONE_CLOSE_PENALTY]
-	if not reaction and cover == Cover.NONE and map.has_cover(target.pos):
+	if not reaction and cover == Cover.NONE and map.has_cover(target.pos, target.level):
 		return ["Prone, flanked", PRONE_FLANKED_PENALTY]
 	if cover == Cover.HALF:
 		return ["Prone behind low cover", -(PRONE_DEFENSE + PRONE_LOW_COVER_DEFENSE)]

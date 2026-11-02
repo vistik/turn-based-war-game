@@ -26,7 +26,7 @@ const STANCE_SIGHT := [0.0, 1.0, 2.0]
 const MIN_CRAWL := 1.0
 ## Fields written to save files only when they differ from these defaults (newer abilities, so that units
 ## without them save, and checksum, as they always have).
-const OPTIONAL_FIELDS := {"traps": 0}
+const OPTIONAL_FIELDS := {"traps": 0, "level": 0}
 ## Fields written to save files.
 const SAVED_FIELDS := [
 	"id", "name", "role", "team", "pos", "max_hp", "hp", "armor", "aim", "defense", "mobility", "sight", "ammo",
@@ -40,6 +40,9 @@ var name: String
 var role: String
 var team: int
 var pos: Vector2i
+## The floor the unit stands on at pos: 0 on the ground (or a ground floor), higher upstairs or on a roof.
+## Only one unit stands on a tile, whatever its floor.
+var level := 0
 var max_hp: int
 var hp: int
 var armor := 0

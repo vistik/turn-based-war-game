@@ -81,6 +81,20 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 - Aimed shots and suppressive fire. Grenades scatter, and missed rockets, tank shells and MG bursts can hit
   someone else, friends included. The odds panel tells you who is at risk.
 - Objectives (church, crossroads, farm) score victory points every round. Reinforcement waves arrive mid-battle.
+- **Height**:
+  - Ground rises in levels on rolling hills, ridges and knolls. Climbing a level costs one more movement, going
+    down is free, and ground two levels apart is a cliff.
+  - Buildings of two or three storeys (the church's bell tower, village houses and farmhouses, Iraqi town
+    houses, compound towers) have stairs up through every floor to a flat roof. Upstairs, cover is the walls
+    and windows; the roof's parapet is half cover. Only one soldier stands on a tile, whatever the floor.
+  - Shooting down from a level or more above gives the high ground (+10 aim) and ignores low cover; from two
+    levels up, full cover only counts as half.
+  - Higher up you see 2 tiles further per level and over walls and hedges. Ridges, floors and roofs block
+    sight, and upstairs a doorway below is wall.
+  - Blasts only hurt those within a level of where they go off. Shells and air strikes land on the roof;
+    grenades go for the floor the enemy is on.
+  - Floors and roofs are drawn stacked. Page Up / Page Down shows fewer floors (cutting the upper ones away)
+    and clicks then go to the highest floor shown.
 - Terrain hazards:
   - **Fuel drums and oil tanks:** they explode when shot, caught in a blast or run over by a tank, set off
     others nearby, and leave the ground burning. Nobody can enter fire, and anyone in it is burnt at the
@@ -127,8 +141,9 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
     Cloudflare) what address it sees.
   - After every order both games check they hold the identical battle. Online games save at each agreed turn
     and can be continued later with the same opponent.
-- **Map and scenario editor**: paint terrain, cover and walls, place units, objectives and reinforcement
-  spawns, mirror one half onto the other, and save scenarios as JSON. Play or test them with the AI straight away.
+- **Map and scenario editor**: paint terrain, cover and walls, ground height, storeys and stairs (the Height
+  tool), place units, objectives and reinforcement spawns, mirror one half onto the other, and save scenarios
+  as JSON. Play or test them with the AI straight away.
 
 **AI**
 - A utility AI that plays fair: it only knows what its side can see. It weighs cover facing the enemy,
@@ -171,13 +186,14 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 | WASD, arrows, middle drag | Pan |
 | Wheel / F | Zoom / focus the selected soldier |
 | Q / E / V | Rotate the view / switch isometric and top-down |
+| Page Up / Page Down | Show more / fewer floors of tall buildings (clicks go to the highest floor shown) |
 | + / - | Playback speed |
 | M | Music on / off |
 
 While watching a replay: Space play / pause, N next action, Enter next turn, R restart, 1 / 2 / 3 the Allies'
 view, Germany's view, the whole map. Camera keys and + / - work as in battle.
 
-The map editor has its own keys, listed in its panel: 1–7 pick a tool, R turns a unit, Ctrl+Z undoes and
+The map editor has its own keys, listed in its panel: 1–8 pick a tool, R turns a unit, Ctrl+Z undoes and
 Ctrl+S saves.
 
 ## Running
@@ -219,6 +235,7 @@ Godot --headless --path . -s tests/run_tests.gd         # engine, AI, saves, rep
 Godot --headless --path . -s tests/advisor_tests.gd     # move suggestions and the MCP tools
 Godot --headless --path . -s tests/terrain_tests.gd     # fuel drums, oil tanks, fire, mines, wheat and wire
 Godot --headless --path . -s tests/theatre_tests.gd     # theatres: Normandy as data, Vietnam and Afghanistan & Iraq rules and maps
+Godot --headless --path . -s tests/height_tests.gd      # hills, storeys, stairs, roofs: moving, sight, cover, blasts, maps, AI
 Godot --headless --path . -s tests/agent_play.gd        # an agent plays a whole battle over the agent link (HTTP)
 Godot --path . -s tools/soldier_preview.gd -- out.png 3 detail   # soldier art sheet (needs a window; add "german", "lying", "vietnam", "modern")
 GODOT=Godot sh tests/net_resume.sh 26000 44             # two copies online: save, quit, resume, desync checks

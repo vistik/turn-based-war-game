@@ -4,7 +4,8 @@ extends RefCounted
 ##
 ## A main road crosses the map with a village at the crossroads; a church to the north and a farm to the
 ## south sit on the centre line, each an objective, joined by a lane. The rest is bocage: hedged fields of
-## grass, wheat, orchard or rough ground, with craters and scattered cover. Generated on the west half
+## grass, wheat, orchard or rough ground, with craters and scattered cover, over rolling hills. The church
+## has a bell tower to climb and the village houses and farmhouse an upper floor. Generated on the west half
 ## and mirrored. Maps where a spawn can't reach every objective are thrown away and rerolled.
 
 const ATTEMPTS := 10
@@ -68,6 +69,10 @@ static func _generate(seed: int, size: Vector2i) -> Dictionary:
 			[[Vector2i(mid - 5, church + 2), MapBuilder.W], [Vector2i(mid - 5, church + 4), MapBuilder.W], [Vector2i(mid - 3, church), MapBuilder.N]], [MapBuilder.E])
 	for p in [Vector2i(mid - 4, church + 2), Vector2i(mid - 3, church + 2), Vector2i(mid - 4, church + 4), Vector2i(mid - 3, church + 4)]:
 		b.object(p, Cover.HALF, "pew")
+	# The bell tower: three storeys over the church's north-west corner, with openings on every floor.
+	b.tall_building(Rect2i(mid - 5, church, 2, 2), 3, Vector2i(mid - 5, church))
+	b.side(Vector2i(mid - 4, church), MapBuilder.N, Cover.HALF, "window")
+	b.side(Vector2i(mid - 5, church + 1), MapBuilder.W, Cover.HALF, "window")
 	b.terrain(Rect2i(mid - 1, church + 7, 2, road - church - 7), TacticalMap.Terrain.ROAD, false)
 	_reserve(reserved, Rect2i(mid - 6, church, 6, 7))
 
@@ -77,6 +82,7 @@ static func _generate(seed: int, size: Vector2i) -> Dictionary:
 			[[Vector2i(mid - 1, farm), MapBuilder.N, Cover.NONE, ""], [Vector2i(mid - 6, farm + 2), MapBuilder.W, Cover.NONE, ""]], true, [MapBuilder.E])
 	b.building(Rect2i(mid - 5, farm + 6, 5, 5), [[Vector2i(mid - 1, farm + 6), MapBuilder.N]],
 			[[Vector2i(mid - 5, farm + 8), MapBuilder.W], [Vector2i(mid - 3, farm + 10), MapBuilder.S]], [MapBuilder.E])
+	b.tall_building(Rect2i(mid - 5, farm + 6, 5, 5), 2, Vector2i(mid - 5, farm + 10))
 	for p in [Vector2i(mid - 5, farm + 1), Vector2i(mid - 4, farm + 4), Vector2i(mid - 2, farm + 2)]:
 		if rng.randf() < 0.8:
 			b.object(p, Cover.HALF, "hay")
@@ -88,6 +94,8 @@ static func _generate(seed: int, size: Vector2i) -> Dictionary:
 			[[Vector2i(mid - 10, road - 6), MapBuilder.N], [Vector2i(mid - 11, road - 4), MapBuilder.W]])
 	b.building(Rect2i(mid - 11, road + 3, 5, 4), [[Vector2i(mid - 9, road + 3), MapBuilder.N]],
 			[[Vector2i(mid - 10, road + 6), MapBuilder.S], [Vector2i(mid - 7, road + 5), MapBuilder.E]])
+	b.tall_building(Rect2i(mid - 11, road - 6, 5, 4), 2, Vector2i(mid - 11, road - 6))
+	b.tall_building(Rect2i(mid - 11, road + 3, 5, 4), 2, Vector2i(mid - 11, road + 6))
 	_reserve(reserved, Rect2i(mid - 11, road - 6, 5, 4))
 	_reserve(reserved, Rect2i(mid - 11, road + 3, 5, 4))
 	b.object(Vector2i(mid - 3, road - 1), Cover.HALF, "sandbags")
@@ -116,8 +124,12 @@ static func _generate(seed: int, size: Vector2i) -> Dictionary:
 			b.enclose(yard, Cover.HALF, "stone", [[Vector2i(yard.position.x + 3, yard.end.y - 1), MapBuilder.S, Cover.NONE, ""],
 					[Vector2i(yard.position.x, yard.position.y + 2), MapBuilder.W, Cover.NONE, ""]], true, [MapBuilder.N])
 			b.object(Vector2i(yard.position.x + 1, yard.position.y + 3), Cover.HALF, "hay")
+			if rng.randf() < 0.5:
+				b.tall_building(house, 2, house.position + Vector2i(house.size.x - 1, 0))
 			_reserve(reserved, plot.grow(1))
 			break
+	# Hills roll under the fields, never under roads, buildings, the starts or the objectives.
+	var flat := reserved.duplicate()
 
 	# Bocage: hedged fields packed into the open ground. Fields may share a hedgerow with each other,
 	# but keep a tile clear of roads and buildings.
@@ -163,6 +175,8 @@ static func _generate(seed: int, size: Vector2i) -> Dictionary:
 					and b.map.get_terrain(p) != TacticalMap.Terrain.ROAD:
 				b.terrain(Rect2i(p, Vector2i.ONE), TacticalMap.Terrain.WIRE)
 				reserved[p] = true
+
+	HeightGenerator.raise_hills(b, rng, flat, maxi(1, int(rng.randi_range(2, 4) * area_scale)), 3 if w >= 56 else 2)
 
 	var spawns: Array[Vector2i] = []
 	var center := road + 1

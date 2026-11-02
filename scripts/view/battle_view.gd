@@ -18,6 +18,8 @@ const TOP_BAR_HEIGHT := 50.0
 ## Controls listed by the "?" button in the top bar.
 const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nTab next unit   Enter end turn\n1-0, T, C, Z, X, B, G, U, J, K: actions (see buttons)\nH: suggest a move (Shift+H: this soldier)\nWASD / arrows / middle drag: pan\nWheel: cursor height in tall buildings (zoom on flat maps)\nCtrl/Cmd + wheel or pinch: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\nPage Up / Down or wheel: cursor up / down a floor\n+ / -: playback speed   M: music on / off"
 const NEUTRAL_COLOR := Color("e8e2cf")
+## The selected unit's ring and the chevron over its head.
+const SELECTION_COLOR := Color("ffd34d")
 ## The mortar button's tag for each kind of round.
 const KIND_TAGS := {"he": "HE", "smoke": "SMK", "napalm": "NPM"}
 const MOVE_COLOR := Color("4aa3ff")
@@ -3057,8 +3059,8 @@ func _paint_unit_at_lift(c: CanvasItem, u: Unit) -> void:
 		c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, g + TerrainPainter.LIGHT * 0.3, 0.55, false), Color(0, 0, 0, 0.3))
 		if pose["death"] == 0.0:
 			c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.62), Color(_team_color(u.team), 0.55), 2.0)
-		if u == selected:
-			c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.65), Color.WHITE, 2.5)
+		if u == selected and pose["death"] == 0.0:
+			_draw_selection_ground(c, g, 0.66)
 		if mode == Mode.SHOOT and _target_odds.has(u.id):
 			c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.68), Color("ff4040"), 2.5)
 		VehiclePainter.draw(c, _proj, g, u, pose)
@@ -3077,11 +3079,33 @@ func _paint_unit_at_lift(c: CanvasItem, u: Unit) -> void:
 		# A ring in the side's colour under every soldier, so the sides read apart at a glance.
 		c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.34), Color(_team_color(u.team), 0.6), 2.0)
 		if u == selected:
-			c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.42), Color.WHITE, 2.5)
+			_draw_selection_ground(c, g, 0.42)
 		if mode == Mode.SHOOT and _target_odds.has(u.id):
 			var hovered := battle.map.in_bounds(hover) and battle.unit_at(hover) == u
 			c.draw_polyline(TerrainPainter.ground_circle(_proj, g, 0.45), Color("ff4040") if hovered else Color("ff8080"), 3.0 if hovered else 1.5)
 	SoldierPainter.draw(c, _proj, g, u, pose)
+
+
+## Under the selected unit: a soft gold glow on the ground and a thick ring that slowly pulses outwards.
+func _draw_selection_ground(c: CanvasItem, g: Vector2, radius: float) -> void:
+	var pulse := 0.5 + 0.5 * sin(_time * 4.0)
+	c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, g, radius, false), Color(SELECTION_COLOR, 0.22))
+	c.draw_polyline(TerrainPainter.ground_circle(_proj, g, radius), Color(0, 0, 0, 0.55), 5.0)
+	c.draw_polyline(TerrainPainter.ground_circle(_proj, g, radius), SELECTION_COLOR, 3.0)
+	c.draw_polyline(TerrainPainter.ground_circle(_proj, g, radius + 0.04 + 0.1 * pulse), Color(SELECTION_COLOR, 0.6 * (1.0 - pulse)), 2.0)
+
+
+## Over the selected unit's health bar: a bobbing gold chevron pointing down at it, readable from across the map.
+func _draw_selection_marker(c: CanvasItem, above: Vector2) -> void:
+	var tip := above + Vector2(0, -3.0 * (0.5 + 0.5 * sin(_time * 4.0)))
+	var w := 9.0
+	var h := 11.0
+	var arrow := PackedVector2Array([tip, tip + Vector2(-w, -h), tip + Vector2(-w * 0.35, -h), tip + Vector2(-w * 0.35, -h * 1.8), \
+			tip + Vector2(w * 0.35, -h * 1.8), tip + Vector2(w * 0.35, -h), tip + Vector2(w, -h)])
+	c.draw_colored_polygon(arrow, SELECTION_COLOR)
+	var outline := arrow.duplicate()
+	outline.append(arrow[0])
+	c.draw_polyline(outline, Color(0, 0, 0, 0.8), 1.5)
 
 
 ## The mission on the ground: the extraction or exit zone, demolition targets (pulsing when armed), and a
@@ -3134,6 +3158,8 @@ func _draw_markers() -> void:
 		var top := _unit_point(u, 1.1 if u.vehicle else 1.15) + Vector2(0, -14)
 		if not view.has_point(top):
 			continue
+		if u == selected:
+			_draw_selection_marker(self, top + Vector2(0, -4))
 		if not _knows(u):
 			# An enemy: which side and what it is, nothing about its health or state.
 			draw_rect(Rect2(top + Vector2(-14, 8), Vector2(28, 2)), _team_color(u.team))

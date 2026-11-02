@@ -83,6 +83,11 @@ static func draw_icon(c: CanvasItem, at: Vector2, role: String, s: float) -> voi
 			c.draw_line(p.call(-0.05, 0.12), p.call(0.2, 0.12), BADGE, maxf(1.0, w * 0.6))
 			c.draw_line(p.call(0.2, -0.15), p.call(0.75, -1.0), INK, maxf(1.0, w * 0.6))
 			c.draw_circle(p.call(0.75, -1.0), s * 0.1, INK)
+		"VIP":
+			# A briefcase: the one the battle is about.
+			c.draw_rect(Rect2(p.call(-0.9, -0.35), Vector2(1.8, 1.15) * s), Color("ffd34d"))
+			c.draw_polyline(PackedVector2Array([p.call(-0.35, -0.35), p.call(-0.35, -0.7), p.call(0.35, -0.7), p.call(0.35, -0.35)]), Color("ffd34d"), w)
+			c.draw_line(p.call(-0.9, 0.1), p.call(0.9, 0.1), BADGE, maxf(1.0, w * 0.5))
 		"Sapper":
 			# A satchel charge: a strapped bundle with a burning fuse.
 			c.draw_rect(Rect2(p.call(-0.85, -0.25), Vector2(1.3, 0.95) * s), INK)

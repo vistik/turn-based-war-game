@@ -26,7 +26,7 @@ const STANCE_SIGHT := [0.0, 1.0, 2.0]
 const MIN_CRAWL := 1.0
 ## Fields written to save files only when they differ from these defaults (newer abilities, so that units
 ## without them save, and checksum, as they always have).
-const OPTIONAL_FIELDS := {"traps": 0}
+const OPTIONAL_FIELDS := {"traps": 0, "hiding": false}
 ## Fields written to save files.
 const SAVED_FIELDS := [
 	"id", "name", "role", "team", "pos", "max_hp", "hp", "armor", "aim", "defense", "mobility", "sight", "ammo",
@@ -79,6 +79,9 @@ var fired := false
 var under_fire := false
 ## Punji traps left to lay (Vietnam sappers).
 var traps := 0
+## Lying low (an Extraction VIP until his side reaches him): can't act, and can't be seen from further than
+## Mission.HIDING_RANGE.
+var hiding := false
 ## Not saved: rebuilt from the theatre, team and role when a unit is created or loaded.
 ## The theatre id, and the role's definition (see Theatre.role).
 var theatre := Theatres.DEFAULT

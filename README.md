@@ -100,6 +100,31 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
     helmet, Germans in field grey with jackboots and the flared Stahlhelm. Soldiers bend at the knee to crouch
     and hold their rifles at the ready.
 
+**Missions** (win conditions besides points)
+- Every skirmish (village or random map), online game, scenario and two-player campaign map can be a
+  mission instead of a fight for points. One side attacks and moves first; the defender wins if the
+  round limit comes first. Wiping out the enemy still wins anything.
+  - **Last stand**: one objective, dug in by the defender (crouched, behind sandbags, no reinforcements)
+    against a stronger attacker. The attacker wins by still holding it alone at the start of its own turn,
+    so it has to keep it through the defender's whole turn. The defender holds out for 8 rounds (more on
+    bigger maps).
+  - **Extraction**: a hit and run. The attacker's VIP (liaison officer, pilot, informant) is lying low
+    around the middle of the map. He can't act, and the enemy can't see him from more than 3 tiles away,
+    until one of his own side stands next to him. Then he has to be walked into the extraction point at the
+    attacker's edge. Killing him wins for the defender. Choose whether the enemy knows where he is.
+  - **Demolition**: three targets on the defender's half (ammo dump, flak gun, radio post; weapons caches
+    and safe houses in Iraq; rice and arms caches in Vietnam). A soldier next to one plants a charge (P,
+    one action); it goes off at the start of his side's next turn, unless a defender pulls it first (P,
+    from next to it). Blowing up two wins.
+  - **Assassination**: the defender's VIP (staff officer, commissar, emir) starts among his own at the
+    back, with two bodyguards. The attacker must kill him; his side wins by keeping him alive to the end,
+    or at once by getting him into the exit on a flank, which opens a few rounds in. Choose whether the
+    hunters know where he is.
+- The top bar shows how the mission stands and what your side has to do; zones, targets (pulsing when
+  armed) and the VIP are marked on the map. The AI plays all four from either side.
+- In the two-player campaign some maps roll a mission (and which side attacks), shown on the map list and
+  the orders page. In the editor, the Mission tool (8) sets the mission and places its zone, VIP and targets.
+
 **Ways to play**
 - **Campaign**: five missions with one persistent squad. Soldiers gain XP and rank, get wounded and die for
   good. Supplies buy replacements.
@@ -111,12 +136,13 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   - Each side also picks a deployment: balanced, left or right flank, and offensive (deployed further
     forward) or defensive (further back, behind sandbags, crouched).
   - Win a map to take its points; a draw splits them. Most points wins.
+  - Some maps are missions (see Missions above) rather than a fight for points.
 - **Skirmish** on the hand-made Normandy village, a random map (standard 44x44, large 64x64, huge 84x84 with
   bigger forces), or your own scenarios. Play vs AI, hotseat, watch AI vs AI, or let an AI agent play a side
   (Agent vs AI, Me vs agent). On the village and random
   maps each side picks a deployment, as in the two-player campaign: the usual spawns, balanced or massed on
   the left or right flank, offensive (further forward) or defensive (further back, behind sandbags,
-  crouched), or random. Online, the host picks both.
+  crouched), or random. Online, the host picks both. Pick a mission and the attacking side too.
 - **Online**: two computers connect directly, at home or over the internet, no server needed.
   - Every game has a password. The joiner proves it knows the password before the host lets it in (the
     password itself never travels); wrong guesses are turned away, and a run of them locks the game for a
@@ -128,7 +154,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   - After every order both games check they hold the identical battle. Online games save at each agreed turn
     and can be continued later with the same opponent.
 - **Map and scenario editor**: paint terrain, cover and walls, place units, objectives and reinforcement
-  spawns, mirror one half onto the other, and save scenarios as JSON. Play or test them with the AI straight away.
+  spawns, set the mission (zone, VIP, targets), mirror one half onto the other, and save scenarios as JSON. Play or test them with the AI straight away.
 
 **AI**
 - A utility AI that plays fair: it only knows what its side can see. It weighs cover facing the enemy,

@@ -95,6 +95,10 @@ func _headline(u: Unit, plan: Dictionary, seen: Array[Unit]) -> String:
 			return "%s: blow up the %s at (%d, %d)" % [u.name, what, plan["tile"].x, plan["tile"].y]
 		"set_up":
 			return "%s: set up the machine gun" % u.name
+		"plant":
+			return "%s: plant a charge on the %s" % [u.name, battle.target_at(plan["tile"]).get("name", "target")]
+		"defuse":
+			return "%s: pull the charge off the %s" % [u.name, battle.target_at(plan["tile"]).get("name", "target")]
 	return "%s: %s" % [u.name, plan["kind"].capitalize().to_lower()]
 
 

@@ -121,6 +121,13 @@ static func draw(c: CanvasItem, at: Vector2, action: String, s: float, ink: Colo
 			for i in 4:
 				var dir := Vector2.from_angle(i * TAU / 4 + 0.4)
 				c.draw_line(p.call(0.75, -0.75) + dir * s * 0.1, p.call(0.75, -0.75) + dir * s * 0.3, ink, w * 0.7)
+		"charge":
+			# A demolition charge: three sticks bound together, a fuse curling off with a spark.
+			for x: float in [-0.45, 0.0, 0.45]:
+				c.draw_rect(Rect2(p.call(x - 0.18, -0.2), Vector2(0.36, 1.05) * s), ink)
+			c.draw_line(p.call(-0.6, 0.3), p.call(0.6, 0.3), Color(0, 0, 0, 0.6), w * 0.8)
+			c.draw_polyline(PackedVector2Array([p.call(0.0, -0.2), p.call(0.15, -0.55), p.call(0.5, -0.65)]), ink, w * 0.7)
+			c.draw_circle(p.call(0.65, -0.7), w * 1.1, ink)
 		"next":
 			# Next soldier: chevron to a figure.
 			c.draw_polyline(PackedVector2Array([p.call(-0.6, -0.6), p.call(0.0, 0.0), p.call(-0.6, 0.6)]), ink, w * 1.4)

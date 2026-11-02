@@ -47,7 +47,7 @@ static func start_battle(p_battle: Battle, p_ai_teams: Array, title: String) -> 
 
 
 ## A skirmish from a setup {"theatre": id (Normandy if left out), "map": "village" or "random", "size": side
-## length, "seed": int}, or {"map": "scenario", "scenario": Scenario.to_data(), "seed": int}: the same setup
+## length, "seed": int, "mission": {"type", "attacker", "vip_known"} (see Mission; points if left out)}, or {"map": "scenario", "scenario": Scenario.to_data(), "seed": int}: the same setup
 ## always builds the same battle, which is how both online players start identical games.
 ## Bigger maps bring bigger forces, need more points to win and allow more rounds. Returns [battle, title].
 static func build_skirmish(setup: Dictionary) -> Array:
@@ -71,10 +71,16 @@ static func build_skirmish(setup: Dictionary) -> Array:
 		layout = theatre.generate_map(seed, Vector2i(size, size))
 		forces = theatre.skirmish_forces(size)
 		title = "Random %dx%d map #%d" % [size, size, seed % 10000]
+	var mission_setup: Dictionary = setup.get("mission", {})
+	forces = Mission.adapt_forces(forces, mission_setup, layout["map"].width)
 	var options := {"theatre": theatre.id, "reinforcements": forces["waves"], "max_rounds": forces["max_rounds"], "vp_to_win": forces["vp_to_win"]}
 	options.merge(theatre.battle_options())
-	var battle := BattleFactory.create(layout, WarCampaign.deploy(layout, forces["rosters"], deployments), seed, options)
+	var prepared := Mission.prepare(theatre, layout, WarCampaign.deploy(layout, forces["rosters"], deployments), mission_setup, seed, forces["max_rounds"])
+	options["mission"] = prepared["mission"]
+	var battle := BattleFactory.create(prepared["layout"], prepared["rosters"], seed, options)
 	WarCampaign.brace(battle, deployments)
+	if Mission.type_of(mission_setup) != Mission.POINTS:
+		title += ": " + Mission.title(Mission.type_of(mission_setup))
 	return [battle, title]
 
 

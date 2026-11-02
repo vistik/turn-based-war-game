@@ -80,6 +80,7 @@ func _init() -> void:
 				"Rifleman", "Rifleman"],
 			"ai_heavy": "MRAP",
 			"fill_roles": ["Rifleman", "Medic", "Team Leader", "EOD Tech"],
+			"vip_name": "Informant", "targets": ["Ammo point", "Comms mast", "Fuel bladder"], "target_object": "crate",
 		},
 		{
 			"name": "Insurgents", "adjective": "insurgent", "color": Color("b07a5a"),
@@ -98,6 +99,7 @@ func _init() -> void:
 				"Mortar", "Fighter", "RPG", "Fighter", "Fighter", "PKM Gunner", "Fighter", "Bomb Maker", "Fighter", "Fighter"],
 			"ai_heavy": "",
 			"fill_roles": ["Fighter", "Commander", "RPG", "Bomb Maker"],
+			"vip_name": "Emir", "targets": ["Weapons cache", "IED workshop", "Safe house"], "target_object": "crate",
 		},
 	]
 

@@ -89,6 +89,7 @@ func _init() -> void:
 				"Sniper", "Rifleman", "Rifleman"],
 			"ai_heavy": "M113",
 			"fill_roles": ["Rifleman", "Grenadier", "Squad Leader", "Medic"],
+			"vip_name": "Pilot", "targets": ["Ammo bunker", "Radio post", "Howitzer"], "target_object": "crate",
 		},
 		{
 			"name": "Viet Cong", "adjective": "VC", "color": Color("d98a63"),
@@ -106,6 +107,7 @@ func _init() -> void:
 				"Mortar", "Guerrilla", "Assault", "Guerrilla", "Guerrilla", "RPG", "Assault", "Guerrilla", "Sapper", "Guerrilla"],
 			"ai_heavy": "",
 			"fill_roles": ["Guerrilla", "Assault", "Cadre", "Sapper"],
+			"vip_name": "Commissar", "targets": ["Arms cache", "Rice cache", "Field hospital"], "target_object": "rice_sacks",
 		},
 	]
 

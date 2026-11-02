@@ -6,7 +6,8 @@ extends RefCounted
 ## suppression, status, heal, objective, score, reinforcements, turn, game_over, stance,
 ## detonation, fire, fire_out, mine, mines_spotted, object_shot, mine_cleared,
 ## and in Vietnam: tunnel, tunnels_spotted, tunnel_collapsed, trap_laid, napalm, kill_points; in Afghanistan
-## and Iraq: ied (an IED set off by the bomb maker; one stepped on is a "mine" event of kind "ied").
+## and Iraq: ied (an IED set off by the bomb maker; one stepped on is a "mine" event of kind "ied");
+## and for missions (see Mission): vip_found, charge ({"tile", "unit", "state": "armed"|"defused"|"blown"}).
 ## A "shot" that went astray carries "stray" (the tile it ended up on) and, if it hit someone, "stray_unit".
 ##
 ## Every command can also be given as data through execute(), which is how AI moves, saved replays
@@ -29,6 +30,8 @@ var theatre_id := Theatres.DEFAULT
 var map: TacticalMap
 var units: Array[Unit] = []
 var current_team := 0
+## The side that moves first in every round (the mission's attacker; team 0 in a points game).
+var first_team := 0
 var round_number := 1
 ## Counts every turn (both sides); smoke expiry is measured in these.
 var turn_index := 0
@@ -56,6 +59,8 @@ var kill_points := [0, 0]
 var objective_points := [1, 1]
 ## Per team: the enemy tunnel entrances (tile -> true) it has found. A side always knows its own.
 var known_tunnels := [{}, {}]
+## The win condition when it isn't points (see Mission); empty for the usual points game.
+var mission := {}
 
 ## Vector3i(x, y, sight) -> tiles visible from there. Rebuilt when the map changes.
 var _vision := {}
@@ -141,6 +146,8 @@ func is_hidden_from(from: Vector2i, target: Unit) -> bool:
 
 ## Whether a unit standing on `at` would be hidden from someone on `from` by the ground it is in.
 static func hidden_at(p_map: TacticalMap, from: Vector2i, target: Unit, at: Vector2i) -> bool:
+	if target.hiding and Vector2(from).distance_to(Vector2(at)) > Mission.HIDING_RANGE:
+		return true
 	if target.fired or target.vehicle:
 		return false
 	var cover := p_map.concealment(at)
@@ -157,6 +164,8 @@ func visible_enemies(u: Unit) -> Array[Unit]:
 
 func team_sees(team: int, target: Unit) -> bool:
 	if target.team == team:
+		return true
+	if mission.get("vip_known", false) and target.id == mission.get("vip", -1):
 		return true
 	for u in alive_units(team):
 		if can_see(u, target):
@@ -327,6 +336,151 @@ func stray_risks(shooter: Unit, from: Vector2i, target: Unit) -> Array[Dictionar
 			if damage > 0.0:
 				result.append({"unit": u, "chance": float(on + near) / tiles.size(), "damage": damage})
 	return result
+
+
+# --- Missions (see Mission) ---
+
+func mission_type() -> String:
+	return Mission.type_of(mission)
+
+
+## The side that has to do something in a mission (in a points game, team 0).
+func mission_attacker() -> int:
+	return int(mission.get("attacker", 0))
+
+
+func mission_defender() -> int:
+	return 1 - mission_attacker()
+
+
+## The mission's VIP, or null (also once he is dead: check is_alive()).
+func vip() -> Unit:
+	return get_unit(mission.get("vip", -1)) if mission.has("vip") else null
+
+
+## Whether a tile is in the mission's extraction or exit zone.
+func in_zone(p: Vector2i) -> bool:
+	var zone: Dictionary = mission.get("zone", {})
+	return not zone.is_empty() and (Vector2(p) + Vector2(0.5, 0.5)).distance_to(zone["center"]) <= float(zone["radius"])
+
+
+## The demolition target on a tile, or {}.
+func target_at(tile: Vector2i) -> Dictionary:
+	for t: Dictionary in mission.get("targets", []):
+		if t["tile"] == tile:
+			return t
+	return {}
+
+
+func targets_destroyed() -> int:
+	var count := 0
+	for t: Dictionary in mission.get("targets", []):
+		if t["state"] == "destroyed":
+			count += 1
+	return count
+
+
+## Targets next to the unit that it could plant a charge on (attacker) or pull one from (defender).
+func charge_tiles(u: Unit) -> Array[Vector2i]:
+	var result: Array[Vector2i] = []
+	for t: Dictionary in mission.get("targets", []):
+		if can_plant(u, t["tile"]) == "" or can_defuse(u, t["tile"]) == "":
+			result.append(t["tile"])
+	return result
+
+
+## Planting a demolition charge on a target next to the soldier: one action. It goes off at the start of
+## his side's next turn.
+func can_plant(u: Unit, tile: Vector2i) -> String:
+	var err := can_act(u)
+	if err != "":
+		return err
+	if mission_type() != Mission.DEMOLITION or u.team != mission_attacker():
+		return "Nothing to blow up"
+	if u.vehicle or u.hiding:
+		return "Only soldiers plant charges"
+	if u.is_pinned():
+		return "Pinned down"
+	var target := target_at(tile)
+	if target.is_empty() or target["state"] != "intact":
+		return "No target to blow there"
+	if maxi(absi(tile.x - u.pos.x), absi(tile.y - u.pos.y)) > 1:
+		return "Only from next to it"
+	return ""
+
+
+func plant(u: Unit, tile: Vector2i) -> Array:
+	if can_plant(u, tile) != "":
+		return []
+	u.actions -= 1
+	var target := target_at(tile)
+	target["state"] = "armed"
+	target["unit"] = u.id
+	var events: Array = [{"type": "charge", "tile": tile, "unit": u.id, "state": "armed"}]
+	events.append_array(_after_action())
+	return events
+
+
+## Pulling a charge off a target next to the soldier before it goes off: one action.
+func can_defuse(u: Unit, tile: Vector2i) -> String:
+	var err := can_act(u)
+	if err != "":
+		return err
+	if mission_type() != Mission.DEMOLITION or u.team != mission_defender():
+		return "No charge to pull"
+	if u.vehicle:
+		return "Only soldiers pull charges"
+	if u.is_pinned():
+		return "Pinned down"
+	var target := target_at(tile)
+	if target.is_empty() or target["state"] != "armed":
+		return "No charge there"
+	if maxi(absi(tile.x - u.pos.x), absi(tile.y - u.pos.y)) > 1:
+		return "Only from next to it"
+	return ""
+
+
+func defuse(u: Unit, tile: Vector2i) -> Array:
+	if can_defuse(u, tile) != "":
+		return []
+	u.actions -= 1
+	var target := target_at(tile)
+	target["state"] = "intact"
+	target["unit"] = -1
+	var events: Array = [{"type": "charge", "tile": tile, "unit": u.id, "state": "defused"}]
+	events.append_array(_after_action())
+	return events
+
+
+## The team's charges go off at the start of its turn: the target is destroyed, and the blast hurts anyone near.
+func _blow_charges(team: int) -> Array:
+	var events := []
+	for t: Dictionary in mission.get("targets", []):
+		if t["state"] != "armed" or team != mission_attacker():
+			continue
+		t["state"] = "destroyed"
+		var tile: Vector2i = t["tile"]
+		var planter := get_unit(t["unit"])
+		events.append({"type": "charge", "tile": tile, "unit": t["unit"], "state": "blown"})
+		map.set_object(tile, Cover.NONE)
+		events.append_array(_explode(planter, tile, Mission.CHARGE_RADIUS, Mission.CHARGE_DAMAGE[0], Mission.CHARGE_DAMAGE[1], Mission.CHARGE_SHRED))
+		map.set_terrain(tile, TacticalMap.Terrain.CRATER)
+	return events
+
+
+## Extraction: the VIP comes out of hiding when one of his own side reaches him, and can act at once.
+func _find_vip() -> Array:
+	var vip_unit := vip()
+	if vip_unit == null or not vip_unit.hiding or not vip_unit.is_alive():
+		return []
+	for u in alive_units(vip_unit.team):
+		if u != vip_unit and maxi(absi(u.pos.x - vip_unit.pos.x), absi(u.pos.y - vip_unit.pos.y)) <= 1:
+			vip_unit.hiding = false
+			mission["found"] = true
+			if current_team == vip_unit.team:
+				vip_unit.actions = Unit.ACTIONS_PER_TURN
+			return [{"type": "vip_found", "unit": vip_unit.id, "by": u.id}]
+	return []
 
 
 # --- Validation: each returns "" when allowed, otherwise the reason it isn't ---
@@ -1064,6 +1218,10 @@ func _apply_command(command: Dictionary) -> Array:
 			return lay_trap(u, tile)
 		"detonate":
 			return detonate(u, tile)
+		"plant":
+			return plant(u, tile)
+		"defuse":
+			return defuse(u, tile)
 	return []
 
 
@@ -1081,7 +1239,7 @@ func end_turn() -> Array:
 	var events := []
 	turn_index += 1
 	current_team = (current_team + 1) % TEAM_COUNT
-	if current_team == 0:
+	if current_team == first_team:
 		events.append_array(_score_round())
 		if winner != -1:
 			return events
@@ -1113,8 +1271,9 @@ func _begin_turn(team: int) -> Array:
 		if strike["team"] == team:
 			strikes.erase(strike)
 			events.append_array(_land_strike(strike))
+	events.append_array(_blow_charges(team))
 	for u in alive_units(team):
-		u.actions = Unit.ACTIONS_PER_TURN
+		u.actions = 0 if u.hiding else Unit.ACTIONS_PER_TURN
 		u.overwatch = false
 		u.hunkered = false
 		u.fired = false
@@ -1131,6 +1290,7 @@ func _begin_turn(team: int) -> Array:
 			events.append_array(_suppress(u, -recovery))
 	events.append_array(_check_victory())
 	events.append_array(_update_objectives())
+	events.append_array(_check_hold(team))
 	return events
 
 
@@ -1172,7 +1332,10 @@ func to_dict() -> Dictionary:
 		"vp_to_win": vp_to_win, "max_rounds": max_rounds,
 		"reinforcements": waves, "strikes": strikes.duplicate(true), "known_mines": known_mines.duplicate(true),
 	}
-	# Normandy battles leave the theatre out, so they read (and checksum) as they always have.
+	# Points battles leave the mission out, Normandy battles the theatre, so they read (and checksum) as they always have.
+	if not mission.is_empty():
+		data["mission"] = mission.duplicate(true)
+		data["first_team"] = first_team
 	if theatre_id != Theatres.DEFAULT:
 		data["theatre"] = theatre_id
 		data["kill_points"] = kill_points.duplicate()
@@ -1209,6 +1372,8 @@ static func from_dict(data: Dictionary) -> Battle:
 	battle.kill_points = data.get("kill_points", [0, 0]).duplicate()
 	battle.objective_points = data.get("objective_points", [1, 1]).duplicate()
 	battle.known_tunnels = data.get("known_tunnels", [{}, {}]).duplicate(true)
+	battle.mission = data.get("mission", {}).duplicate(true)
+	battle.first_team = data.get("first_team", 0)
 	return battle
 
 
@@ -1642,8 +1807,15 @@ func _update_objectives() -> Array:
 	return events
 
 
-## At the end of every round, each held objective scores a point for its owner.
+## At the end of every round, each held objective scores a point for its owner. In a mission the
+## defender wins when the last round is over.
 func _score_round() -> Array:
+	if not mission.is_empty():
+		if round_number < max_rounds:
+			return []
+		winner = mission_defender()
+		var reason: String = {Mission.HOLD: "held", Mission.ASSASSINATE: "survived", Mission.DEMOLITION: "saved"}.get(mission_type(), "time")
+		return [{"type": "game_over", "winner": winner, "reason": reason}]
 	if objectives.is_empty():
 		return []
 	for objective in objectives:
@@ -1663,15 +1835,49 @@ func _check_victory() -> Array:
 	if winner != -1:
 		return []
 	for team in TEAM_COUNT:
-		if alive_units(team).is_empty():
+		# A VIP still lying low can't carry on the fight alone.
+		if alive_units(team).all(func(u: Unit) -> bool: return u.hiding):
 			winner = (team + 1) % TEAM_COUNT
 			return [{"type": "game_over", "winner": winner, "reason": "eliminated"}]
-	return []
+	return _check_mission()
+
+
+## Mission wins that can happen at any moment: the VIP killed or got out, enough targets blown.
+func _check_mission() -> Array:
+	var reason := ""
+	match mission_type():
+		Mission.EXTRACT, Mission.ASSASSINATE:
+			var vip_unit := vip()
+			var vip_side := mission_attacker() if mission_type() == Mission.EXTRACT else mission_defender()
+			if vip_unit == null or not vip_unit.is_alive():
+				winner = 1 - vip_side
+				reason = "vip_killed"
+			elif not vip_unit.hiding and in_zone(vip_unit.pos) and round_number >= int(mission.get("opens", 1)):
+				winner = vip_side
+				reason = "extracted" if mission_type() == Mission.EXTRACT else "escaped"
+		Mission.DEMOLITION:
+			if targets_destroyed() >= int(mission["needed"]):
+				winner = mission_attacker()
+				reason = "demolished"
+	if reason == "":
+		return []
+	return [{"type": "game_over", "winner": winner, "reason": reason}]
+
+
+## Last stand: the attacker wins if it holds the objective at the start of its own turn.
+func _check_hold(team: int) -> Array:
+	if winner != -1 or mission_type() != Mission.HOLD or team != mission_attacker() or objectives.is_empty():
+		return []
+	if objectives[0]["owner"] != team:
+		return []
+	winner = team
+	return [{"type": "game_over", "winner": winner, "reason": "taken"}]
 
 
 ## Checks for victory and objectives, then ends the turn automatically once nobody on the team can act.
 func _after_action() -> Array:
-	var events := _check_victory()
+	var events := _find_vip()
+	events.append_array(_check_victory())
 	if winner != -1:
 		return events
 	events.append_array(_update_objectives())

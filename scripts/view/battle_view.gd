@@ -16,7 +16,7 @@ const DrawLayer := preload("res://scripts/view/draw_layer.gd")
 const PANEL_WIDTH := 280.0
 const TOP_BAR_HEIGHT := 50.0
 ## Controls listed by the "?" button in the top bar.
-const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nTab next unit   Enter end turn\n1-0, T, C, Z, X, B, G, U, J, K: actions (see buttons)\nH: suggest a move (Shift+H: this soldier)\nWASD / arrows / middle drag: pan\nWheel: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\nPage Up / Down: floors shown (clicks go to the top one)\n+ / -: playback speed   M: music on / off"
+const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nTab next unit   Enter end turn\n1-0, T, C, Z, X, B, G, U, J, K: actions (see buttons)\nH: suggest a move (Shift+H: this soldier)\nWASD / arrows / middle drag: pan\nWheel: cursor height in tall buildings (zoom on flat maps)\nCtrl/Cmd + wheel or pinch: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\nPage Up / Down or wheel: cursor up / down a floor\n+ / -: playback speed   M: music on / off"
 const NEUTRAL_COLOR := Color("e8e2cf")
 ## The mortar button's tag for each kind of round.
 const KIND_TAGS := {"he": "HE", "smoke": "SMK", "napalm": "NPM"}
@@ -64,6 +64,12 @@ const GROUND_Z := -4
 const SHADOW_Z := -3
 const FOG_Z := -2
 const OVERLAY_Z := -1
+## Seconds between floor changes from the mouse wheel, so one flick of the wheel moves one floor.
+const FLOOR_STEP_DELAY := 0.18
+## Camera movement per unit of a trackpad's two-finger pan.
+const PAN_GESTURE_SPEED := 14.0
+## Tile corners in the order of TacticalMap.DIRS4's sides (north side runs from the first to the second).
+const REGION_CORNERS := [Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)]
 const DEPTH_Z := 40.0
 const TOP_Z := 4000
 ## Chunks repainted per frame, to spread the cost of a full repaint.
@@ -86,11 +92,20 @@ var _chunks := {}
 var _dirty_terrain := {}
 var _dirty_fog := {}
 var _overlay_layer: Node2D
+## The move range and field of fire, drawn into the scene's depth order rather than over it: tiles at ground
+## level on _region_layer just above the ground, each raised tile (hill or upper floor) on its own node just
+## above that tile's surface, so cliffs, trees and walls in front hide them. _region_data holds what to draw:
+## {"fills": {tile: [Color]}, "borders": [[tiles, Color], ...]}.
+var _region_layer: Node2D
+var _region_nodes := {}
+var _region_data := {"fills": {}, "borders": []}
 var _layout_revision := -1
 var _smoke_revision := -1
 var _prop_nodes: Array[Node2D] = []
 var _props_by_tile := {}
 var _faded := {}
+var _see_through := {}
+var _see_through_key := []
 var _unit_nodes := {}
 var _smoke_nodes := {}
 var _dragging := false
@@ -130,10 +145,21 @@ var _move_visibility := {}
 var _floaters := []
 var _effects := []
 var _overlay_state := ""
-## Floors shown in tall buildings: everything up to this level (ALL_FLOORS: up to the roofs). Clicking a
-## building moves to the highest floor shown there.
+## Cursor height, XCOM-style: the floor the cursor aims at (0 ground, 1 the first floor up, ..., a building's
+## roof at its storeys), set with the mouse wheel and starting at the selected soldier's floor. Only the
+## building under the cursor is drawn cut open at that floor (its floors above hidden); every other building
+## keeps its roof on (ALL_FLOORS). Picking treats every building as cut at the cursor's floor, so what is
+## picked never depends on what is hovered. In the open building, moves go to exactly the cursor's floor.
 const ALL_FLOORS := 99
-var _cut := ALL_FLOORS
+var _cursor_level := 0
+## Tile -> building id for every tile of a building of two storeys or more (4-connected), and the props
+## (upper floors and walls) of each building, to redraw when it opens or closes.
+var _building_of := {}
+var _building_props := {}
+## The building under the cursor, drawn cut open at the cursor's floor (-1: none).
+var _open_building := -1
+## When the mouse wheel last changed the cursor's floor (see FLOOR_STEP_DELAY).
+var _last_floor_step := -10.0
 ## Height each unit is drawn at: the floor it stands on, in levels (ground elevation plus floor).
 var _display_height := {}
 ## While events play back, map changes (crushed or blasted cover) are held back until the moment they happen.
@@ -192,8 +218,10 @@ func _ready() -> void:
 				_layer(SHADOW_Z, _paint_shadow_chunk.bind(chunk)),
 				_layer(FOG_Z, _paint_fog_chunk.bind(chunk)),
 			]
-	# On maps with height the markings go over everything, or banks and upper floors would hide them.
+	# On maps with height the markings go over everything, or banks and upper floors would hide them. The move
+	# range and field of fire are depth-sorted instead (see _region_layer).
 	_overlay_layer = _layer(TOP_Z - 20 if battle.map.has_height() else OVERLAY_Z, _paint_ground_overlays)
+	_region_layer = _layer(OVERLAY_Z, _paint_ground_regions)
 	_camera = Camera2D.new()
 	_camera.zoom = Vector2(0.9, 0.9)
 	add_child(_camera)
@@ -340,10 +368,15 @@ func _unhandled_input(event: InputEvent) -> void:
 func _handle_camera_input(event: InputEvent) -> bool:
 	if event is InputEventMouseButton:
 		match event.button_index:
-			MOUSE_BUTTON_WHEEL_UP when event.pressed:
-				_zoom_by(1.1)
-			MOUSE_BUTTON_WHEEL_DOWN when event.pressed:
-				_zoom_by(1.0 / 1.1)
+			MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN when event.pressed:
+				var up: bool = event.button_index == MOUSE_BUTTON_WHEEL_UP
+				# With tall buildings about, the wheel goes up and down their floors; Ctrl/Cmd + wheel zooms.
+				if _wheel_steps_floors() and not (event.ctrl_pressed or event.meta_pressed):
+					if _time - _last_floor_step >= FLOOR_STEP_DELAY:
+						_last_floor_step = _time
+						_change_cursor_level(1 if up else -1)
+				else:
+					_zoom_by(1.1 if up else 1.0 / 1.1)
 			MOUSE_BUTTON_MIDDLE:
 				_dragging = event.pressed
 			_:
@@ -351,6 +384,13 @@ func _handle_camera_input(event: InputEvent) -> bool:
 		return true
 	if event is InputEventMouseMotion and _dragging:
 		_camera.position -= event.relative / _camera.zoom
+		return true
+	# Trackpad: pinch zooms, two fingers pan.
+	if event is InputEventMagnifyGesture:
+		_zoom_by(event.factor)
+		return true
+	if event is InputEventPanGesture:
+		_camera.position += event.delta * PAN_GESTURE_SPEED / _camera.zoom
 		return true
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
@@ -367,9 +407,9 @@ func _handle_camera_input(event: InputEvent) -> bool:
 				if selected != null:
 					_focus(_display_pos[selected.id])
 			KEY_PAGEUP:
-				_change_cut(1)
+				_change_cursor_level(1)
 			KEY_PAGEDOWN:
-				_change_cut(-1)
+				_change_cursor_level(-1)
 			KEY_EQUAL, KEY_PLUS, KEY_KP_ADD:
 				_change_speed(1)
 			KEY_MINUS, KEY_KP_SUBTRACT:
@@ -412,6 +452,9 @@ func _on_click(tile: Vector2i) -> void:
 				if battle.map.has_height():
 					command["level"] = _dest_level(tile)
 				_command(command)
+			elif selected != null and _in_open_building(tile) and _reach.has(tile):
+				# Reachable on another floor, but not the one the cursor is on.
+				_flash("Can't get to the %s there this turn: scroll to another floor" % _level_name(tile, _dest_level(tile)).to_lower())
 		Mode.SHOOT:
 			if u != null and _can_fire_at(u) == "":
 				_command({"cmd": _shot_cmd, "unit": selected.id, "target": u.id})
@@ -474,7 +517,7 @@ func _on_action(action: String) -> void:
 			_toggle_view()
 			return
 		"floors":
-			_change_cut(1, true)
+			_change_cursor_level(1, true)
 			return
 		"speed":
 			_change_speed(1, true)
@@ -657,6 +700,8 @@ func _select(u: Unit, focus := false) -> void:
 	var changed := u != selected
 	selected = u
 	mode = Mode.MOVE
+	if u != null and changed:
+		_set_cursor_level(u.level)
 	if (focus or changed) and u != null:
 		_focus(_display_pos[u.id])
 	_refresh()
@@ -673,8 +718,10 @@ func _set_hover(tile: Vector2i) -> void:
 	if tile == hover:
 		return
 	hover = tile
+	_open(_building_of.get(tile, -1))
 	_flankers = _compute_flankers()
 	_update_target_info()
+	# The move range and field of fire don't change with the hover; only the markings on top do.
 	_overlay_layer.queue_redraw()
 
 
@@ -684,8 +731,9 @@ func _mouse_tile() -> Vector2i:
 	return _pick_tile(get_local_mouse_position())
 
 
-## The tile under a screen point: on maps with height, the first surface (raised ground, a floor shown or a
-## roof) the line of view from the camera meets, from the top down.
+## The tile under a screen point: on maps with height, the first surface the line of view from the camera
+## meets, from the top down, with every building cut at the cursor's floor (raised ground, that floor, or a
+## lower roof).
 func _pick_tile(at: Vector2) -> Vector2i:
 	var map := battle.map
 	if not map.has_height() or not _proj.isometric:
@@ -694,16 +742,26 @@ func _pick_tile(at: Vector2) -> Vector2i:
 	while h > 0.0:
 		var g := _proj.unproject(at + Vector2(0, h * ViewProjection.HEIGHT_PX))
 		var p := Vector2i(g.floor())
-		if map.in_bounds(p) and _surface_lift(p) >= h - 0.001:
+		if map.in_bounds(p) and map.floor_height(p, mini(_cursor_level, map.top_level(p))) * TerrainPainter.LEVEL_HEIGHT >= h - 0.001:
 			return p
 		h -= 0.1
 	return _proj.tile_at(at)
 
 
-## The highest floor of tile p on show: its roof (if anyone can stand there) unless floors above `_cut` are
-## hidden.
+## The highest floor of tile p on show: in the open building the cursor's floor (or its roof, if lower),
+## elsewhere the roof.
 func _shown_level(p: Vector2i) -> int:
-	return mini(battle.map.top_level(p), _cut)
+	var top := battle.map.top_level(p)
+	return mini(top, _cursor_level) if _in_open_building(p) else top
+
+
+func _in_open_building(p: Vector2i) -> bool:
+	return _open_building != -1 and _building_of.get(p, -1) == _open_building
+
+
+## "Ground floor", "Floor 1", "Roof".
+func _level_name(p: Vector2i, level: int) -> String:
+	return "Ground floor" if level <= 0 else ("Roof" if battle.map.is_roof(p, level) else "Floor %d" % level)
 
 
 ## How high the surface on show at tile p is drawn.
@@ -711,10 +769,11 @@ func _surface_lift(p: Vector2i) -> float:
 	return battle.map.floor_height(p, _shown_level(p)) * TerrainPainter.LEVEL_HEIGHT
 
 
-## The floor a move to tile p goes to: the one on show there if the selected soldier can reach it, else the
-## highest he can below it, else the lowest he can.
+## The floor a move to tile p goes to: in the open building exactly the cursor's floor (reachable or not);
+## elsewhere the one on show if the selected soldier can reach it, else the highest he can below it, else the
+## lowest he can.
 func _dest_level(p: Vector2i) -> int:
-	if not _reach.has(p):
+	if not _reach.has(p) or _in_open_building(p):
 		return _shown_level(p)
 	var levels: Dictionary = _reach[p].get("levels", {_reach[p]["level"]: _reach[p]["cost"]})
 	var best := -1
@@ -774,24 +833,81 @@ func _unit_point(u: Unit, height: float) -> Vector2:
 	return _proj.project(_display_pos[u.id], height + _unit_lift(u))
 
 
-## Shows one floor more or less of tall buildings (wrapping round from all floors when cycling).
-func _change_cut(step: int, wrap := false) -> void:
+## Whether the mouse wheel shows floors rather than zooming: on maps with buildings of two storeys or more.
+func _wheel_steps_floors() -> bool:
+	return not battle.map.get_tall_buildings().is_empty()
+
+
+## Raises or lowers the cursor a floor. Over a building it moves between that building's floors (ground to
+## roof); elsewhere it picks the floor to aim at in the next building pointed at. `wrap` cycles round.
+func _change_cursor_level(step: int, wrap := false) -> void:
 	if battle.map.get_tall_buildings().is_empty():
 		return
-	var levels := TacticalMap.MAX_STOREYS
-	var current := levels if _cut == ALL_FLOORS else _cut
-	current += step
-	if wrap and current > levels:
-		current = 0
-	current = clampi(current, 0, levels)
-	_cut = ALL_FLOORS if current >= levels else current
-	_flash("Showing all floors" if _cut == ALL_FLOORS else ("Showing the ground floor" if _cut == 0 else "Showing up to floor %d" % _cut))
+	var top := TacticalMap.MAX_STOREYS
+	var current := _cursor_level
+	if _in_open_building(hover):
+		top = battle.map.top_level(hover)
+		current = mini(_cursor_level, top)
+	var next := current + step
+	if wrap and next > top:
+		next = 0
+	next = clampi(next, 0, top)
+	if next == _cursor_level:
+		return
+	_set_cursor_level(next)
+	_flash("Cursor: %s" % (_level_name(hover, next) if _in_open_building(hover) else ("ground floor" if next == 0 else "floor %d" % next)).to_lower())
+
+
+func _set_cursor_level(level: int) -> void:
+	if level == _cursor_level:
+		return
+	_cursor_level = level
 	if _buttons.has("floors"):
-		_buttons["floors"].text = "Floors: all" if _cut == ALL_FLOORS else "Floor %d" % _cut
-	for node in _prop_nodes:
-		if node.has_meta("cut"):
-			node.queue_redraw()
-	_refresh()
+		_buttons["floors"].text = "Cursor: ground" if level == 0 else "Cursor: floor %d" % level
+	_redraw_building(_open_building)
+	_redraw_overlay()
+	_update_target_info()
+
+
+## Opens the building under the cursor (cut at the cursor's floor), closing the last one.
+func _open(building: int) -> void:
+	if building == _open_building:
+		return
+	var closed := _open_building
+	_open_building = building
+	_redraw_building(closed)
+	_redraw_building(building)
+	_redraw_overlay()
+
+
+func _redraw_building(building: int) -> void:
+	for node: Node2D in _building_props.get(building, []):
+		node.queue_redraw()
+
+
+## Floors shown of the building tile p belongs to: up to the cursor's in the open building, all elsewhere.
+func _cut_at(p: Vector2i) -> int:
+	return _cursor_level if _in_open_building(p) else ALL_FLOORS
+
+
+## Groups the tiles of buildings of two storeys or more into buildings (4-connected).
+func _find_buildings() -> void:
+	_building_of.clear()
+	var map := battle.map
+	var next_id := 0
+	for start: Vector2i in map.get_tall_buildings():
+		if map.get_storeys(start) < 2 or _building_of.has(start):
+			continue
+		var queue: Array[Vector2i] = [start]
+		_building_of[start] = next_id
+		while not queue.is_empty():
+			var p: Vector2i = queue.pop_back()
+			for d: Vector2i in TacticalMap.DIRS4:
+				var q := p + d
+				if map.in_bounds(q) and map.get_storeys(q) >= 2 and not _building_of.has(q):
+					_building_of[q] = next_id
+					queue.append(q)
+		next_id += 1
 
 
 func _next_ready_unit(after: Unit) -> Unit:
@@ -989,7 +1105,7 @@ func _run(events: Array) -> void:
 	busy = true
 	_reach = {}
 	_move_tiles = {}
-	_overlay_layer.queue_redraw()
+	_redraw_overlay()
 	_hold_layout = SPEEDS[_speed_index] != 0.0
 	for e: Dictionary in events:
 		await _play_event(e)
@@ -1654,7 +1770,7 @@ func _refresh() -> void:
 	_update_target_info()
 	_mark_chunks_dirty(false)
 	_update_prop_darkness()
-	_overlay_layer.queue_redraw()
+	_redraw_overlay()
 
 
 ## Visible enemies that would have no cover between them and the hovered move destination.
@@ -1954,7 +2070,7 @@ func _describe_tile(p: Vector2i) -> String:
 	if map.get_storeys(p) >= 2:
 		var shown := _dest_level(p)
 		lines.append("%d storeys, flat roof%s%s" % [map.get_storeys(p), ", stairs" if map.has_stairs(p) else "",
-				(": showing the roof" if map.is_roof(p, shown) else (": showing floor %d" % shown if shown > 0 else ": showing the ground floor"))])
+				": cursor on the %s" % _level_name(p, shown).to_lower()])
 	if map.has_smoke(p):
 		lines.append("[color=#c8d0d8]Smoke: blocks sight[/color]")
 	if map.is_explosive(p):
@@ -1978,8 +2094,12 @@ func _describe_tile(p: Vector2i) -> String:
 		if (Vector2(p) + Vector2(0.5, 0.5)).distance_to(objective["center"]) <= objective["radius"]:
 			lines.append("Objective: %s" % objective["name"])
 	if _reach.has(p) and selected != null:
-		var cost: float = _reach[p]["cost"]
-		lines.append("Path cost %.1f: %s" % [cost, "dash, uses both actions" if not _move_tiles.has(p) else "one action"])
+		# The cost to the floor a move there goes to (in a building, the cursor's floor).
+		var cost := Pathfinder.cost_to(_reach, p, _dest_level(p) if map.has_height() else -1)
+		if cost == INF:
+			lines.append("[color=#ff9b8a]Out of reach on this floor this turn[/color]")
+		else:
+			lines.append("Path cost %.1f: %s" % [cost, "dash, uses both actions" if cost > selected.current_mobility() + 0.001 else "one action"])
 	if not _flankers.is_empty():
 		lines.append("[color=#ff6b6b]Flanked here by %d enemy[/color]" % _flankers.size())
 	if not _visible_tiles.has(p):
@@ -2050,8 +2170,8 @@ func _build_ui() -> void:
 	_add_button(view_row, "rotate_right", "E Rotate")
 	_add_button(view_row, "toggle_view", "V Iso / top")
 	if not battle.map.get_tall_buildings().is_empty():
-		_add_button(view_row, "floors", "Floors: all")
-		_buttons["floors"].tooltip_text = "Floors of tall buildings shown (Page Up / Page Down); clicks go to the highest one shown"
+		_add_button(view_row, "floors", "Cursor: ground")
+		_buttons["floors"].tooltip_text = "The floor the cursor aims at (mouse wheel, or Page Up / Page Down). The building under the cursor opens up at that floor and moves go there. Ctrl/Cmd + wheel zooms"
 	_add_button(view_row, "speed", "Speed 1x")
 	var help_button := Button.new()
 	help_button.text = "?"
@@ -2259,7 +2379,7 @@ func _reproject() -> void:
 		node.queue_redraw()
 	for p: Vector2i in _smoke_nodes:
 		_smoke_nodes[p].z_index = _depth_z(_center(p), 0.3)
-	_overlay_layer.queue_redraw()
+	_redraw_overlay()
 
 
 func _mark_chunks_dirty(terrain: bool) -> void:
@@ -2348,13 +2468,23 @@ func _rebuild_props() -> void:
 			if map.get_elevation(p) > 0:
 				var tiles: Array[Vector2i] = [p]
 				_add_prop(_paint_terrace.bind(p), _center(p), tiles)
+	_find_buildings()
+	_building_props.clear()
+	_see_through_key = []
+	var add_to_building := func(building: int, node: Node2D) -> void:
+		if building == -1:
+			return
+		if not _building_props.has(building):
+			_building_props[building] = []
+		_building_props[building].append(node)
 	for p: Vector2i in map.get_tall_buildings():
 		if map.get_storeys(p) >= 2:
 			var tiles: Array[Vector2i] = [p]
-			_add_prop(_paint_upper_floors.bind(p), _center(p), tiles).set_meta("cut", true)
+			add_to_building.call(_building_of.get(p, -1), _add_prop(_paint_upper_floors.bind(p), _center(p), tiles))
 	for key: Vector3i in _upper_wall_keys():
 		var pair := TacticalMap.edge_tiles(key)
-		_add_prop(_paint_upper_walls.bind(key), (_center(pair[0]) + _center(pair[1])) * 0.5, pair).set_meta("cut", true)
+		var building: int = _building_of.get(pair[0], _building_of.get(pair[1], -1))
+		add_to_building.call(building, _add_prop(_paint_upper_walls.bind(key), (_center(pair[0]) + _center(pair[1])) * 0.5, pair))
 	for y in map.height:
 		for x in map.width:
 			var p := Vector2i(x, y)
@@ -2381,14 +2511,16 @@ func _paint_terrace(c: CanvasItem, p: Vector2i) -> void:
 
 func _paint_upper_floors(c: CanvasItem, p: Vector2i) -> void:
 	var batch := DrawBatch.new()
-	TerrainPainter.draw_upper_floors(batch, _proj, battle.map, p, _cut, false)
+	TerrainPainter.draw_upper_floors(batch, _proj, battle.map, p, _cut_at(p), false)
 	batch.flush(c)
 
 
 func _paint_upper_walls(c: CanvasItem, key: Vector3i) -> void:
 	var batch := DrawBatch.new()
 	var kind := battle.map.edge_kind(key) if battle.map.get_edges().has(key) else ""
-	TerrainPainter.draw_upper_walls(batch, _proj, battle.map, key, kind, _cut, false)
+	var pair := TacticalMap.edge_tiles(key)
+	var cut := mini(_cut_at(pair[0]), _cut_at(pair[1]))
+	TerrainPainter.draw_upper_walls(batch, _proj, battle.map, key, kind, cut, false)
 	batch.flush(c)
 
 
@@ -2446,6 +2578,9 @@ func _update_prop_fading() -> void:
 					for node: Node2D in _props_by_tile.get(tile + Vector2i(dx, dy), []):
 						if not wanted.has(node) and _occludes(node.get_meta("center"), f):
 							wanted[node] = true
+		for building: int in _see_through_buildings():
+			for node: Node2D in _building_props.get(building, []):
+				wanted[node] = true
 	var changed := []
 	for node: Node2D in _faded:
 		if not wanted.has(node):
@@ -2457,6 +2592,52 @@ func _update_prop_fading() -> void:
 	for node: Node2D in changed:
 		if is_instance_valid(node):
 			_apply_prop_modulate(node)
+
+
+## Buildings that hide the cursor or the planned move: the whole building turns see-through, however tall,
+## so a move to the ground behind it (or through its ground floor) doesn't look like one onto its roof.
+## Recomputed only when the cursor, floor, selection or mode changes.
+func _see_through_buildings() -> Dictionary:
+	if _building_of.is_empty() or not _is_human_turn() or not battle.map.in_bounds(hover):
+		return {}
+	var key := [hover, _cursor_level, _open_building, mode, selected.id if selected != null else -1, selected.pos if selected != null else Vector2i(-1, -1), selected.level if selected != null else 0]
+	if key == _see_through_key:
+		return _see_through
+	_see_through_key = key
+	_see_through = {}
+	# The points to keep in view: the cursor on the floor it's at, and every step of the move to it.
+	var targets := [[hover, _shown_level(hover)]]
+	if mode == Mode.MOVE and selected != null and _reach.has(hover):
+		var dest_level := _dest_level(hover)
+		targets = [[hover, dest_level]]
+		if Pathfinder.cost_to(_reach, hover, dest_level) != INF:
+			var path := Pathfinder.path_to(_reach, hover, dest_level)
+			var levels := Pathfinder.path_levels(_reach, hover, dest_level)
+			for i in path.size():
+				targets.append([path[i], levels[i]])
+	var map := battle.map
+	for target: Array in targets:
+		var p: Vector2i = target[0]
+		var level: int = target[1]
+		var own: int = _building_of.get(p, -1)
+		# Inside a building below its roof (and not the one cut open at the cursor): it hides the soldier.
+		if own != -1 and own != _open_building and level < map.top_level(p):
+			_see_through[own] = true
+		var sf := _proj.project(_center(p), map.floor_height(p, level) * TerrainPainter.LEVEL_HEIGHT)
+		var depth := _proj.depth(_center(p))
+		for b: Vector2i in _building_of:
+			var building: int = _building_of[b]
+			if building == own or building == _open_building or _see_through.has(building):
+				continue
+			if _proj.depth(_center(b)) <= depth + 0.5:
+				continue
+			var base := _proj.project(_center(b), map.get_elevation(b) * TerrainPainter.LEVEL_HEIGHT)
+			if absf(sf.x - base.x) > ViewProjection.TILE_W * 0.5:
+				continue
+			var top := _proj.project(_center(b), map.floor_height(b, map.top_level(b)) * TerrainPainter.LEVEL_HEIGHT)
+			if sf.y >= top.y - ViewProjection.TILE_H * 0.5 and sf.y <= base.y + ViewProjection.TILE_H * 0.5:
+				_see_through[building] = true
+	return _see_through
 
 
 func _apply_prop_modulate(node: Node2D) -> void:
@@ -2577,13 +2758,6 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 		c.draw_polyline(_ground_circle(center, radius), color, 2.0)
 	if busy or selected == null or not _is_human_turn():
 		return
-	_draw_gun_view(c)
-	if mode == Mode.MOVE and not _reach.is_empty():
-		for p: Vector2i in _reach:
-			if p != selected.pos:
-				c.draw_colored_polygon(_tile_poly(p), (MOVE_COLOR if _move_tiles.has(p) else DASH_COLOR) * Color(1, 1, 1, 0.1))
-		_draw_region_border(c, _reach, DASH_COLOR)
-		_draw_region_border(c, _move_tiles, MOVE_COLOR)
 	if mode == Mode.MORTAR:
 		var at := _center(selected.pos)
 		c.draw_polyline(_ground_circle(at, selected.indirect["min"]), Color(1, 0.4, 0.3, 0.5), 1.5)
@@ -2594,10 +2768,11 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 	var outline := _tile_poly(hover)
 	outline.append(outline[0])
 	c.draw_polyline(outline, Color(1, 1, 1, 0.8), 2.0)
+	_draw_cursor_height(c)
 	match mode:
 		Mode.MOVE:
 			var dest_level := _dest_level(hover)
-			if _reach.has(hover) and (hover != selected.pos or dest_level != selected.level):
+			if _reach.has(hover) and Pathfinder.cost_to(_reach, hover, dest_level) != INF and (hover != selected.pos or dest_level != selected.level):
 				var color := MOVE_COLOR if Pathfinder.cost_to(_reach, hover, dest_level) <= selected.current_mobility() + 0.001 else DASH_COLOR
 				var points := PackedVector2Array([_proj.project(_center(selected.pos), _unit_lift(selected))])
 				var path := Pathfinder.path_to(_reach, hover, dest_level)
@@ -2658,21 +2833,125 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 
 ## The selected unit's field of fire: an outline round everything it can see, a green outline round where
 ## its gun is at its best, and a faint red where it's poor. Aiming fills the bands in.
-func _draw_gun_view(c: CanvasItem) -> void:
-	if _gun_view.is_empty() or mode in [Mode.GRENADE, Mode.SMOKE, Mode.MORTAR, Mode.MEDKIT, Mode.PIVOT]:
+## Redraws the ground markings, and the move range and field of fire wherever they lie.
+func _redraw_overlay() -> void:
+	_overlay_layer.queue_redraw()
+	_region_data = _regions()
+	_region_layer.queue_redraw()
+	# One node per raised tile in a region, sorted just above that tile's surface.
+	var raised := {}
+	if battle.map.has_height():
+		for p: Vector2i in _region_data["fills"]:
+			if _tile_lift(p) > 0.01:
+				raised[p] = true
+		for border: Array in _region_data["borders"]:
+			for p: Vector2i in border[0]:
+				if _tile_lift(p) > 0.01:
+					raised[p] = true
+	for p: Vector2i in _region_nodes.keys():
+		if not raised.has(p):
+			_region_nodes[p].queue_free()
+			_region_nodes.erase(p)
+	for p: Vector2i in raised:
+		if not _region_nodes.has(p):
+			_region_nodes[p] = _layer(0, _paint_raised_region.bind(p))
+		_region_nodes[p].z_index = _depth_z(_center(p)) + 1
+		_region_nodes[p].queue_redraw()
+
+
+## The move range (moving) and the selected soldier's field of fire, as tile fills and outlines.
+func _regions() -> Dictionary:
+	var fills := {}
+	var borders := []
+	if busy or selected == null or not _is_human_turn():
+		return {"fills": fills, "borders": borders}
+	var add_fill := func(p: Vector2i, color: Color) -> void:
+		if not fills.has(p):
+			fills[p] = []
+		fills[p].append(color)
+	if not _gun_view.is_empty() and mode not in [Mode.GRENADE, Mode.SMOKE, Mode.MORTAR, Mode.MEDKIT, Mode.PIVOT]:
+		var aiming := mode == Mode.SHOOT
+		var good := {}
+		for p: Vector2i in _gun_view:
+			var band: int = _gun_view[p]
+			if band == 1:
+				good[p] = true
+			if aiming and band != 0:
+				add_fill.call(p, Color(0.55, 0.9, 0.45, 0.1) if band == 1 else Color(1, 0.4, 0.3, 0.08))
+			elif band == -1:
+				add_fill.call(p, Color(1, 0.4, 0.3, 0.05))
+		borders.append([_gun_view, Color(1, 0.95, 0.8, 0.45 if aiming else 0.3)])
+		borders.append([good, Color(0.55, 0.9, 0.45, 0.7 if aiming else 0.45)])
+	if mode == Mode.MOVE and not _reach.is_empty():
+		# Each tile on the floor a move there would go to. In the building under the cursor only tiles whose
+		# cursor floor can be reached; in other buildings only reachable roofs (the floors below are hidden).
+		var reach := {}
+		var walk := {}
+		var mobility := selected.current_mobility() + 0.001
+		for p: Vector2i in _reach:
+			var level := _dest_level(p)
+			var cost := Pathfinder.cost_to(_reach, p, level)
+			if cost == INF:
+				continue
+			if battle.map.get_storeys(p) >= 2 and not _in_open_building(p) and level != battle.map.top_level(p):
+				continue
+			reach[p] = true
+			if cost <= mobility:
+				walk[p] = true
+			if p != selected.pos or level != selected.level:
+				add_fill.call(p, (MOVE_COLOR if walk.has(p) else DASH_COLOR) * Color(1, 1, 1, 0.1))
+		borders.append([reach, DASH_COLOR])
+		borders.append([walk, MOVE_COLOR])
+	return {"fills": fills, "borders": borders}
+
+
+## The regions' tiles at ground level (all of them on a flat map).
+func _paint_ground_regions(c: CanvasItem) -> void:
+	var tall := battle.map.has_height()
+	for p: Vector2i in _region_data["fills"]:
+		if not tall or _tile_lift(p) <= 0.01:
+			_draw_region_tile(c, p)
+	for border: Array in _region_data["borders"]:
+		for p: Vector2i in border[0]:
+			if not tall or _tile_lift(p) <= 0.01:
+				_draw_tile_border(c, p, border[0], border[1])
+
+
+func _paint_raised_region(c: CanvasItem, p: Vector2i) -> void:
+	if _region_data["fills"].has(p):
+		_draw_region_tile(c, p)
+	for border: Array in _region_data["borders"]:
+		if border[0].has(p):
+			_draw_tile_border(c, p, border[0], border[1])
+
+
+func _draw_region_tile(c: CanvasItem, p: Vector2i) -> void:
+	var poly := _tile_poly(p)
+	for color: Color in _region_data["fills"][p]:
+		c.draw_colored_polygon(poly, color)
+
+
+## Above the ground floor, a stalk from the cursor down to the ground under it and the floor's name, so it's
+## plain how high the cursor is.
+func _draw_cursor_height(c: CanvasItem) -> void:
+	var level := _shown_level(hover)
+	if level <= 0:
 		return
-	var aiming := mode == Mode.SHOOT
-	var good := {}
-	for p: Vector2i in _gun_view:
-		var band: int = _gun_view[p]
-		if band == 1:
-			good[p] = true
-		if aiming and band != 0:
-			c.draw_colored_polygon(_tile_poly(p), Color(0.55, 0.9, 0.45, 0.1) if band == 1 else Color(1, 0.4, 0.3, 0.08))
-		elif band == -1:
-			c.draw_colored_polygon(_tile_poly(p), Color(1, 0.4, 0.3, 0.05))
-	_draw_region_border(c, _gun_view, Color(1, 0.95, 0.8, 0.45 if aiming else 0.3))
-	_draw_region_border(c, good, Color(0.55, 0.9, 0.45, 0.7 if aiming else 0.45))
+	var center := _center(hover)
+	var top := _proj.project(center, _tile_lift(hover, level))
+	var foot := _proj.project(center, battle.map.floor_height(hover, 0) * TerrainPainter.LEVEL_HEIGHT)
+	var dash := 6.0
+	var length := top.distance_to(foot)
+	var t := 0.0
+	while t < length:
+		c.draw_line(top.lerp(foot, t / length), top.lerp(foot, minf(t + dash, length) / length), Color(1, 1, 1, 0.7), 2.0)
+		t += dash * 2.0
+	c.draw_circle(foot, 3.0, Color(1, 1, 1, 0.7))
+	var label := _level_name(hover, level).to_upper()
+	if mode == Mode.MOVE and selected != null and _is_human_turn() and Pathfinder.cost_to(_reach, hover, level) == INF:
+		label += ": OUT OF REACH"
+	c.draw_string_outline(_font, top + Vector2(-60, -14), label, HORIZONTAL_ALIGNMENT_CENTER, 120, 12, 3, Color(0, 0, 0, 0.8))
+	c.draw_string(_font, top + Vector2(-60, -14), label, HORIZONTAL_ALIGNMENT_CENTER, 120, 12, Color.WHITE)
 
 
 ## An arrow on the ground showing which way a tank will face on a tile.
@@ -2689,16 +2968,20 @@ func _draw_heading(c: CanvasItem, tile: Vector2i, dir: Vector2i, color: Color) -
 
 ## Outlines the boundary of a set of tiles, like XCOM's move range border.
 func _draw_region_border(c: CanvasItem, tiles: Dictionary, color: Color) -> void:
-	var corners := [Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)]
-	var tall := battle.map.has_height()
 	for p: Vector2i in tiles:
-		var lift := _tile_lift(p) if tall else 0.0
-		for i in 4:
-			var q: Vector2i = p + TacticalMap.DIRS4[i]
-			if not tiles.has(q) or (tall and absf(_tile_lift(q) - lift) > 0.01):
-				var a: Vector2 = Vector2(p) + corners[i]
-				var b: Vector2 = Vector2(p) + corners[(i + 1) % 4]
-				c.draw_line(_proj.project(a, lift), _proj.project(b, lift), color, 2.5)
+		_draw_tile_border(c, p, tiles, color)
+
+
+## The sides of tile p on the edge of the region `tiles` (or where the ground steps up or down).
+func _draw_tile_border(c: CanvasItem, p: Vector2i, tiles: Dictionary, color: Color) -> void:
+	var tall := battle.map.has_height()
+	var lift := _tile_lift(p) if tall else 0.0
+	for i in 4:
+		var q: Vector2i = p + TacticalMap.DIRS4[i]
+		if not tiles.has(q) or (tall and absf(_tile_lift(q) - lift) > 0.01):
+			var a: Vector2 = Vector2(p) + REGION_CORNERS[i]
+			var b: Vector2 = Vector2(p) + REGION_CORNERS[(i + 1) % 4]
+			c.draw_line(_proj.project(a, lift), _proj.project(b, lift), color, 2.5)
 
 
 func _pose(u: Unit) -> Dictionary:
@@ -2854,7 +3137,8 @@ func _draw_markers() -> void:
 			draw_string_outline(_font, top + Vector2(-60, -5), " ".join(tags), HORIZONTAL_ALIGNMENT_CENTER, 120, 10, 3, Color(0, 0, 0, 0.7))
 			draw_string(_font, top + Vector2(-60, -5), " ".join(tags), HORIZONTAL_ALIGNMENT_CENTER, 120, 10, tag_color)
 		_draw_target_odds(u, top)
-	if busy or selected == null or not battle.map.in_bounds(hover) or mode != Mode.MOVE or not _reach.has(hover) or hover == selected.pos:
+	if busy or selected == null or not battle.map.in_bounds(hover) or mode != Mode.MOVE or not _reach.has(hover) or hover == selected.pos \
+			or Pathfinder.cost_to(_reach, hover, _dest_level(hover)) == INF:
 		return
 	# Cover shields on each side of the move destination, and how many seen enemies would have it in the open.
 	var center := _center(hover)
@@ -2869,8 +3153,6 @@ func _draw_markers() -> void:
 		notes.append("DASH")
 	if not _flankers.is_empty():
 		notes.append("EXPOSED TO %d" % _flankers.size())
-	if dest_level > 0:
-		notes.append("ROOF" if battle.map.is_roof(hover, dest_level) else "FLOOR %d" % dest_level)
 	if not notes.is_empty():
 		var at := _proj.project(center, lift) + Vector2(-60, 20)
 		draw_string_outline(_font, at, "  ".join(notes), HORIZONTAL_ALIGNMENT_CENTER, 120, 12, 3, Color(0, 0, 0, 0.7))

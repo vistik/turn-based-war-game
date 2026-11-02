@@ -1299,49 +1299,89 @@ static func _bank_colors() -> Array:
 	return BANK_EARTH
 
 
-## A tile of raised ground: its banks down to lower neighbours (the sides facing the viewer), then its surface
-## at its height. Draws at the projection's lift 0; leaves the lift at 0.
+## How far a bank (a climbable one-level step) slopes out over the lower tile at its foot.
+const BANK_SLOPE := 0.38
+
+
+## A tile of raised ground: its sides down to lower neighbours (those facing the viewer), then its surface at
+## its height. A one-level step is a bank you can walk up, drawn as a grassy slope leaning out over the lower
+## tile; two levels or more is a cliff nobody climbs, drawn as a sheer face of rock. Draws at the projection's
+## lift 0; leaves the lift at 0.
 static func draw_terrace(c: Object, proj: ViewProjection, map: TacticalMap, p: Vector2i, dark: bool) -> void:
 	var level := map.get_elevation(p)
 	var top := level * LEVEL_HEIGHT
-	var colors := _bank_colors()
 	var tint := 0.45 if dark else 0.0
 	var g := Vector2(p)
 	var corners := [g, g + Vector2(1, 0), g + Vector2(1, 1), g + Vector2(0, 1)]
 	if proj.isometric:
+		var drops := []
+		var visible := []
 		for i in 4:
 			var d: Vector2i = TacticalMap.DIRS4[i]
-			var below := map.get_elevation(p + d) if map.in_bounds(p + d) else 0
-			if below >= level:
+			drops.append(level - (map.get_elevation(p + d) if map.in_bounds(p + d) else 0))
+			var screen_normal := proj.rotate_grid(Vector2(d)) - proj.rotate_grid(Vector2.ZERO)
+			visible.append(screen_normal.x + screen_normal.y > 0.001)
+		for i in 4:
+			if drops[i] <= 0 or not visible[i]:
 				continue
+			var d := Vector2(TacticalMap.DIRS4[i])
 			var a: Vector2 = corners[i]
 			var b: Vector2 = corners[(i + 1) % 4]
-			var screen_normal := proj.rotate_grid(Vector2(d)) - proj.rotate_grid(Vector2.ZERO)
-			if screen_normal.x + screen_normal.y <= 0.001:
-				continue
-			var base := below * LEVEL_HEIGHT
-			var shade := 0.25 if i == 1 or i == 2 else 0.0
-			var color: Color = colors[(p.x + p.y) % 2].lerp(colors[1], noise(p, 60 + i) * 0.5).darkened(shade + tint)
-			c.draw_colored_polygon(PackedVector2Array([proj.project(a, base), proj.project(b, base), proj.project(b, top), proj.project(a, top)]), color)
-			# Strata: a line or two across the bank, and a dark rim at its foot.
-			for k in range(below, level):
-				var h := (k + 0.5) * LEVEL_HEIGHT
-				c.draw_line(proj.project(a, h), proj.project(b, h + 0.05 * (noise(p, k) - 0.5)), color.darkened(0.2), 1.0)
-			c.draw_line(proj.project(a, base), proj.project(b, base), color.darkened(0.45), 1.5)
+			var drop: int = drops[i]
+			var base: float = (level - drop) * LEVEL_HEIGHT
+			var shade := (0.25 if i == 1 or i == 2 else 0.0) + tint
+			if drops[i] == 1:
+				var color := _bank_color(p, i).darkened(shade)
+				var out := d * BANK_SLOPE
+				c.draw_colored_polygon(PackedVector2Array([proj.project(a + out, base), proj.project(b + out, base), proj.project(b, top), proj.project(a, top)]), color)
+				# Tufts down the slope, and the line where it meets the ground.
+				for k in 3:
+					var t := (k + 0.5 + noise(p, 80 + i * 3 + k) * 0.4) / 3.2
+					var at := a.lerp(b, t)
+					c.draw_line(proj.project(at + out * 0.25, lerpf(top, base, 0.25)), proj.project(at + out * 0.7, lerpf(top, base, 0.7)), color.darkened(0.18), 1.0)
+				c.draw_line(proj.project(a + out, base), proj.project(b + out, base), color.darkened(0.3), 1.0)
+				# Where two banks meet at an outside corner, a wedge of slope joins them.
+				var j := (i + 1) % 4
+				var dj := Vector2(TacticalMap.DIRS4[j])
+				var diagonal: Vector2i = p + TacticalMap.DIRS4[i] + TacticalMap.DIRS4[j]
+				if drops[j] == 1 and (not map.in_bounds(diagonal) or map.get_elevation(diagonal) < level):
+					var outj := dj * BANK_SLOPE
+					c.draw_colored_polygon(PackedVector2Array([proj.project(b, top), proj.project(b + out, base), proj.project(b + out + outj, base), proj.project(b + outj, base)]), color.darkened(0.08))
+			else:
+				var rock: Color = ROCK[(p.x + p.y) % 2].lerp(ROCK[1], noise(p, 60 + i) * 0.5).darkened(shade + 0.1)
+				c.draw_colored_polygon(PackedVector2Array([proj.project(a, base), proj.project(b, base), proj.project(b, top), proj.project(a, top)]), rock)
+				# Cracks down the face, a lip of turf at the top, and a dark foot.
+				for k in 3:
+					var t := (k + 0.6 + noise(p, 90 + i * 3 + k) * 0.6) / 3.6
+					var at := a.lerp(b, t)
+					var wobble := (noise(p, 95 + k) - 0.5) * 0.12
+					c.draw_line(proj.project(at, top - 0.1), proj.project(at.lerp(b, wobble), lerpf(top, base, 0.55)), rock.darkened(0.3), 1.2)
+				c.draw_line(proj.project(a, top), proj.project(b, top), _bank_color(p, i).darkened(tint), 2.0)
+				c.draw_line(proj.project(a, base), proj.project(b, base), rock.darkened(0.5), 1.5)
 	proj.lift = top
 	draw_tile(c, proj, map, p)
 	if not proj.isometric:
-		# Seen from above, higher ground is lighter, with a line where it drops away.
+		# Seen from above, higher ground is lighter, with a thin line where a bank slopes away and a heavy one
+		# along a cliff.
 		c.draw_colored_polygon(tile_poly(proj, p), Color(1, 1, 0.92, 0.07 * level))
 	for i in 4:
 		var d: Vector2i = TacticalMap.DIRS4[i]
 		if map.in_bounds(p + d) and map.get_elevation(p + d) < level:
-			c.draw_line(proj.project(corners[i]), proj.project(corners[(i + 1) % 4]), Color(0.1, 0.08, 0.05, 0.5), 1.5)
+			var cliff := level - map.get_elevation(p + d) >= 2
+			c.draw_line(proj.project(corners[i]), proj.project(corners[(i + 1) % 4]), Color(0.1, 0.08, 0.05, 0.85) if cliff else Color(0.1, 0.08, 0.05, 0.35), 3.0 if cliff else 1.5)
 	if dark:
 		c.draw_colored_polygon(tile_poly(proj, p), Color(0.03, 0.03, 0.05, 0.5))
 	if map.get_object(p) != Cover.NONE:
 		draw_object_shadow(c, proj, map, p)
 	proj.lift = 0.0
+
+
+## A bank's colour: the theatre's earth showing through its grass.
+static func _bank_color(p: Vector2i, side: int) -> Color:
+	var earth: Array = _bank_colors()
+	var grass: Array = TROPIC_GRASS if _tropical() else (FLAT_GRASS if _arid() else GRASS)
+	var base: Color = earth[(p.x + p.y) % 2].lerp(earth[1], noise(p, 60 + side) * 0.5)
+	return base.lerp(grass[(p.x + p.y) % 2], 0.55)
 
 
 ## The upper floors of a building tile of two storeys or more, up to and including `cut` (its floors' slabs,

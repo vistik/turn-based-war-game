@@ -1,16 +1,17 @@
 class_name HeightGenerator
 extends RefCounted
 ## Rolling hills for generated maps: rounded rises a few levels high that step down one level at a time, so
-## they can always be walked (no cliffs). Ground that must stay level (roads, buildings, paddies, the
-## deployment strips) stays at 0, and the hills ease down toward it. Nothing is mirrored: each hill is raised
+## they can be walked up from most sides. Some hills are cut into escarpments: one side drops away as a cliff
+## (two levels or more, which nobody climbs), the others still slope. Ground that must stay level (roads,
+## buildings, paddies, the deployment strips) stays at 0, and the hills ease down toward it. Nothing is mirrored: each hill is raised
 ## where it falls, and NaturalMap picks objectives fair to both sides after the hills are up.
 
 
 ## Raises `count` hills up to `max_height` levels over the whole map, keeping the tiles in `flat` at 0. Each
 ## hill's top is the best of a few random spots by `prefer` (prefer.call(p: Vector2i) -> float, higher is
-## better; empty takes the first spot), so hills can be steered onto rough ground. Returns each hill's top
-## tile that ended up raised.
-static func raise_hills(b: MapBuilder, rng: RandomNumberGenerator, flat: Dictionary, count: int, max_height: int, prefer := Callable()) -> Array[Vector2i]:
+## better; empty takes the first spot), so hills can be steered onto rough ground. A hill two levels high or
+## more becomes an escarpment with chance `scarp_chance`. Returns each hill's top tile that ended up raised.
+static func raise_hills(b: MapBuilder, rng: RandomNumberGenerator, flat: Dictionary, count: int, max_height: int, prefer := Callable(), scarp_chance := 0.0) -> Array[Vector2i]:
 	var map := b.map
 	# How high each tile may rise: one level per tile away from ground that must stay flat.
 	var limit := {}
@@ -33,6 +34,9 @@ static func raise_hills(b: MapBuilder, rng: RandomNumberGenerator, flat: Diction
 			queue.append(q)
 	var heights := {}
 	var tops: Array[Vector2i] = []
+	# [center, direction, reach] of each escarpment: everything of the hill past a line just beyond its top,
+	# that way, falls away to the ground below.
+	var scarps := []
 	for i in count:
 		var center := Vector2.ZERO
 		var best := -INF
@@ -47,6 +51,8 @@ static func raise_hills(b: MapBuilder, rng: RandomNumberGenerator, flat: Diction
 		# Each level of the hill is a ring this many tiles wide (over 1.5, so neighbours differ by a level at most).
 		var ring := rng.randf_range(1.7, 2.8)
 		var reach := ceili(top * ring)
+		if top >= 2 and rng.randf() < scarp_chance:
+			scarps.append([center, Vector2.from_angle(rng.randf() * TAU), reach])
 		for y in range(int(center.y) - reach, int(center.y) + reach + 1):
 			for x in range(int(center.x) - reach, int(center.x) + reach + 1):
 				var p := Vector2i(x, y)
@@ -55,6 +61,15 @@ static func raise_hills(b: MapBuilder, rng: RandomNumberGenerator, flat: Diction
 				var level := ceili(top - Vector2(p).distance_to(center) / ring)
 				if level > heights.get(p, 0):
 					heights[p] = level
+	for scarp: Array in scarps:
+		var center: Vector2 = scarp[0]
+		var dir: Vector2 = scarp[1]
+		var reach: int = scarp[2]
+		for y in range(int(center.y) - reach, int(center.y) + reach + 1):
+			for x in range(int(center.x) - reach, int(center.x) + reach + 1):
+				var p := Vector2i(x, y)
+				if heights.has(p) and (Vector2(p) + Vector2(0.5, 0.5) - center).dot(dir) > 0.9:
+					heights.erase(p)
 	for p: Vector2i in heights:
 		var level := mini(heights[p], limit.get(p, TacticalMap.MAX_ELEVATION))
 		if level > 0:

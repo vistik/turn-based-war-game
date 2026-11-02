@@ -48,6 +48,8 @@ var tolerance := 0.15
 ## ground off roads, buildings and the deployment strips (see HeightGenerator). 0 hills keeps the map flat.
 var hills := 0.0
 var hill_height := 2
+## Chance a hill two levels high or more is an escarpment, with one side a cliff nobody climbs.
+var scarp_chance := 0.35
 ## Chance a house gets upper floors, and the most storeys it may have (2 or 3). Bamboo huts stay low.
 var tall_chance := 0.0
 var tall_max := 2
@@ -772,7 +774,7 @@ func _raise_hills() -> void:
 		for dy in range(-1, 2):
 			for dx in range(-1, 2):
 				flat[p + Vector2i(dx, dy)] = true
-	var tops := HeightGenerator.raise_hills(build, rng, flat, count, hill_height, wild)
+	var tops := HeightGenerator.raise_hills(build, rng, flat, count, hill_height, wild, scarp_chance)
 	for i in tops.size():
 		var top := nearest_open(tops[i])
 		landmark("Hill %d" % (80 + map.get_elevation(top) * 15 + i * 7 + rng.randi_range(0, 5)), top, 0.3)

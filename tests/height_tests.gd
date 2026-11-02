@@ -267,6 +267,7 @@ func test_old_commands_still_move_on_flat_maps() -> void:
 # --- Generated maps ---
 
 func test_generated_maps_have_walkable_hills_and_tall_buildings() -> void:
+	var total_cliffs := 0
 	for theatre_id in ["normandy", "vietnam", "modern"]:
 		var theatre := Theatres.get_theatre(theatre_id)
 		for seed in [3, 4]:
@@ -291,7 +292,22 @@ func test_generated_maps_have_walkable_hills_and_tall_buildings() -> void:
 								crooked += 1
 			if layout.get("style", "") != "town":
 				check(raised > 0, "%s has hills" % name)
-			check_eq(cliffs, 0, "%s: hills step a level at a time" % name)
+			total_cliffs += cliffs
+			# Escarpments drop away as cliffs, but every open raised tile can still be walked to from the start.
+			var stranded := 0
+			var walk := Pathfinder.search(map, layout["spawns"][0][0], 100000.0)
+			# The same ground levelled, to tell tiles cut off by a cliff from tiles walled in by trees.
+			var level := TacticalMap.from_dict(map.to_dict())
+			for y in map.height:
+				for x in map.width:
+					level.set_elevation(Vector2i(x, y), 0)
+			var walk_level := Pathfinder.search(level, layout["spawns"][0][0], 100000.0)
+			for y in map.height:
+				for x in map.width:
+					var p := Vector2i(x, y)
+					if map.get_elevation(p) > 0 and walk_level.has(p) and not walk.has(p):
+						stranded += 1
+			check_eq(stranded, 0, "%s: every raised tile can be climbed onto" % name)
 			check_eq(crooked, 0, "%s: buildings stand on level ground" % name)
 			for team in 2:
 				for p: Vector2i in layout["spawns"][team]:
@@ -303,6 +319,8 @@ func test_generated_maps_have_walkable_hills_and_tall_buildings() -> void:
 					check(map.get_storeys(p) >= 2, "%s: stairs at %s are in a tall building" % [name, p])
 			if theatre_id == "normandy":
 				check(MapGenerator.is_playable(layout), "%s is playable" % name)
+
+	check(total_cliffs > 0, "some hills are escarpments with a cliff side")
 
 
 func test_generated_roofs_can_be_reached() -> void:

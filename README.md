@@ -90,10 +90,11 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   someone else, friends included. The odds panel tells you who is at risk.
 - Objectives (church, crossroads, farm) score victory points every round. Reinforcement waves arrive mid-battle.
 - **Height**:
-  - Ground rises in levels on rolling hills, ridges and knolls. Climbing a level costs one more movement, going
-    down is free, and ground two levels apart is a cliff.
-    Random maps raise hills on rough ground, off the roads, buildings and both sides' starts, and a hilltop
-    can be an objective ("Hill 104").
+  - Ground rises in levels on rolling hills, ridges and knolls. A one-level step is a grassy bank, drawn as a
+    slope: anyone can walk up it for one more movement (going down is free). Two levels or more is a cliff,
+    drawn as a sheer face of rock, that nobody climbs.
+    Random maps raise hills on rough ground, off the roads, buildings and both sides' starts. Some hills are
+    escarpments, sloping up on most sides with one side a cliff. A hilltop can be an objective ("Hill 104").
   - Buildings of two or three storeys (the church's bell tower, village houses and farmhouses, Iraqi town
     houses, compound towers) have stairs up through every floor to a flat roof. Upstairs, cover is the walls
     and windows; the roof's parapet is half cover. Only one soldier stands on a tile, whatever the floor.
@@ -103,8 +104,13 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
     sight, and upstairs a doorway below is wall.
   - Blasts only hurt those within a level of where they go off. Shells and air strikes land on the roof;
     grenades go for the floor the enemy is on.
-  - Floors and roofs are drawn stacked. Page Up / Page Down shows fewer floors (cutting the upper ones away)
-    and clicks then go to the highest floor shown.
+  - The cursor has a height. The mouse wheel (or Page Up / Page Down) raises and lowers it a floor at a time,
+    starting at the selected soldier's floor. The building under the cursor opens up at that floor (the floors
+    above are cut away) while every other building keeps its roof on. A dashed stalk drops from a raised
+    cursor to the ground, the move range shows the tiles you can reach on that floor, and a click goes exactly
+    there, or says it's out of reach. A tall building standing in front of the cursor or the planned move,
+    or one the move walks through below its roof, turns see-through, so a move behind it doesn't look like
+    one onto its roof.
 - Terrain hazards:
   - **Fuel drums and oil tanks:** they explode when shot, caught in a blast or run over by a tank, set off
     others nearby, and leave the ground burning. Nobody can enter fire, and anyone in it is burnt at the
@@ -229,9 +235,11 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 | H / Shift+H | Suggest a move / suggest for the selected soldier |
 | Tab / Enter | Next soldier / end turn (the camera centres on each newly selected soldier) |
 | WASD, arrows, middle drag | Pan |
-| Wheel / F | Zoom / focus the selected soldier |
+| Wheel | On maps with tall buildings: the cursor up or down a floor (the building under it opens at that floor). Elsewhere: zoom |
+| Ctrl/Cmd + wheel, pinch / F | Zoom / focus the selected soldier |
+| Two-finger swipe | Pan (trackpad) |
 | Q / E / V | Rotate the view / switch isometric and top-down |
-| Page Up / Page Down | Show more / fewer floors of tall buildings (clicks go to the highest floor shown) |
+| Page Up / Page Down | The cursor up / down a floor, like the wheel |
 | + / - | Playback speed |
 | M | Music on / off |
 

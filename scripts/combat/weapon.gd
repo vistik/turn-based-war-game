@@ -45,6 +45,11 @@ func range_modifier(distance: float) -> int:
 
 ## A weapon from its data (see the theatres): {"name", "kind", "damage": [min, max], "crit", "crit_damage", "clip",
 ## "suppression", "range": [modifier per tile...], and optionally "setup", "anti_tank", "blast"}.
+## Sniper rifles fire only from where the soldier stands: he can move or fire in a turn, not both.
+func fires_standing_still() -> bool:
+	return kind == "sniper"
+
+
 static func from_spec(spec: Dictionary) -> Weapon:
 	var weapon := Weapon.new(spec["name"], spec["kind"], Vector2i(spec["damage"][0], spec["damage"][1]), spec["crit"], spec["crit_damage"],
 			spec["clip"], spec["suppression"], spec["range"], spec.get("setup", false))

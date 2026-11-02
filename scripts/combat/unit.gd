@@ -26,7 +26,7 @@ const STANCE_SIGHT := [0.0, 1.0, 2.0]
 const MIN_CRAWL := 1.0
 ## Fields written to save files only when they differ from these defaults (newer abilities, so that units
 ## without them save, and checksum, as they always have).
-const OPTIONAL_FIELDS := {"traps": 0, "hiding": false, "level": 0}
+const OPTIONAL_FIELDS := {"traps": 0, "hiding": false, "level": 0, "moved": false}
 ## Fields written to save files.
 const SAVED_FIELDS := [
 	"id", "name", "role", "team", "pos", "max_hp", "hp", "armor", "aim", "defense", "mobility", "sight", "ammo",
@@ -78,6 +78,8 @@ var record_id := -1
 var stance := Stance.STAND
 ## Fired since the start of its own last turn. The muzzle flash gives away a soldier hidden in the wheat.
 var fired := false
+## Moved since the start of its own turn. A sniper can't fire after moving (Weapon.fires_standing_still).
+var moved := false
 ## Caught by suppressive fire: keeps its head down and doesn't recover suppression at the start of its next turn.
 var under_fire := false
 ## Punji traps left to lay (Vietnam sappers).

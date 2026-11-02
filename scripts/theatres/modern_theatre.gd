@@ -115,7 +115,7 @@ static func _coalition_roles() -> Dictionary:
 		"SAW Gunner": Theatre.role({"name": "SAW Gunner", "hp": 8, "aim": 74, "mobility": 6.0, "body_armor": 1, "grenades": 1, "weapon": WEAPONS["m249"],
 			"range": 8.0, "cost": 6, "note": "Light machine gun, no setting up", "kit": "MG", "icon": "MG"}),
 		"Marksman": Theatre.role({"name": "Marksman", "hp": 7, "aim": 76, "mobility": 6.0, "body_armor": 1, "sight": 22.0, "weapon": WEAPONS["m110"],
-			"range": 12.0, "holds_back": true, "cost": 7, "note": "Long sight, best at range", "kit": "Sniper", "icon": "Sniper"}),
+			"range": 12.0, "holds_back": true, "cost": 7, "note": "Long sight, best at range; moves or fires, not both", "kit": "Sniper", "icon": "Sniper"}),
 		"Medic": Theatre.role({"name": "Medic", "hp": 7, "aim": 60, "mobility": 6.5, "body_armor": 1, "medkits": 4, "smoke": 1, "weapon": WEAPONS["m4"],
 			"range": 6.0, "cost": 5, "note": "Heals and treats wounds"}),
 		"JTAC": Theatre.role({"name": "JTAC", "hp": 8, "aim": 64, "mobility": 6.5, "body_armor": 1, "mortar_rounds": 2, "mortar_smoke": 1,

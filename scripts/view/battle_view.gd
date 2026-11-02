@@ -1627,7 +1627,8 @@ func _refresh() -> void:
 			if battle.team_sees(view, u):
 				_seen_units[u.id] = true
 	var can_act := selected != null and battle.can_act(selected) == "" and _is_human_turn()
-	_reach = battle.reachable(selected) if can_act and mode == Mode.MOVE else {}
+	var stays_put := can_act and selected.weapon.fires_standing_still() and selected.fired
+	_reach = battle.reachable(selected) if can_act and mode == Mode.MOVE and not stays_put else {}
 	_move_tiles.clear()
 	for p: Vector2i in _reach:
 		if _reach[p]["cost"] <= selected.current_mobility() + 0.001:

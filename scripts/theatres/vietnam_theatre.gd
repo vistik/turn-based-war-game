@@ -129,7 +129,7 @@ static func _us_roles() -> Dictionary:
 			"indirect": ARTILLERY, "range": 8.0, "holds_back": true, "cost": 9,
 			"note": "Radio: calls artillery or napalm on what he sees", "kit": "RTO", "icon": "RTO"}),
 		"Sniper": Theatre.role({"name": "Sniper", "hp": 7, "aim": 75, "mobility": 6.0, "sight": 22.0, "weapon": WEAPONS["m21"], "range": 12.0,
-			"holds_back": true, "cost": 7, "note": "Long sight, best at range"}),
+			"holds_back": true, "cost": 7, "note": "Long sight, best at range; moves or fires, not both"}),
 		"M113": Theatre.role({"name": "M113", "vehicle": true, "hull_armor": APC_ARMOR, "hp": 14, "aim": 60, "sight": 15.0, "mobility": 7.0,
 			"weapon": WEAPONS["m2"], "range": 8.0, "cost": 14, "note": "Armoured carrier with a .50 cal", "model": "m113", "icon": "APC"}),
 	}

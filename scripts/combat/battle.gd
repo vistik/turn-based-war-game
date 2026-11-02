@@ -549,6 +549,8 @@ func can_move(u: Unit, dest: Vector2i, level := -1) -> String:
 		return err
 	if u.is_pinned():
 		return "Pinned down, can't move"
+	if u.weapon.fires_standing_still() and u.fired:
+		return "A sniper can't move after firing this turn"
 	var reach := reachable(u)
 	if not reach.has(dest):
 		return "Can't reach that tile"
@@ -579,6 +581,8 @@ func can_fire(u: Unit) -> String:
 		return "Out of ammo, reload first"
 	if u.weapon.needs_setup and not u.deployed:
 		return "Set up the machine gun first"
+	if u.weapon.fires_standing_still() and u.moved:
+		return "A sniper can't fire after moving this turn"
 	if u.weapon.kind == "at" and u.stance == Unit.Stance.PRONE:
 		return "Can't fire a rocket lying down"
 	return ""
@@ -902,6 +906,7 @@ func move(u: Unit, dest: Vector2i, level := -1) -> Array:
 		level = reach[dest]["level"]
 	u.actions -= actions_for_cost(u, Pathfinder.cost_to(reach, dest, level))
 	u.deployed = false
+	u.moved = true
 	var events := []
 	var segment: Array[Vector2i] = [u.pos]
 	# Tanks: the hull's heading after each step (they turn, and may back up).
@@ -1370,6 +1375,7 @@ func _begin_turn(team: int) -> Array:
 		u.overwatch = false
 		u.hunkered = false
 		u.fired = false
+		u.moved = false
 		if u.under_fire:
 			u.under_fire = false
 		elif u.suppression > 0:

@@ -1126,9 +1126,9 @@ func _shot(u: Unit, e: Unit) -> Dictionary:
 
 
 ## Whether the unit's weapon could fire after it has spent an action moving (a machine gun packs up when it
-## moves; an empty weapon needs reloading first).
+## moves; a sniper can't fire after moving; an empty weapon needs reloading first).
 func _can_shoot_after_moving(u: Unit) -> bool:
-	return u.ammo > 0 and not u.weapon.needs_setup
+	return u.ammo > 0 and not u.weapon.needs_setup and not u.weapon.fires_standing_still()
 
 
 ## The unit's odds against an enemy if it stood on `tile` ({hit, crit, flanked}), or null without a line of sight.

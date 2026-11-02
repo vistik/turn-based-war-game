@@ -395,6 +395,26 @@ func test_machine_gun_needs_setup_and_suppresses_an_area() -> void:
 	check(not mg.deployed, "moving packs the gun away")
 
 
+func test_sniper_moves_or_fires_not_both() -> void:
+	var battle := make_battle([["Sniper", 0, Vector2i(2, 5)], ["Rifleman", 0, Vector2i(0, 15)], ["Rifleman", 1, Vector2i(10, 5)], ["Rifleman", 1, Vector2i(15, 15)]])
+	var sniper := battle.units[0]
+	var target := battle.units[2]
+	target.hp = 100
+	battle.move(sniper, Vector2i(3, 5))
+	check(sniper.moved and sniper.actions > 0, "moved one step, an action left")
+	check(battle.can_shoot(sniper, target) != "", "a sniper can't fire after moving")
+	check(battle.can_overwatch(sniper) != "", "nor go on overwatch")
+	battle.end_turn()
+	battle.end_turn()
+	check(not sniper.moved, "a new turn clears it")
+	check(battle.can_shoot(sniper, target) == "", "standing still, he can fire")
+	battle.shoot(sniper, target)
+	check(battle.can_move(sniper, Vector2i(3, 6)) != "", "and can't move after firing")
+	var rifleman := battle.units[1]
+	battle.move(rifleman, Vector2i(1, 15))
+	check(battle.can_shoot(rifleman, target) == "" or not battle.can_see(rifleman, target), "other soldiers still move and fire")
+
+
 func test_reaction_fire_can_pin_a_runner() -> void:
 	var battle := make_battle([["MG", 0, Vector2i(0, 8)], ["Rifleman", 1, Vector2i(10, 8)], ["Rifleman", 1, Vector2i(15, 15)]])
 	var mg := battle.units[0]

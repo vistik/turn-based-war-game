@@ -291,7 +291,8 @@ func _best_plan(u: Unit, seen: Array[Unit]) -> Dictionary:
 		elif battle.can_defuse(u, tile) == "":
 			plans.append(_plan(u, "defuse", stay + DEFUSE_VALUE, null, tile))
 
-	var reach := battle.reachable(u)
+	# A sniper who has fired stays put.
+	var reach := {} if u.weapon.fires_standing_still() and u.fired else battle.reachable(u)
 	for tile: Vector2i in reach:
 		# Every floor of the tile within a move (on maps with height), else just the tile.
 		var levels: Dictionary = reach[tile].get("levels", {reach[tile]["level"]: reach[tile]["cost"]})
@@ -530,6 +531,9 @@ func _followup_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 	if u.weapon.needs_setup:
 		# Moving packs the gun away: the second action can only set it up again.
 		return OVERWATCH_VALUE * 0.6
+	if u.weapon.fires_standing_still():
+		# A sniper who moves can't fire (or overwatch) this turn.
+		return 0.0
 	var best := _overwatch_value(u, tile, seen)
 	var level := _level_of(u, tile)
 	for e in seen:

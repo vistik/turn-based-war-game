@@ -219,7 +219,7 @@ func _move_reasons(u: Unit, tile: Vector2i, seen: Array[Unit]) -> Array[String]:
 		var closer := Vector2(u.pos).distance_to(goal) - Vector2(tile).distance_to(goal)
 		if closer >= 1.0:
 			reasons.append("%.0f tiles closer to %s" % [closer, _goal_name(goal)])
-	elif u.actions >= 2 and battle.actions_for_cost(u, battle.reachable(u)[tile]["cost"]) == 1 and u.ammo > 0 and not u.weapon.needs_setup:
+	elif u.actions >= 2 and battle.actions_for_cost(u, battle.reachable(u)[tile]["cost"]) == 1 and u.ammo > 0 and not u.weapon.needs_setup and not u.weapon.fires_standing_still():
 		# The follow-up the AI counted on: the best shot from the new spot.
 		var best_target: Unit = null
 		var best_hit := -1

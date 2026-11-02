@@ -20,8 +20,17 @@ const WHEAT := [Color("a28c45"), Color("ad9850")]
 const WHEAT_STALKS := [Color("c9b060"), Color("d9c274"), Color("9c8640")]
 const CRATER_FLOOR := Color("3b342b")
 const CRATER_RIM := Color("6e604c")
+const TRENCH_FLOOR := Color("3a2f24")
+const TRENCH_WALL := Color("5c4a35")
+const REVETMENT := Color("6f5a3e")
+const DUCKBOARD := Color("7d6648")
+## How deep a trench is drawn, in levels, and how far its walls stand in from a tile's open sides.
+const TRENCH_DEPTH := 0.22
+const TRENCH_INSET := 0.2
 const ROCK := [Color("8a8984"), Color("7b7266")]
 const CRATE := Color("9c7442")
+const GUN_PAINT := Color("7a7352")
+const GUN_IRON := Color("2f2c27")
 const SANDBAG := Color("a99b6d")
 const HAY := Color("c7a95a")
 const WOOD := Color("7b5b37")
@@ -275,6 +284,8 @@ static func draw_tile(c: Object, proj: ViewProjection, map: TacticalMap, p: Vect
 				var color: Color = WHEAT_STALKS[i % 3]
 				c.draw_line(proj.project(at), top, color.darkened(0.2), 1.2)
 				c.draw_circle(top, 1.6, color)
+		TacticalMap.Terrain.TRENCH:
+			_draw_trench(c, proj, map, p, g)
 		TacticalMap.Terrain.CRATER:
 			c.draw_colored_polygon(tile_poly(proj, p), DRY_GROUND[0].darkened(0.1))
 			var center := g + Vector2(0.5, 0.5)
@@ -347,6 +358,8 @@ static func _draw_object_shadow(c: Object, proj: ViewProjection, map: TacticalMa
 			draw_shadow(c, proj, rect_poly(Rect2(Vector2(p), Vector2.ONE).grow(-0.06)), HESCO_HEIGHT)
 		"jersey":
 			draw_shadow(c, proj, rect_poly(Rect2(Vector2(p), Vector2.ONE).grow(-0.2)), 0.5)
+		"howitzer":
+			draw_shadow(c, proj, rect_poly(Rect2(Vector2(p) + Vector2(0.18, 0.1), Vector2(0.64, 0.8))), 0.5)
 		"tree" when _tropical():
 			c.draw_colored_polygon(ground_circle(proj, center + LIGHT * 1.6, 0.62, false), SHADOW)
 		"tree":
@@ -382,6 +395,52 @@ static func _draw_edge_shadow(c: Object, proj: ViewProjection, map: TacticalMap,
 		height = DITCH_BANK_HEIGHT
 	var thickness: float = {"hedge": 0.1, "dyke": 0.15, "mud_wall": MUD_HALF_THICKNESS, "mud_window": MUD_HALF_THICKNESS}.get(kind, WALL_HALF_THICKNESS)
 	draw_shadow(c, proj, _edge_rect(key, 0.0, 1.0, thickness), height)
+
+
+## A trench tile: an earth lip where it meets open ground, a sunken floor with duckboards running along it,
+## and plank revetment on the far walls. Where the trench runs on into the next tile the floor runs through.
+static func _draw_trench(c: Object, proj: ViewProjection, map: TacticalMap, p: Vector2i, g: Vector2) -> void:
+	var n := noise(p)
+	var open := []
+	for d: Vector2i in TacticalMap.DIRS4:
+		open.append(map.get_terrain(p + d) == TacticalMap.Terrain.TRENCH)
+	# Inner rectangle: inset on the closed sides (N, E, S, W).
+	var lo := g + Vector2(0.0 if open[3] else TRENCH_INSET, 0.0 if open[0] else TRENCH_INSET)
+	var hi := g + Vector2(1.0 if open[1] else 1.0 - TRENCH_INSET, 1.0 if open[2] else 1.0 - TRENCH_INSET)
+	var inner := rect_poly(Rect2(lo, hi - lo))
+	# Spoil heaped round the lip.
+	c.draw_colored_polygon(tile_poly(proj, p), DRY_GROUND[0].darkened(0.12).lerp(DRY_GROUND[1].darkened(0.12), n))
+	# The floor, sunk below the ground.
+	var bottom := PackedVector2Array()
+	for pt in inner:
+		bottom.append(proj.project(pt, -TRENCH_DEPTH))
+	c.draw_colored_polygon(bottom, TRENCH_FLOOR.lerp(TRENCH_FLOOR.lightened(0.08), n))
+	# Duckboards along the trench.
+	var along_x: bool = open[1] or open[3] or not (open[0] or open[2])
+	for i in 4:
+		var t := (i + 0.5) / 4.0
+		var a := Vector2(lo.x + (hi.x - lo.x) * t, lo.y + 0.06) if along_x else Vector2(lo.x + 0.06, lo.y + (hi.y - lo.y) * t)
+		var b := Vector2(a.x, hi.y - 0.06) if along_x else Vector2(hi.x - 0.06, a.y)
+		c.draw_line(proj.project(a, -TRENCH_DEPTH + 0.01), proj.project(b, -TRENCH_DEPTH + 0.01), DUCKBOARD, 2.0)
+	# Walls on the closed sides; only those facing the viewer show, the rest hide behind the lip.
+	var corners := [lo, Vector2(hi.x, lo.y), hi, Vector2(lo.x, hi.y)]
+	for side in 4:
+		if open[side]:
+			continue
+		var a: Vector2 = corners[side]
+		var b: Vector2 = corners[(side + 1) % 4]
+		var inward := -Vector2(TacticalMap.DIRS4[side])
+		var screen_normal := proj.rotate_grid(inward) - proj.rotate_grid(Vector2.ZERO)
+		var quad := PackedVector2Array([proj.project(a), proj.project(b), proj.project(b, -TRENCH_DEPTH), proj.project(a, -TRENCH_DEPTH)])
+		if proj.isometric and screen_normal.x + screen_normal.y > 0.001:
+			c.draw_colored_polygon(quad, REVETMENT.lerp(TRENCH_WALL, noise(p, side + 5)))
+			for t in [0.33, 0.66]:
+				c.draw_line(quad[0].lerp(quad[3], t), quad[1].lerp(quad[2], t), REVETMENT.darkened(0.35), 1.0)
+		elif proj.isometric:
+			# A near wall: the lip hides it, so cover the floor that shows past it.
+			var lip := PackedVector2Array([proj.project(a), proj.project(b), proj.project(b, -TRENCH_DEPTH), proj.project(a, -TRENCH_DEPTH)])
+			c.draw_colored_polygon(lip, DRY_GROUND[0].darkened(0.12))
+		c.draw_line(proj.project(a), proj.project(b), TRENCH_WALL.darkened(0.3), 1.5)
 
 
 # --- Props ---
@@ -438,6 +497,8 @@ static func _draw_object(c: Object, proj: ViewProjection, map: TacticalMap, p: V
 			_draw_hesco(c, proj, p, center, tint, alpha)
 		"jersey":
 			_draw_jersey(c, proj, p, center, tint, alpha)
+		"howitzer":
+			_draw_howitzer(c, proj, center, tint, alpha)
 		"wreck":
 			pass  # The knocked-out tank itself is drawn by the view.
 		"rock":
@@ -1193,6 +1254,50 @@ static func _draw_hesco(c: Object, proj: ViewProjection, p: Vector2i, center: Ve
 		top.append(proj.project(pt, HESCO_HEIGHT - 0.03))
 	c.draw_colored_polygon(top, Color(color.darkened(0.12), alpha))
 	c.draw_line(proj.project(Vector2(rect.get_center().x, rect.position.y), HESCO_HEIGHT), proj.project(Vector2(rect.get_center().x, rect.end.y), HESCO_HEIGHT), mesh, 1.6)
+
+
+## A field howitzer pointing north: barrel, shield, two spoked wheels and the split trail. The parts are drawn
+## far to near, so the order flips when the view is turned to look down the barrel.
+static func _draw_howitzer(c: Object, proj: ViewProjection, center: Vector2, tint: float, alpha: float) -> void:
+	var paint := GUN_PAINT.darkened(tint)
+	var iron := Color(GUN_IRON.darkened(tint), alpha)
+	var barrel := func() -> void:
+		prism(c, proj, rect_poly(Rect2(center + Vector2(-0.045, -0.5), Vector2(0.09, 0.62))), 0.34, 0.42, paint.darkened(0.08), alpha)
+		prism(c, proj, rect_poly(Rect2(center + Vector2(-0.07, -0.16), Vector2(0.14, 0.3))), 0.26, 0.36, paint.darkened(0.15), alpha)
+		c.draw_circle(proj.project(center + Vector2(0, -0.5), 0.38), 2.0, Color(0.05, 0.05, 0.04, alpha))
+	var shield := func() -> void:
+		var faces := prism(c, proj, rect_poly(Rect2(center + Vector2(-0.3, -0.06), Vector2(0.6, 0.04))), 0.12, 0.56, paint, alpha)
+		for q: Array in faces:
+			c.draw_line(_on_face(q, 0.0, 0.92), _on_face(q, 1.0, 0.92), Color(paint.darkened(0.35), alpha), 1.0)
+			c.draw_line(_on_face(q, 0.5, 0.0), _on_face(q, 0.5, 0.55), Color(paint.darkened(0.3), alpha), 1.0)
+		prism(c, proj, rect_poly(Rect2(center + Vector2(-0.06, -0.02), Vector2(0.12, 0.14))), 0.3, 0.44, paint.darkened(0.2), alpha)
+	var wheels := func() -> void:
+		for side in [-0.33, 0.33]:
+			var hub := center + Vector2(side, 0.02)
+			var rim := PackedVector2Array()
+			for i in 14:
+				var a := TAU * i / 14.0
+				rim.append(proj.project(hub + Vector2(0, cos(a) * 0.2), 0.2 + sin(a) * 0.2))
+			c.draw_colored_polygon(rim, iron)
+			rim.append(rim[0])
+			c.draw_polyline(rim, Color(paint.darkened(0.5), alpha), 1.5)
+			for i in 4:
+				var a := TAU * i / 8.0
+				c.draw_line(proj.project(hub + Vector2(0, cos(a) * 0.17), 0.2 + sin(a) * 0.17),
+						proj.project(hub - Vector2(0, cos(a) * 0.17), 0.2 - sin(a) * 0.17), Color(paint.darkened(0.25), alpha), 1.0)
+			c.draw_circle(proj.project(hub, 0.2), 2.0, Color(paint.lightened(0.1), alpha))
+	var trail := func() -> void:
+		for side in [-1.0, 1.0]:
+			var from := center + Vector2(0.06 * side, 0.08)
+			var to := center + Vector2(0.3 * side, 0.46)
+			c.draw_line(proj.project(from, 0.24), proj.project(to, 0.04), Color(paint.darkened(0.1), alpha), 3.0)
+			c.draw_line(proj.project(to + Vector2(-0.05, 0), 0.0), proj.project(to + Vector2(0.05, 0), 0.0), iron, 2.5)
+	var parts := [barrel, shield, wheels, trail]
+	# Looking down the barrel: the muzzle is nearest the viewer, so it goes last.
+	if proj.project(center + Vector2(0, -0.5)).y > proj.project(center + Vector2(0, 0.4)).y:
+		parts.reverse()
+	for part: Callable in parts:
+		part.call()
 
 
 ## A concrete jersey barrier: a wide foot and a tall narrow top.

@@ -120,6 +120,11 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   - **Wheat:** trampled flat when soldiers walk through it (crawling leaves it standing), so it stops hiding
     anyone.
   - **Barbed wire:** slow going on foot; tanks and explosions flatten it.
+  - **Trenches:** dug below the ground. Full cover against fire from outside, but none along the trench, so
+    fire down the trench line from its end catches everyone in it. A little slow to walk (1.5), and it costs
+    1 more to climb in or out. From a trench you see along it and only 3 tiles past its edge, and nobody
+    further out sees in (except from a level or more higher up), so a trench line is fought at close quarters.
+    Blasts don't fill them in. Paint them in the map editor.
 - Units are easy to tell apart:
   - a badge over each one shows its role as an icon (star for the officer, red cross for the medic, crosshair
     for the sniper, and so on);
@@ -168,6 +173,10 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   - Win a map to take its points; a draw splits them. Most points wins.
   - Some maps are missions (see Missions above) rather than a fight for points.
 - **Skirmish** on the hand-made Normandy village, a random map, or your own scenarios.
+  - Bundled historical scenario **Brecourt Manor** (D-Day, 6 June 1944): Lt. Winters and eleven men of Easy
+    Company against four German 105mm guns dug in along a hedgerow, linked by a trench, with MG nests and
+    the manor behind them. A demolition mission: blow all four guns in 15 rounds. Lt. Speirs brings men of
+    D Company up the lane in round 5; the manor garrison comes out in round 3.
   - Random maps come in several kinds per theatre, picked by name, in three sizes (standard 44x44, large
     64x64, huge 84x84 with bigger forces):
     - Normandy: bocage crossroads, hedgerow hamlets, a shelled market town, a forest edge.

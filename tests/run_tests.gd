@@ -208,6 +208,24 @@ func test_village_scenario_builds_the_village() -> void:
 	var ci := BalanceSim.wilson(5, 10)
 	check(ci[0] < 0.5 and ci[1] > 0.5 and ci[0] > 0.2, "confidence interval around 50%")
 
+
+func test_brecourt_scenario_is_a_demolition_of_four_guns() -> void:
+	var scenario := Scenario.load_file("res://scenarios/brecourt.json")
+	check(scenario != null, "bundled Brecourt scenario loads: %s" % Scenario.last_error)
+	if scenario == null:
+		return
+	check(scenario.validate().is_empty(), "Brecourt scenario is valid: %s" % scenario.validate())
+	var battle := scenario.build_battle(3)
+	check_eq(battle.mission_type(), Mission.DEMOLITION, "a demolition mission")
+	check_eq(battle.mission_attacker(), 0, "the Allies attack")
+	var targets: Array = battle.mission["targets"]
+	check_eq([targets.size(), battle.mission["needed"]], [4, 4], "all four guns must be blown")
+	for t: Dictionary in targets:
+		check_eq(battle.map.get_object_kind(t["tile"]), "howitzer", "%s is a gun" % t["name"])
+	check(battle.alive_units().any(func(u: Unit) -> bool: return u.name == "Lt. Winters" and u.team == 0), "Winters leads Easy Company")
+	check(battle.map.has_height(), "the manor has an upper floor")
+	check(Scenario.list_files().any(func(f: Dictionary) -> bool: return f["path"] == "res://scenarios/brecourt.json"), "Brecourt is listed")
+
 # --- Movement and terrain ---
 
 func test_path_costs() -> void:

@@ -2090,6 +2090,9 @@ func _describe_tile(p: Vector2i) -> String:
 			lines.append("Hides anyone in it beyond 3 tiles; sight goes no further than one tile of jungle")
 		TacticalMap.Terrain.PADDY:
 			lines.append("Flooded: slow on foot, bogs vehicles down, no cover")
+		TacticalMap.Terrain.TRENCH:
+			lines.append("Full cover from outside, none along the trench; +%s to climb in or out" % str(TacticalMap.TRENCH_CLIMB_COST))
+			lines.append("Sight from it reaches %d tiles past its edge, and only from there can anyone see in" % TacticalMap.TRENCH_SIGHT)
 	for objective in battle.objectives:
 		if (Vector2(p) + Vector2(0.5, 0.5)).distance_to(objective["center"]) <= objective["radius"]:
 			lines.append("Objective: %s" % objective["name"])

@@ -113,15 +113,9 @@ func _reasons(u: Unit, plan: Dictionary, seen: Array[Unit]) -> Array[String]:
 				reasons.append("flanked (%d%% crit)" % odds["crit"])
 			elif odds["cover"] != Cover.NONE:
 				reasons.append("target in %s cover" % Cover.NAMES[odds["cover"]].to_lower())
-			var outcome := _expected_damage(u, u.pos, target, target.pos)
-			if outcome[1] >= 0.05:
-				reasons.append("%d%% kill chance" % roundi(outcome[1] * 100.0))
-			if target.overwatch:
-				reasons.append("breaks his overwatch")
+			# No kill chance or overwatch: the player can't see an enemy's health or status, so neither does advice.
 		"suppress":
 			reasons.append("no damage, but keeps %s suppressed through their turn" % target.name)
-			if target.overwatch:
-				reasons.append("breaks his overwatch")
 		"stance":
 			var stance: int = plan["stance"]
 			if stance == Unit.Stance.STAND:

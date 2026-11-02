@@ -52,8 +52,9 @@ const INDIRECT_DEFAULTS := {
 	"scatter": 0.08, "scatter_flat": 0.0,
 	## Shell kinds it can fire, in the order the UI offers them: "he", "smoke", "napalm".
 	"kinds": ["he", "smoke"],
-	## Must not have moved this turn (a mortar being set up), and who must see the target: "team" or "self".
-	"still": true, "spotter": "team",
+	## Must not have moved this turn (a mortar being set up), and who must see the target: "team", "self", or
+	## "none" (indirect fire at any tile in range, scattering further where nobody sees it: Battle.BLIND_SCATTER).
+	"still": true, "spotter": "none",
 }
 
 var id := ""

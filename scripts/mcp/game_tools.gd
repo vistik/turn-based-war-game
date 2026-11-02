@@ -2,8 +2,8 @@ class_name McpGameTools
 extends RefCounted
 ## The agent link's tools: what an outside agent may ask the game, answered as JSON-friendly data.
 ## Everything is seen from the player's side and respects the fog of war: enemies appear only while the
-## team can see them (plus where they were last seen), with what the screen shows of them (HP, suppression,
-## status), never their ammo or kit. Hypotheticals (preview) only consider enemies in sight, and nothing
+## team can see them (plus where they were last seen), with what the screen shows of them (who and where),
+## never their health, suppression, status, ammo or kit. Hypotheticals (preview) only consider enemies in sight, and nothing
 ## rolls dice, so the agent can't learn outcomes in advance.
 ##
 ## Tiles are [x, y] arrays; x grows east, y grows south. Commands use the engine's format (Battle.execute)
@@ -76,7 +76,7 @@ const RULES := "Rules in brief: 2 actions per turn; a move within the unit's mob
 		+ "Objectives: one changes hands when only one side has soldiers inside its radius, and stays held after they leave. At the end of every round each held objective scores 1 point for its holder, " \
 		+ "even while the other side stands in it too, so to stop the enemy scoring you must take it (be the only side inside), not just contest it. " \
 		+ "Grenades and smoke need a clear line to the tile within range and can't be thrown lying down. " \
-		+ "The mortar needs both actions (it can't fire after moving), a target 5-22 tiles away that someone on your side can see, and its round lands at the start of your NEXT turn, with some scatter; enemy strikes show in get_state as incoming_mortar_strikes, so move out of their radius. " \
+		+ "The mortar needs both actions (it can't fire after moving), a target 5-22 tiles away (it fires blind too: a tile nobody on your side can see scatters 1.5x as far), and its round lands at the start of your NEXT turn, with some scatter; enemy strikes show in get_state as incoming_mortar_strikes, so move out of their radius. " \
 		+ "A medkit treats an adjacent ally or the unit carrying it. Hunkering needs cover. A machine gun must set up (1 action) before it can shoot or overwatch, and moving packs it up again. " \
 		+ "Enemies out of sight may be on overwatch: moving across open ground in front of unscouted positions draws fire. Small arms can't hurt tanks; tanks take more damage from the side and rear. " \
 		+ "Vietnam: the Viet Cong move between their tunnel entrances (tunnel: both actions, from one of your entrances to another) and sappers lay punji traps next to them (trap); " \
@@ -281,10 +281,10 @@ func _own_unit(u: Unit) -> Dictionary:
 	return data
 
 
-## What the screen shows of an enemy: no ammo, no kit.
+## What the screen shows of an enemy: who and where, never health, suppression, status, ammo or kit.
 func _enemy_unit(e: Unit) -> Dictionary:
-	var data := {"id": e.id, "name": e.name, "role": e.role, "weapon": e.weapon.name, "pos": _tile(e.pos), "hp": e.hp, "max_hp": e.max_hp,
-			"suppression": e.suppression, "status": _status(e), "cover_here": _cover_sides(e.pos)}
+	var data := {"id": e.id, "name": e.name, "role": e.role, "weapon": e.weapon.name, "pos": _tile(e.pos), "vehicle": e.vehicle,
+			"cover_here": _cover_sides(e.pos)}
 	if e.vehicle:
 		data["facing"] = _tile(e.facing)
 	return data
@@ -820,8 +820,10 @@ func _event_line(e: Dictionary, side: int) -> String:
 				var chance := "" if e["result"] == "suppressing" else " (%d%%)" % e["chance"]
 				return "%s%s shot at %s: %s%s." % [what, _who(shooter), _who(target), e["result"], chance]
 		"damage":
-			if visible:
+			if mine:
 				return "%s took %d damage, %d HP left." % [_who(u), e["amount"], e["hp"]]
+			if visible:
+				return "%s was hit." % _who(u)
 		"death":
 			return "%s was %s." % [_who(u), "knocked out" if u.vehicle else "killed"]
 		"suppression":
@@ -829,7 +831,7 @@ func _event_line(e: Dictionary, side: int) -> String:
 			if mine and e["state"] in ["suppressed", "pinned"] and e["state"] != was:
 				return "%s is %s (suppression %d)." % [_who(u), e["state"], e["value"]]
 		"status":
-			if visible:
+			if mine:
 				return "%s: %s." % [_who(u), e["text"]]
 		"throw":
 			if mine or visible:

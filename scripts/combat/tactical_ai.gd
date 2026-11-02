@@ -201,7 +201,7 @@ func _best_plan(u: Unit, seen: Array[Unit]) -> Dictionary:
 		var spec := u.indirect
 		for tile in _tiles_around(seen):
 			if battle.can_fire_mortar(u, tile, "he") == "":
-				var value := _blast_value(tile, spec["radius"] + Battle.mortar_scatter(u.pos, tile, spec) * 0.5,
+				var value := _blast_value(tile, spec["radius"] + battle.firing_scatter(u, tile) * 0.5,
 						spec["damage"][0], spec["damage"][1], 0, seen)
 				if value > 0.0:
 					plans.append(_plan(u, "mortar", stay + value * MORTAR_CERTAINTY - MORTAR_COST, null, tile))

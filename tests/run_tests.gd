@@ -430,14 +430,18 @@ func test_grenade_destroys_cover_and_leaves_a_crater() -> void:
 	check(not suppressed.is_empty() or not target.is_alive(), "blast suppresses")
 
 
-func test_mortar_needs_a_spotter_and_lands_next_turn() -> void:
+func test_mortar_fires_blind_and_lands_next_turn() -> void:
 	var battle := make_battle([["Mortar", 0, Vector2i(0, 8)], ["Rifleman", 0, Vector2i(10, 8)], ["Rifleman", 1, Vector2i(15, 8)], ["Rifleman", 1, Vector2i(15, 0)]], Vector2i(24, 16))
 	var mortar := battle.units[0]
 	check(battle.can_fire_mortar(mortar, Vector2i(2, 8), "he") != "", "minimum range")
 	check(battle.can_fire_mortar(mortar, Vector2i(15, 8), "he") == "", "spotted target in range")
+	var observed := battle.firing_scatter(mortar, Vector2i(15, 8))
 	for y in battle.map.height:
 		battle.map.set_edge(Vector2i(11, y), Vector2i(12, y), Cover.FULL)
-	check(battle.can_fire_mortar(mortar, Vector2i(15, 8), "he") != "", "nobody can see behind the wall")
+	check(not battle.is_spotted(0, Vector2i(15, 8)), "nobody can see behind the wall")
+	check(battle.can_fire_mortar(mortar, Vector2i(15, 8), "he") == "", "indirect fire at an unseen tile")
+	check(is_equal_approx(battle.firing_scatter(mortar, Vector2i(15, 8)), observed * Battle.BLIND_SCATTER), "unobserved fire scatters further")
+	check(battle.can_fire_mortar(mortar, Vector2i(23, 8), "he") != "", "still out of range")
 	for y in battle.map.height:
 		battle.map.set_edge(Vector2i(11, y), Vector2i(12, y), Cover.NONE)
 	var moved := make_battle([["Mortar", 0, Vector2i(0, 8)], ["Rifleman", 0, Vector2i(0, 9)], ["Rifleman", 1, Vector2i(15, 8)]], Vector2i(24, 16))

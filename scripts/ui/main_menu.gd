@@ -95,6 +95,7 @@ func _ready() -> void:
 ## with that mode's options.
 func _show_main() -> void:
 	Music.menu_theatre = _theatre_id
+	UITheme.use_theatre(_theatre_id)
 	var box := _new_page(480)
 	var theatre := _theatre()
 	_title(box, theatre.title, 48)
@@ -687,6 +688,7 @@ func _watch_replay(data: Dictionary, path: String) -> void:
 func _show_campaign() -> void:
 	var campaign := GameSession.campaign
 	var theatre := campaign.theatre()
+	UITheme.use_theatre(theatre.id)
 	var ours := theatre.team_color(0)
 	var theirs := theatre.team_color(1)
 	var box := _new_page(860)
@@ -851,6 +853,7 @@ func _new_war(map_count: int, vs_ai: bool) -> void:
 
 func _show_war() -> void:
 	var war := GameSession.war
+	UITheme.use_theatre(war.theatre().id)
 	# The AI writes its orders on its own, without seeing the other side's.
 	if not war.is_over():
 		for side in 2:

@@ -1,7 +1,7 @@
 class_name UITheme
 extends RefCounted
 ## The game's look: olive drab canvas panels, khaki buttons, paper fields and tooltips, typewriter text and
-## stencil-style headings, all built in code. `apply()` merges it into Godot's default theme once, so every
+## stencil-style headings, all built in code. Each theatre has its own colour scheme (use_theatre). `apply()` merges it into Godot's default theme once, so every
 ## Control in every scene (CanvasLayers and popups included) picks it up without setting `theme` anywhere.
 ##
 ## Fonts are system fonts with fallbacks (a stencil or condensed face for headings, a typewriter face for text),
@@ -9,18 +9,36 @@ extends RefCounted
 ## TopBar (the slim strip along the top of the battle screen), HelpLabel (small muted text).
 
 const INK := Color("15160f")
-const OLIVE_DARK := Color("23261a")
-const OLIVE := Color("343926")
-const OLIVE_LIGHT := Color("4a5134")
-const OLIVE_HIGHLIGHT := Color("5d6641")
-const KHAKI := Color("c8b884")
-const KHAKI_LIGHT := Color("ddcf9e")
-const KHAKI_DARK := Color("8c7f55")
 const PAPER := Color("e9e1c8")
 const PAPER_DIM := Color("b3ab90")
 const PAPER_FIELD := Color("ddd3b0")
 const TEXT_DARK := Color("27240f")
 const STAMP_RED := Color("b5462f")
+
+## A colour scheme per theatre, so it's plain at a glance which war is picked: the panels (the "olive" shades) and
+## the accent (the "khaki" shades: headings, primary buttons, rims), plus the menu backdrop.
+const PALETTES := {
+	# Normandy 1944: olive drab canvas and khaki.
+	"normandy": {"olive_dark": "23261a", "olive": "343926", "olive_light": "4a5134", "olive_highlight": "5d6641",
+		"khaki": "c8b884", "khaki_light": "ddcf9e", "khaki_dark": "8c7f55", "backdrop": "1b1d14"},
+	# Vietnam 1967: deep jungle green and bamboo amber.
+	"vietnam": {"olive_dark": "112520", "olive": "193630", "olive_light": "245047", "olive_highlight": "306658",
+		"khaki": "e2a443", "khaki_light": "f2c47a", "khaki_dark": "9c6c27", "backdrop": "0c1a16"},
+	# Iraq 2004: dusty slate and desert sand.
+	"modern": {"olive_dark": "22272f", "olive": "313843", "olive_light": "46505e", "olive_highlight": "5a6676",
+		"khaki": "e0c38c", "khaki_light": "efdcb4", "khaki_dark": "9e8559", "backdrop": "181b21"},
+}
+
+## The current scheme's colours (Normandy until use_theatre picks another).
+static var OLIVE_DARK := Color("23261a")
+static var OLIVE := Color("343926")
+static var OLIVE_LIGHT := Color("4a5134")
+static var OLIVE_HIGHLIGHT := Color("5d6641")
+static var KHAKI := Color("c8b884")
+static var KHAKI_LIGHT := Color("ddcf9e")
+static var KHAKI_DARK := Color("8c7f55")
+static var BACKDROP := Color("1b1d14")
+static var _theatre_id := "normandy"
 
 const STENCIL_FONTS := ["Stencil", "Stencil Std", "DIN Condensed", "Impact", "Arial Narrow", "sans-serif"]
 const BUTTON_FONTS := ["DIN Condensed", "Avenir Next Condensed", "Arial Narrow", "Impact", "sans-serif"]
@@ -36,6 +54,45 @@ static func apply() -> void:
 		return
 	_applied = true
 	ThemeDB.get_default_theme().merge_with(get_theme())
+
+
+## Switches to the theatre's colour scheme and restyles every Control already on screen. Unknown theatres get
+## Normandy's.
+static func use_theatre(theatre_id: String) -> void:
+	var id := theatre_id if PALETTES.has(theatre_id) else "normandy"
+	if id == _theatre_id and _applied:
+		return
+	_theatre_id = id
+	var p: Dictionary = PALETTES[id]
+	OLIVE_DARK = Color(p["olive_dark"])
+	OLIVE = Color(p["olive"])
+	OLIVE_LIGHT = Color(p["olive_light"])
+	OLIVE_HIGHLIGHT = Color(p["olive_highlight"])
+	KHAKI = Color(p["khaki"])
+	KHAKI_LIGHT = Color(p["khaki_light"])
+	KHAKI_DARK = Color(p["khaki_dark"])
+	BACKDROP = Color(p["backdrop"])
+	_theme = _build()
+	_applied = true
+	ThemeDB.get_default_theme().merge_with(_theme)
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree != null and tree.root != null:
+		_restyle(tree.root)
+
+
+## The theatre whose colour scheme is in use.
+static func theatre_id() -> String:
+	return _theatre_id
+
+
+static func _restyle(node: Node) -> void:
+	if node is Control:
+		node.notification(Control.NOTIFICATION_THEME_CHANGED)
+		(node as Control).queue_redraw()
+	elif node is Window:
+		node.notification(Window.NOTIFICATION_THEME_CHANGED)
+	for child in node.get_children(true):
+		_restyle(child)
 
 
 static func get_theme() -> Theme:
@@ -243,7 +300,7 @@ static func _build() -> Theme:
 ## Draws the menu backdrop on a full-screen Control: dark olive with a faint map grid and a vignette.
 static func draw_backdrop(c: Control) -> void:
 	var size := c.size
-	c.draw_rect(Rect2(Vector2.ZERO, size), Color("1b1d14"))
+	c.draw_rect(Rect2(Vector2.ZERO, size), BACKDROP)
 	var step := 40.0
 	var lines := 0
 	var x := fmod(size.x * 0.5, step)

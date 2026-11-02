@@ -13,6 +13,8 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 **Theatres**
 - Pick the war on the main menu; every way to play (campaign, two-player campaign, skirmish, online, the map
   editor) then starts in it. Saves, replays, scenarios and online games remember their theatre.
+- Each theatre has its own colour scheme for menus and the battle screen, so it's plain which one is picked:
+  olive and khaki for Normandy, jungle green and bamboo amber for Vietnam, slate and desert sand for Iraq 2004.
 - The engine (movement, shooting, cover, suppression, AI, online, replays) is shared. Each theatre brings its own
   sides, units, weapons, uniforms and vehicles, maps, campaign and a few rules of its own
   (`scripts/theatres/`).
@@ -58,6 +60,9 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 - Fog of war hides what the enemy does out of sight: no turning, stance changes, reloading, healing or damage
   shown for units you can't see, only what you'd notice from afar (a mortar firing, smoke rising, a mine
   going off).
+- Enemies show only who and where they are: their side and role. Never their health, suppression, wounds or
+  status (overwatch, MG set up, hunkered); a hit on one just says HIT. The agent link and move suggestions
+  follow the same rule.
 - Overwatch holds its fire for targets it can't hurt, such as rifles and machine guns against a tank.
 - The selected soldier's field of fire: an outline round everything it can see, green where its gun is at its
   best and a red tint where the range is poor (filled in while aiming).
@@ -70,7 +75,8 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   - Officer, Rifleman, SMG and Sniper
   - Medic, with medkits
   - MG, which has to be set up before firing
-  - Mortar, whose delayed, scattering shells can be high explosive or smoke
+  - Mortar, whose delayed, scattering shells can be high explosive or smoke. It is indirect fire: it can shell
+    any tile in range, even one nobody can see, though unobserved rounds scatter 1.5 times as far
   - AT with Bazooka or Panzerschreck
   - Sherman and Panzer IV tanks
 - Tanks have front, side and rear armour. They turn slowly (each 45° costs movement), can back up, and can
@@ -167,7 +173,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 | U / J / K | Vietnam: go through the tunnels / lay a punji trap. Iraq 2004: plant an IED / K set one off |
 | 1 on drums / an oil tank | In shoot mode, click fuel drums or an oil tank to blow them up |
 | H / Shift+H | Suggest a move / suggest for the selected soldier |
-| Tab / Enter | Next soldier / end turn |
+| Tab / Enter | Next soldier / end turn (the camera centres on each newly selected soldier) |
 | WASD, arrows, middle drag | Pan |
 | Wheel / F | Zoom / focus the selected soldier |
 | Q / E / V | Rotate the view / switch isometric and top-down |

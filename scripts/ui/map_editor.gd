@@ -133,6 +133,7 @@ func _open(scenario: Scenario, path: String) -> void:
 	edited = scenario
 	edited_path = path
 	TerrainPainter.use_theatre(scenario.theatre_id)
+	UITheme.use_theatre(scenario.theatre_id)
 	_selected_unit = -1
 	_selected_objective = -1
 	_wave = clampi(_wave, 0, maxi(0, _s.reinforcements.size() - 1))

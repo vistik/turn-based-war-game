@@ -172,6 +172,7 @@ func _ready() -> void:
 		GameSession.start_battle(NormandyScenario.build(), [false, true], "Normandy village")
 	battle = GameSession.battle
 	TerrainPainter.use_theatre(battle.theatre_id)
+	UITheme.use_theatre(battle.theatre_id)
 	_proj = ViewProjection.new(Vector2(battle.map.width, battle.map.height))
 	z_index = TOP_Z
 	for cy in ceili(battle.map.height / float(CHUNK)):
@@ -621,10 +622,12 @@ func _dismiss_overlay() -> void:
 	_select(_next_ready_unit(null), true)
 
 
+## Selects a soldier; the camera centres on it whenever the selection changes to another one (or `focus` asks).
 func _select(u: Unit, focus := false) -> void:
+	var changed := u != selected
 	selected = u
 	mode = Mode.MOVE
-	if focus and u != null:
+	if (focus or changed) and u != null:
 		_focus(_display_pos[u.id])
 	_refresh()
 
@@ -727,6 +730,13 @@ func _on_turn_agreed(turn_index: int, checksum: String) -> void:
 ## A side's UI accent colour (Allied green, German field grey...).
 func _team_color(team: int) -> Color:
 	return battle.theatre().team_color(team)
+
+
+## Whether the screen may show this unit's health, suppression and status: always for the viewing side's own
+## units, never for the enemy's (only who and where they are), all of them when the whole map is shown.
+func _knows(u: Unit) -> bool:
+	var team := _view_team()
+	return team == -1 or u.team == team
 
 
 func _view_team() -> int:
@@ -857,7 +867,10 @@ func _run(events: Array) -> void:
 	if _turn_started and battle.winner == -1 and _is_human_turn():
 		_save()
 	elif selected == null or battle.can_act(selected) != "":
+		var previous := selected
 		selected = _next_ready_unit(selected)
+		if selected != null and selected != previous:
+			_focus(_display_pos[selected.id])
 	_turn_started = false
 	mode = Mode.MOVE
 	_refresh()
@@ -910,7 +923,7 @@ func _play_event(e: Dictionary) -> void:
 			var text := "-%d" % e["amount"]
 			if e["absorbed"] > 0:
 				text += " (armor %d)" % e["absorbed"]
-			_float(_display_pos[u.id], text, Color("ff7b6b"))
+			_float(_display_pos[u.id], text if _knows(u) else "HIT", Color("ff7b6b"))
 			await _wait(0.4)
 		"death":
 			var u := battle.get_unit(e["unit"])
@@ -933,7 +946,9 @@ func _play_event(e: Dictionary) -> void:
 			_display_suppression[u.id] = e["value"]
 			var was_pinned: bool = e["previous"] >= Unit.PINNED_AT
 			var was_suppressed: bool = e["previous"] >= Unit.SUPPRESSED_AT
-			if e["state"] == "pinned" and not was_pinned:
+			if not _knows(u):
+				pass
+			elif e["state"] == "pinned" and not was_pinned:
 				_float(_display_pos[u.id], "PINNED DOWN", Color("ff5544"))
 				_log_line("%s is pinned down." % u.name)
 				await _wait(0.3)
@@ -1019,14 +1034,20 @@ func _play_event(e: Dictionary) -> void:
 			await _wait(0.35)
 		"status":
 			var u := battle.get_unit(e["unit"])
-			_float(_display_pos[u.id], e["text"], Color("ffd34d"))
-			_log_line("%s: %s" % [u.name, e["text"]])
-			await _wait(0.3)
+			# An enemy's state stays hidden; a round bouncing off its armour is what the shooter sees.
+			if _knows(u) or e["text"] == "Bounced off the armour":
+				_float(_display_pos[u.id], e["text"], Color("ffd34d"))
+				_log_line("%s: %s" % [u.name, e["text"]])
+				await _wait(0.3)
 		"heal":
 			var u := battle.get_unit(e["unit"])
 			_display_hp[u.id] = e["hp"]
-			_float(_display_pos[u.id], "+%d HP" % e["amount"], Color("6bff8a"))
-			_log_line("%s is patched up (+%d HP)." % [u.name, e["amount"]])
+			if _knows(u):
+				_float(_display_pos[u.id], "+%d HP" % e["amount"], Color("6bff8a"))
+				_log_line("%s is patched up (+%d HP)." % [u.name, e["amount"]])
+			else:
+				_float(_display_pos[u.id], "Treated", Color("6bff8a"))
+				_log_line("%s is patched up." % u.name)
 			await _wait(0.4)
 		"objective":
 			var objective: Dictionary = battle.objectives[e["index"]]
@@ -1590,8 +1611,8 @@ func _describe_unit(u: Unit) -> String:
 		Mode.SMOKE:
 			lines.append("[color=#c8d0d8]Smoke: click a tile in range. Right click cancels.[/color]")
 		Mode.MORTAR:
-			lines.append("[color=#ffb84d]%s (%s): click a %s tile. Press 0 to switch rounds.[/color]" % [String(selected.indirect["name"]).capitalize(),
-					Battle.KIND_NAMES.get(_mortar_kind, _mortar_kind), "visible" if selected.indirect["spotter"] == "self" else "spotted"])
+			lines.append("[color=#ffb84d]%s (%s): click a%s tile in range. Press 0 to switch rounds.[/color]" % [String(selected.indirect["name"]).capitalize(),
+					Battle.KIND_NAMES.get(_mortar_kind, _mortar_kind), {"self": " visible", "team": " spotted"}.get(selected.indirect["spotter"], "")])
 		Mode.MEDKIT:
 			lines.append("[color=#6bff8a]Medkit: click yourself or an adjacent ally. Right click cancels.[/color]")
 		Mode.PIVOT:
@@ -1628,9 +1649,12 @@ func _update_target_info() -> void:
 				text += _error_line(battle.can_throw_smoke(selected, hover))
 			Mode.MORTAR:
 				var spec := selected.indirect
+				var spotted := battle.is_spotted(selected.team, hover)
+				var needs: String = {"self": "Needs to see the target himself.", "team": "Needs a soldier who can see the target."}.get(spec["spotter"],
+						"Observed: a soldier sees the target." if spotted else "Unobserved: nobody sees the target, so it scatters %.1fx as far." % Battle.BLIND_SCATTER)
 				text = "[b]%s, %s[/b]  range %d-%d\nLands at the start of your next turn, up to %.1f tiles off target.\n%s" % [
 					String(spec["name"]).capitalize(), Battle.KIND_NAMES.get(_mortar_kind, _mortar_kind), spec["min"], spec["max"],
-					Battle.mortar_scatter(selected.pos, hover, spec), "Needs to see the target himself." if spec["spotter"] == "self" else "Needs a soldier who can see the target."]
+					battle.firing_scatter(selected, hover), needs]
 				text += _error_line(battle.can_fire_mortar(selected, hover, _mortar_kind))
 			Mode.PIVOT:
 				text = "[b]Turn on the spot[/b]  1 action\nArmour: front %d, side %d, rear %d.\nOn the move, every 45° turned costs %.0f movement; backing up costs double." % [
@@ -1646,9 +1670,18 @@ func _error_line(err: String) -> String:
 	return "" if err == "" else "\n[color=#ff6b6b]%s[/color]" % err
 
 
+## The hit chance (or suppression added) over a unit while choosing a target.
+func _draw_target_odds(u: Unit, top: Vector2) -> void:
+	if mode == Mode.SHOOT and _target_odds.has(u.id) and (GameSettings.show_hit_chance or _shot_cmd == "suppress"):
+		var odds_text := ("+%d" if _shot_cmd == "suppress" else "%d%%") % _target_odds[u.id]
+		draw_string_outline(_font, top + Vector2(-30, -18), odds_text, HORIZONTAL_ALIGNMENT_CENTER, 60, 15, 4, Color(0, 0, 0, 0.8))
+		draw_string(_font, top + Vector2(-30, -18), odds_text, HORIZONTAL_ALIGNMENT_CENTER, 60, 15, Color.WHITE)
+
+
 func _describe_suppression(shooter: Unit, target: Unit) -> String:
 	var lines := PackedStringArray()
-	lines.append("[b]Suppressive fire on %s[/b] (%s)  suppression %d" % [target.name, target.def.get("name", target.role), target.suppression])
+	lines.append("[b]Suppressive fire on %s[/b] (%s)%s" % [target.name, target.def.get("name", target.role),
+			"  suppression %d" % target.suppression if _knows(target) else ""])
 	lines.append("[color=#ffb84d]+%d suppression[/color], +%d to anyone within %.1f tiles of them" % [
 		roundi(shooter.weapon.suppression * CombatRules.SUPPRESSIVE_FIRE_FACTOR), shooter.weapon.suppression, CombatRules.SUPPRESSIVE_FIRE_RADIUS])
 	lines.append("No damage, but they don't recover from it at the start of their next turn.")
@@ -1659,7 +1692,8 @@ func _describe_suppression(shooter: Unit, target: Unit) -> String:
 func _describe_odds(shooter: Unit, target: Unit) -> String:
 	var odds := battle.shot_odds(shooter, target, false, mode == Mode.SHOOT and _shot_cmd == "aimed_shot")
 	var lines := PackedStringArray()
-	lines.append("[b]Target: %s[/b] (%s)  HP %d/%d" % [target.name, target.def.get("name", target.role), target.hp, target.max_hp])
+	lines.append("[b]Target: %s[/b] (%s)%s" % [target.name, target.def.get("name", target.role),
+			"  HP %d/%d" % [target.hp, target.max_hp] if _knows(target) else ""])
 	if GameSettings.show_hit_chance:
 		lines.append("[color=#8fff9b]Hit %d%%[/color]   Graze %d%%   Crit %d%%   Suppression +%d" % [odds["hit"], odds["graze"], odds["crit"], shooter.weapon.suppression])
 		for m: Array in odds["modifiers"]:
@@ -1674,7 +1708,7 @@ func _describe_odds(shooter: Unit, target: Unit) -> String:
 		lines.append("[color=#ffb84d]No cover from this angle: +%d crit[/color]" % CombatRules.FLANK_CRIT_BONUS)
 	if shooter.weapon.blast_radius > 0.0:
 		lines.append("High explosive: blasts cover and anyone next to the target")
-	if target.overwatch:
+	if target.overwatch and _knows(target):
 		lines.append("[color=#ffd34d]On overwatch[/color]")
 	if CombatRules.misses_stray(shooter.weapon):
 		if shooter.weapon.needs_setup:
@@ -2353,7 +2387,7 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 		Mode.MORTAR:
 			if battle.can_fire_mortar(selected, hover, _mortar_kind) == "":
 				var he := _mortar_kind != "smoke"
-				var radius: float = (selected.indirect["radius"] if he else CombatRules.SMOKE_RADIUS) + Battle.mortar_scatter(selected.pos, hover, selected.indirect)
+				var radius: float = (selected.indirect["radius"] if he else CombatRules.SMOKE_RADIUS) + battle.firing_scatter(selected, hover)
 				var color := Color(1, 0.45, 0.15, 0.3) if he else Color(0.8, 0.85, 0.9, 0.3)
 				c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, _center(hover), radius, false), color)
 				c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(hover), radius), Color(color, 0.9), 2.0)
@@ -2494,6 +2528,12 @@ func _draw_markers() -> void:
 		var top := _proj.project(_display_pos[u.id], 1.1 if u.vehicle else 1.15) + Vector2(0, -14)
 		if not view.has_point(top):
 			continue
+		if not _knows(u):
+			# An enemy: which side and what it is, nothing about its health or state.
+			draw_rect(Rect2(top + Vector2(-14, 8), Vector2(28, 2)), _team_color(u.team))
+			RoleIcons.draw_badge(self, top + Vector2(-24, 4), RoleIcons.icon_of(u), _team_color(u.team))
+			_draw_target_odds(u, top)
+			continue
 		draw_rect(Rect2(top + Vector2(-14, -1), Vector2(28, 9)), Color(0, 0, 0, 0.65))
 		if u.max_hp > 10:
 			draw_rect(Rect2(top + Vector2(-13, 0), Vector2(26, 3)), Color("3a3a3a"))
@@ -2528,10 +2568,7 @@ func _draw_markers() -> void:
 			var tag_color := Color("ff7060") if suppression >= Unit.SUPPRESSED_AT or u.is_wounded() else Color("ffd34d")
 			draw_string_outline(_font, top + Vector2(-60, -5), " ".join(tags), HORIZONTAL_ALIGNMENT_CENTER, 120, 10, 3, Color(0, 0, 0, 0.7))
 			draw_string(_font, top + Vector2(-60, -5), " ".join(tags), HORIZONTAL_ALIGNMENT_CENTER, 120, 10, tag_color)
-		if mode == Mode.SHOOT and _target_odds.has(u.id) and (GameSettings.show_hit_chance or _shot_cmd == "suppress"):
-			var odds_text := ("+%d" if _shot_cmd == "suppress" else "%d%%") % _target_odds[u.id]
-			draw_string_outline(_font, top + Vector2(-30, -18), odds_text, HORIZONTAL_ALIGNMENT_CENTER, 60, 15, 4, Color(0, 0, 0, 0.8))
-			draw_string(_font, top + Vector2(-30, -18), odds_text, HORIZONTAL_ALIGNMENT_CENTER, 60, 15, Color.WHITE)
+		_draw_target_odds(u, top)
 	if busy or selected == null or not battle.map.in_bounds(hover) or mode != Mode.MOVE or not _reach.has(hover) or hover == selected.pos:
 		return
 	# Cover shields on each side of the move destination, and how many seen enemies would have it in the open.

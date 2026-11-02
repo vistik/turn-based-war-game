@@ -17,6 +17,8 @@ signal executed(command: Dictionary)
 
 const TEAM_COUNT := 2
 ## What each kind of shell is called in messages.
+## Indirect fire at a tile nobody on the side can see scatters this many times as far.
+const BLIND_SCATTER := 1.5
 const KIND_NAMES := {"he": "high explosive", "smoke": "smoke", "napalm": "napalm"}
 ## `winner` value when the game ends level.
 const DRAW := 2
@@ -212,6 +214,21 @@ func officer_near(u: Unit) -> bool:
 ## How far off target a shell from this indirect-fire spec (Unit.indirect), fired from origin at target, may land.
 static func mortar_scatter(origin: Vector2i, target: Vector2i, spec: Dictionary) -> float:
 	return Vector2(origin).distance_to(Vector2(target)) * float(spec["scatter"]) + float(spec["scatter_flat"])
+
+
+## How far off `tile` a round fired by `u` may land: unobserved fire (nobody on the side sees the tile) scatters
+## BLIND_SCATTER times as far.
+func firing_scatter(u: Unit, tile: Vector2i) -> float:
+	var scatter := mortar_scatter(u.pos, tile, u.indirect)
+	return scatter if is_spotted(u.team, tile) else scatter * BLIND_SCATTER
+
+
+## Whether anyone on the team can see the tile (an indirect-fire target is then observed).
+func is_spotted(team: int, tile: Vector2i) -> bool:
+	for u in alive_units(team):
+		if visible_from(u.pos, u.current_sight()).has(tile):
+			return true
+	return false
 
 
 ## The indirect-fire spec of whoever fired a strike (see `strikes`).
@@ -647,7 +664,7 @@ func can_fire_mortar(u: Unit, tile: Vector2i, kind: String) -> String:
 	if spec["spotter"] == "self":
 		if not visible_from(u.pos, u.current_sight()).has(tile):
 			return "Can't see that tile"
-	elif not team_visible_tiles(u.team).has(tile):
+	elif spec["spotter"] == "team" and not team_visible_tiles(u.team).has(tile):
 		return "Nobody can spot that tile"
 	return ""
 
@@ -986,7 +1003,7 @@ func fire_mortar(u: Unit, tile: Vector2i, kind: String) -> Array:
 		u.mortar_rounds -= 1
 	else:
 		u.mortar_smoke -= 1
-	strikes.append({"team": u.team, "unit": u.id, "target": tile, "kind": kind, "scatter": mortar_scatter(u.pos, tile, u.indirect)})
+	strikes.append({"team": u.team, "unit": u.id, "target": tile, "kind": kind, "scatter": firing_scatter(u, tile)})
 	var events: Array = [{"type": "mortar_fire", "unit": u.id, "target": tile, "kind": kind}]
 	events.append_array(_after_action())
 	return events

@@ -261,8 +261,8 @@ Godot --path . --editor        # open in the Godot editor
 **macOS and Windows builds, and GitHub releases:**
 
 ```sh
-tools/release.sh --build-only   # build/Normandy 1944.app, build/windows/Normandy 1944.exe and both zips in build/release/
-tools/release.sh --draft        # build, then create a draft GitHub release v<version> with both zips
+tools/release.sh --build-only   # build/Normandy 1944.app, build/windows/Normandy 1944.exe, the macOS .dmg and Windows .zip in build/release/
+tools/release.sh --draft        # build, then create a draft GitHub release v<version> with the .dmg and .zip
 tools/release.sh                # build, then publish the release
 ```
 

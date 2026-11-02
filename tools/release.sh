@@ -2,7 +2,7 @@
 # Builds Normandy 1944 for macOS and Windows and publishes them as a GitHub release.
 #
 #   tools/release.sh               build both, then create release v<version> on GitHub
-#   tools/release.sh --build-only  build both zips into build/release/, publish nothing
+#   tools/release.sh --build-only  build the macOS disk image and Windows zip into build/release/, publish nothing
 #   tools/release.sh --draft       create the release as a draft, to look over before publishing
 #
 # The version comes from application/config/version in project.godot; bump it there (and commit) before
@@ -86,7 +86,7 @@ fi
 OUT="build/release"
 rm -rf "$OUT" "build/Normandy 1944.app" "build/windows"
 mkdir -p "$OUT" "build/windows"
-MAC_ZIP="$OUT/Normandy-1944-$TAG-macos.zip"
+MAC_DMG="$OUT/Normandy-1944-$TAG-macos.dmg"
 WIN_ZIP="$OUT/Normandy-1944-$TAG-windows.zip"
 
 export_preset() {
@@ -101,13 +101,18 @@ export_preset() {
 export_preset "macOS" "build/Normandy 1944.app"
 # Ad-hoc signature so Apple silicon runs it; it isn't notarized, so the first launch needs right-click > Open.
 codesign --force --deep -s - "build/Normandy 1944.app"
-ditto -c -k --keepParent "build/Normandy 1944.app" "$MAC_ZIP"
+# A disk image with the app and a shortcut to Applications to drag it onto.
+dmg_root="$(mktemp -d)"
+ditto "build/Normandy 1944.app" "$dmg_root/Normandy 1944.app"
+ln -s /Applications "$dmg_root/Applications"
+hdiutil create -quiet -volname "Normandy 1944" -srcfolder "$dmg_root" -fs HFS+ -format UDZO -ov "$MAC_DMG"
+rm -rf "$dmg_root"
 
 export_preset "Windows Desktop" "build/windows/Normandy 1944.exe"
 (cd build/windows && zip -q -r "../../$WIN_ZIP" "Normandy 1944.exe")
 
 echo "Built:"
-ls -lh "$MAC_ZIP" "$WIN_ZIP" | awk '{print "  " $5 "  " $NF}'
+ls -lh "$MAC_DMG" "$WIN_ZIP" | awk '{print "  " $5 "  " $NF}'
 
 if (( BUILD_ONLY )); then
 	exit 0
@@ -118,13 +123,13 @@ fi
 NOTES="$(cat <<EOF
 ## Download
 
-- **macOS** (Apple silicon and Intel, macOS 11+): \`$(basename "$MAC_ZIP")\`. Unzip and open *Normandy 1944*. It isn't notarized, so the first time right-click the app and choose **Open**.
+- **macOS** (Apple silicon and Intel, macOS 11+): \`$(basename "$MAC_DMG")\`. Open the disk image and drag *Normandy 1944* into Applications. It isn't notarized, so the first time right-click the app and choose **Open**.
 - **Windows** (64-bit): \`$(basename "$WIN_ZIP")\`. Unzip and run *Normandy 1944.exe*. It isn't signed, so SmartScreen may warn: choose **More info**, then **Run anyway**.
 EOF
 )"
 
 echo "Creating release $TAG on GitHub..."
-gh release create "$TAG" "$MAC_ZIP" "$WIN_ZIP" \
+gh release create "$TAG" "$MAC_DMG" "$WIN_ZIP" \
 	--target "$COMMIT" \
 	--title "Normandy 1944 $TAG" \
 	--notes "$NOTES" \

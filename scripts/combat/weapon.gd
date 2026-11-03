@@ -45,7 +45,8 @@ func range_modifier(distance: float) -> int:
 
 ## A weapon from its data (see the theatres): {"name", "kind", "damage": [min, max], "crit", "crit_damage", "clip",
 ## "suppression", "range": [modifier per tile...], and optionally "setup", "anti_tank", "blast"}.
-## Sniper rifles fire only from where the soldier stands: he can move or fire in a turn, not both.
+## Sniper rifles fire only from where the soldier stands, with both actions: he can move or fire in a turn,
+## not both, and a reload (their clip is one round) takes the turn's other shot away.
 func fires_standing_still() -> bool:
 	return kind == "sniper"
 

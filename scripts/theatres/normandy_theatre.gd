@@ -29,8 +29,8 @@ const WEAPONS := {
 		{"name": "MG 42", "kind": "mg", "damage": [4, 6], "crit": 5, "crit_damage": 2, "clip": 5, "suppression": 55, "range": MG_RANGE, "setup": true},
 	],
 	"sniper": [
-		{"name": "M1903 Springfield", "kind": "sniper", "damage": [5, 7], "crit": 25, "crit_damage": 3, "clip": 4, "suppression": 10, "range": SNIPER_RANGE},
-		{"name": "Kar98k ZF", "kind": "sniper", "damage": [5, 7], "crit": 25, "crit_damage": 3, "clip": 4, "suppression": 10, "range": SNIPER_RANGE},
+		{"name": "M1903 Springfield", "kind": "sniper", "damage": [5, 7], "crit": 25, "crit_damage": 3, "clip": 1, "suppression": 10, "range": SNIPER_RANGE},
+		{"name": "Kar98k ZF", "kind": "sniper", "damage": [5, 7], "crit": 25, "crit_damage": 3, "clip": 1, "suppression": 10, "range": SNIPER_RANGE},
 	],
 	"carbine": [
 		{"name": "M1 Carbine", "kind": "carbine", "damage": [2, 4], "crit": 8, "crit_damage": 2, "clip": 6, "suppression": 12, "range": CARBINE_RANGE},
@@ -150,7 +150,7 @@ static func _roles(side: int) -> Dictionary:
 		"Medic": Theatre.role({"name": "Medic", "hp": 6, "aim": 55, "medkits": 3, "smoke": 1, "weapon": w.call("carbine"), "range": 6.0,
 			"cost": 4, "note": "Heals and treats wounds"}),
 		"Sniper": Theatre.role({"name": "Sniper", "hp": 6, "aim": 75, "mobility": 6.0, "sight": 24.0, "weapon": w.call("sniper"),
-			"range": 12.0, "holds_back": true, "cost": 6, "note": "Long sight, best at range; moves or fires, not both"}),
+			"range": 12.0, "holds_back": true, "cost": 6, "note": "Long sight, best at range; firing takes the whole turn, then a reload"}),
 		"Mortar": Theatre.role({"name": "Mortar", "hp": 6, "aim": 55, "mobility": 6.0, "mortar_rounds": 4, "mortar_smoke": 2,
 			"weapon": w.call("carbine"), "indirect": {"name": "mortar"}, "range": 14.0, "holds_back": true, "cost": 5,
 			"note": "Indirect fire over cover"}),

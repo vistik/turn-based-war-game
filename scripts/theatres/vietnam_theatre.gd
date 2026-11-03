@@ -17,7 +17,7 @@ const WEAPONS := {
 	## The grenadier's M79 fires buckshot at close quarters; its grenades are lobbed (long throw range).
 	"m79": {"name": "M79 (buckshot)", "kind": "launcher", "damage": [2, 5], "crit": 5, "crit_damage": 2, "clip": 1, "suppression": 20,
 		"range": [0, 30, 20, 10, 0, -10, -25, -40]},
-	"m21": {"name": "M21", "kind": "sniper", "damage": [5, 7], "crit": 25, "crit_damage": 3, "clip": 5, "suppression": 10, "range": SNIPER_RANGE},
+	"m21": {"name": "M21", "kind": "sniper", "damage": [5, 7], "crit": 25, "crit_damage": 3, "clip": 1, "suppression": 10, "range": SNIPER_RANGE},
 	"m2": {"name": "M2 .50 cal", "kind": "mg", "damage": [4, 6], "crit": 10, "crit_damage": 2, "clip": 10, "suppression": 55, "range": MG_RANGE},
 	"ak47": {"name": "AK-47", "kind": "assault", "damage": [3, 5], "crit": 10, "crit_damage": 2, "clip": 8, "suppression": 25, "range": AK_RANGE},
 	"sks": {"name": "SKS", "kind": "rifle", "damage": [3, 4], "crit": 10, "crit_damage": 2, "clip": 6, "suppression": 15,
@@ -129,7 +129,7 @@ static func _us_roles() -> Dictionary:
 			"indirect": ARTILLERY, "range": 8.0, "holds_back": true, "cost": 9,
 			"note": "Radio: calls artillery or napalm on what he sees", "kit": "RTO", "icon": "RTO"}),
 		"Sniper": Theatre.role({"name": "Sniper", "hp": 7, "aim": 75, "mobility": 6.0, "sight": 22.0, "weapon": WEAPONS["m21"], "range": 12.0,
-			"holds_back": true, "cost": 7, "note": "Long sight, best at range; moves or fires, not both"}),
+			"holds_back": true, "cost": 7, "note": "Long sight, best at range; firing takes the whole turn, then a reload"}),
 		"M113": Theatre.role({"name": "M113", "vehicle": true, "hull_armor": APC_ARMOR, "hp": 14, "aim": 60, "sight": 15.0, "mobility": 7.0,
 			"weapon": WEAPONS["m2"], "range": 8.0, "cost": 14, "note": "Armoured carrier with a .50 cal", "model": "m113", "icon": "APC"}),
 	}

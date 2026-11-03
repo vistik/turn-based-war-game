@@ -583,6 +583,8 @@ func can_fire(u: Unit) -> String:
 		return "Set up the machine gun first"
 	if u.weapon.fires_standing_still() and u.moved:
 		return "A sniper can't fire after moving this turn"
+	if u.weapon.fires_standing_still() and u.actions < Unit.ACTIONS_PER_TURN:
+		return "A sniper needs both actions to fire"
 	if u.weapon.kind == "at" and u.stance == Unit.Stance.PRONE:
 		return "Can't fire a rocket lying down"
 	return ""
@@ -603,7 +605,7 @@ func can_suppress(u: Unit, target: Unit) -> String:
 	var err := can_fire(u)
 	if err != "":
 		return err
-	if u.weapon.anti_tank:
+	if u.weapon.anti_tank or u.weapon.fires_standing_still():
 		return "This weapon can't lay down suppressive fire"
 	if u.ammo < CombatRules.SUPPRESSIVE_FIRE_AMMO:
 		return "Needs %d rounds, reload first" % CombatRules.SUPPRESSIVE_FIRE_AMMO

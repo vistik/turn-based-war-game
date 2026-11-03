@@ -56,7 +56,8 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 - Soldiers see 18 tiles (snipers further) and rifles stay accurate to about 9-10, so a unit can shoot about as
   far as it can run.
 - Snipers move or fire in a turn, not both: after moving they can't shoot or go on overwatch, and after firing
-  they can't move until their next turn.
+  they can't move until their next turn. Firing takes both actions and a sniper holds one round, so after every
+  shot he must reload, and can't reload and fire in the same turn.
 - Directional half and full cover, flanking and line of sight that steps out around corners. Fog of war,
   overwatch, and destructible cover with craters.
 - Fog of war hides what the enemy does out of sight: no turning, stance changes, reloading, healing or damage

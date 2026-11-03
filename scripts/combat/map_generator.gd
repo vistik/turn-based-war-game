@@ -35,7 +35,7 @@ static func is_playable(layout: Dictionary) -> bool:
 
 
 ## [hills per 1600 tiles, hill height, chance a house has upper floors, most storeys] per style.
-const HEIGHTS := {"bocage": [2.5, 2, 0.4, 2], "hamlets": [3.0, 2, 0.3, 2], "town": [0.0, 0, 0.6, 3], "forest": [3.0, 3, 0.2, 2]}
+const HEIGHTS := {"bocage": [1.5, 2, 0.4, 2], "hamlets": [2.0, 2, 0.3, 2], "town": [0.0, 0, 0.6, 3], "forest": [2.0, 2, 0.2, 2]}
 
 
 static func _build(nm: NaturalMap, style: String) -> Dictionary:
@@ -44,6 +44,15 @@ static func _build(nm: NaturalMap, style: String) -> Dictionary:
 	nm.hill_height = heights[1]
 	nm.tall_chance = heights[2]
 	nm.tall_max = heights[3]
+	# Keep each part of the map one thing: hills are open knolls, without field boundaries over them, and few
+	# have a cliff side.
+	nm.scarp_chance = 0.25
+	nm.clear_hill_edges = true
+	# Hedgerows in long straight runs with proper gateways, not chunks and stubs.
+	nm.slanted_fields = false
+	nm.gateways = true
+	nm.shortest_run = 3
+	nm.simple_boundaries = true
 	match style:
 		"hamlets":
 			_hamlets(nm)
@@ -132,8 +141,8 @@ static func _farm(nm: NaturalMap, at: Vector2i, landmark_name: String) -> bool:
 	return true
 
 
-## The bocage: hedged fields of wheat, pasture and orchard, with a few stone-walled ones; copses where the
-## ground is wildest.
+## The bocage: hedged fields of wheat, pasture and orchard, with a few stone-walled ones and some left open;
+## copses where the ground is wildest.
 static func _countryside(nm: NaturalMap, spacing: float, woods_share: float) -> void:
 	nm.woods(woods_share, -1, ["tree"], 0.45)
 	var fields := nm.patchwork(spacing, func(tiles: Array) -> Dictionary:
@@ -148,9 +157,9 @@ static func _countryside(nm: NaturalMap, spacing: float, woods_share: float) -> 
 		else:
 			nm.dot(tiles, nm.rng.randi_range(0, 2), Cover.HALF, "hay")
 		var edge := nm.rng.randf()
-		if edge < 0.72:
+		if edge < 0.55:
 			return {"edge": "hedge", "cover": Cover.FULL, "gaps": 0}
-		if edge < 0.86:
+		if edge < 0.7:
 			return {"edge": "stone", "cover": Cover.HALF, "gaps": 0}
 		return {"edge": "", "cover": Cover.NONE, "gaps": 0})
 	_field_landmarks(nm, fields)
@@ -194,7 +203,7 @@ static func _bocage(nm: NaturalMap) -> void:
 			if _farm(nm, spot, farm_name):
 				away.append(spot)
 				break
-	_countryside(nm, 8.5, 0.1)
+	_countryside(nm, 11.0, 0.1)
 	_clutter(nm, scale)
 
 
@@ -218,7 +227,7 @@ static func _hamlets(nm: NaturalMap) -> void:
 			break
 	if not nm.junctions.is_empty():
 		nm.landmark("Crossroads", nm.junctions[0])
-	_countryside(nm, 6.5, 0.08)
+	_countryside(nm, 9.0, 0.08)
 	_clutter(nm, scale)
 
 
@@ -309,22 +318,24 @@ static func _forest(nm: NaturalMap) -> void:
 			break
 	if not nm.junctions.is_empty():
 		nm.landmark("Crossroads", nm.junctions[0])
-	nm.woods(0.45, TacticalMap.Terrain.ROUGH, ["tree", "tree", "tree", "rock"], 0.6)
-	var fields := nm.patchwork(9.0, func(tiles: Array) -> Dictionary:
+	nm.woods(0.45, TacticalMap.Terrain.ROUGH, ["tree"], 0.45)
+	var fields := nm.patchwork(12.0, func(tiles: Array) -> Dictionary:
 		if nm.rng.randf() < 0.5:
 			nm.plant(tiles, TacticalMap.Terrain.WHEAT)
 		else:
 			nm.dot(tiles, nm.rng.randi_range(0, 2), Cover.HALF, "hay")
-		return {"edge": "hedge" if nm.rng.randf() < 0.6 else "fence", "cover": Cover.FULL, "gaps": 0})
+		if nm.rng.randf() < 0.45:
+			return {"edge": "hedge", "cover": Cover.FULL, "gaps": 0}
+		return {"edge": "", "cover": Cover.NONE, "gaps": 0})
 	_field_landmarks(nm, fields)
 	_clutter(nm, scale * 0.7)
 
 
 ## Shell craters, rocks and lone trees, sandbags and crates.
 static func _clutter(nm: NaturalMap, scale: float) -> void:
-	nm.patches(int(nm.rng.randi_range(4, 7) * scale), TacticalMap.Terrain.CRATER)
-	nm.scatter(int(nm.rng.randi_range(2, 4) * scale), Cover.FULL, ["rock", "tree"])
-	nm.scatter(int(nm.rng.randi_range(2, 4) * scale), Cover.HALF, ["sandbags", "crate"])
+	nm.patches(int(nm.rng.randi_range(2, 4) * scale), TacticalMap.Terrain.CRATER)
+	nm.scatter(int(nm.rng.randi_range(1, 2) * scale), Cover.FULL, ["rock", "tree"])
+	nm.scatter(int(nm.rng.randi_range(1, 2) * scale), Cover.HALF, ["sandbags", "crate"])
 
 
 ## Fuel drums and (on bigger maps) an oil tank that explode, a hidden minefield or two, barbed wire across the

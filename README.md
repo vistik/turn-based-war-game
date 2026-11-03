@@ -71,6 +71,9 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 - The selected soldier's field of fire: an outline round everything it can see, green where its gun is at its
   best and a red tint where the range is poor (filled in while aiming).
 - Moving shows the cover at the destination, and "EXPOSED TO 2" if seen enemies would have it in the open.
+- Hold the right mouse button while moving to see how many seen enemies the soldier could shoot at from the
+  hovered destination ("3 TARGETS" in place of "EXPOSED TO", the targets ringed in red; "NO SHOT LEFT" if the move would leave no action to fire).
+  Only enemies already in sight count, so it never reveals anyone hidden.
 - Soldiers fall away from what killed them (thrown back by blasts), drop their weapon, and bleed out slowly;
   tanks brew up, their turret blown off its ring.
 - Suppression and pinning, wounds that slow soldiers for two turns, panic when friends die, and an officer
@@ -236,6 +239,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 |---|---|
 | Left click | Select a soldier, move, pick a target |
 | Right click / Esc | Cancel |
+| Hold right click (moving) | Count and ring the seen enemies the soldier could target from the hovered tile |
 | 1 – 0 | Shoot, overwatch, hunker, reload, grenade, smoke, set up MG, rally, medkit, mortar |
 | Action bar | Bottom right: every action the soldier has as an icon with its key in the corner and what's left (grenades, smoke, medkits, ammo); hover for its name |
 | T | Turn a tank on the spot |

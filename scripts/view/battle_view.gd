@@ -16,7 +16,7 @@ const DrawLayer := preload("res://scripts/view/draw_layer.gd")
 const PANEL_WIDTH := 280.0
 const TOP_BAR_HEIGHT := 50.0
 ## Controls listed by the "?" button in the top bar.
-const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nTab next unit   Enter end turn\n1-0, T, C, Z, X, B, G, U, J, K: actions (see buttons)\nH: suggest a move (Shift+H: this soldier)\nWASD / arrows / middle drag: pan\nWheel: cursor height in tall buildings (zoom on flat maps)\nCtrl/Cmd + wheel or pinch: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\nPage Up / Down or wheel: cursor up / down a floor\n+ / -: playback speed   M: music on / off"
+const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nHold right click while moving: targets from there\nTab next unit   Enter end turn\n1-0, T, C, Z, X, B, G, U, J, K: actions (see buttons)\nH: suggest a move (Shift+H: this soldier)\nWASD / arrows / middle drag: pan\nWheel: cursor height in tall buildings (zoom on flat maps)\nCtrl/Cmd + wheel or pinch: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\nPage Up / Down or wheel: cursor up / down a floor\n+ / -: playback speed   M: music on / off"
 const NEUTRAL_COLOR := Color("e8e2cf")
 ## The selected unit's ring and the chevron over its head.
 const SELECTION_COLOR := Color("ffd34d")
@@ -129,6 +129,11 @@ var _visible_tiles := {}
 var _seen_units := {}
 var _target_odds := {}
 var _flankers: Array[Unit] = []
+## While the right button is held in move mode: the seen enemies the selected unit could see from the hovered
+## destination, and whether it would have an action left to fire after getting there.
+var _peeking := false
+var _peek_targets: Array[Unit] = []
+var _peek_can_fire := false
 ## The selected unit's field of fire: every tile it can see, keyed to how its gun does there
 ## (1 = at its best, 0 = fair, -1 = poor range).
 var _gun_view := {}
@@ -331,6 +336,10 @@ func _process(delta: float) -> void:
 		_overlay_layer.queue_redraw()
 	if not busy and _overlay_state == "":
 		_set_hover(_mouse_tile())
+	var peeking := Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) and selected != null and mode == Mode.MOVE
+	if peeking != _peeking:
+		_peeking = peeking
+		_update_peek_targets()
 	for item in _floaters + _effects:
 		item["age"] += delta
 	_floaters = _floaters.filter(func(f: Dictionary) -> bool: return f["age"] < f["life"])
@@ -760,6 +769,7 @@ func _set_hover(tile: Vector2i) -> void:
 	hover = tile
 	_open(_building_of.get(tile, -1))
 	_flankers = _compute_flankers()
+	_update_peek_targets()
 	_update_target_info()
 	# The move range and field of fire don't change with the hover; only the markings on top do.
 	_overlay_layer.queue_redraw()
@@ -906,6 +916,7 @@ func _set_cursor_level(level: int) -> void:
 		_buttons["floors"].text = "Cursor: ground" if level == 0 else "Cursor: floor %d" % level
 	_redraw_building(_open_building)
 	_redraw_overlay()
+	_update_peek_targets()
 	_update_target_info()
 
 
@@ -1798,6 +1809,7 @@ func _refresh() -> void:
 			else:
 				_target_odds[e.id] = battle.shot_odds(selected, e, false, _shot_cmd == "aimed_shot")["hit"]
 	_flankers = _compute_flankers()
+	_update_peek_targets()
 	_gun_view.clear()
 	if can_act or (selected != null and not busy and selected.team == view):
 		for p: Vector2i in battle.visible_from(selected.pos, selected.current_sight()):
@@ -1823,6 +1835,28 @@ func _compute_flankers() -> Array[Unit]:
 				and LineOfSight.can_see(battle.map, e.pos, hover, e.sight):
 			result.append(e)
 	return result
+
+
+## The enemies the selected unit's side already sees that it would also see from the hovered destination
+## (right button held). Enemies out of sight now are never counted, so the preview leaks nothing.
+func _update_peek_targets() -> void:
+	var targets: Array[Unit] = []
+	_peek_can_fire = false
+	var dest_level := _dest_level(hover) if battle.map.in_bounds(hover) else 0
+	if _peeking and mode == Mode.MOVE and selected != null and _reach.has(hover) and hover != selected.pos:
+		var cost := Pathfinder.cost_to(_reach, hover, dest_level)
+		if cost != INF:
+			_peek_can_fire = selected.actions > battle.actions_for_cost(selected, cost) \
+					and not selected.weapon.fires_standing_still() and not selected.weapon.needs_setup and selected.ammo > 0
+			# Only enemies the side already sees from where it stands now: the preview never reveals anyone new.
+			for e in battle.enemies_of(selected):
+				if _seen_units.has(e.id) and battle.team_sees(selected.team, e) and not Battle.hidden_at(battle.map, hover, e, e.pos, e.level) \
+						and LineOfSight.can_see(battle.map, hover, e.pos, selected.current_sight(), true, dest_level, e.level,
+							Battle.eye_stance(selected), Battle.eye_stance(e)):
+					targets.append(e)
+	if targets != _peek_targets:
+		_peek_targets = targets
+		_overlay_layer.queue_redraw()
 
 
 func _update_panel() -> void:
@@ -2828,6 +2862,9 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 				_proj.lift = 0.0
 				if selected.vehicle:
 					_draw_heading(c, hover, _reach[hover]["facing"], color)
+				var ring := Color("ff6a50") if _peek_can_fire else Color(1, 0.42, 0.31, 0.5)
+				for e in _peek_targets:
+					c.draw_polyline(_ground_circle(_display_pos[e.id], 0.45), ring, 2.5)
 		Mode.PIVOT:
 			if hover != selected.pos:
 				_draw_heading(c, selected.pos, _pivot_dir(hover), Color("ffd34d"))
@@ -3216,14 +3253,21 @@ func _draw_markers() -> void:
 		if c != Cover.NONE:
 			_draw_shield(_proj.project(center + Vector2(d) * 0.36, 0.5 + lift), c == Cover.FULL)
 	var notes := PackedStringArray()
+	var color := DASH_COLOR
 	if not _move_tiles.has(hover):
 		notes.append("DASH")
-	if not _flankers.is_empty():
+	if _peeking:
+		# Right button held: how many seen enemies it could shoot at from there, in place of the exposure.
+		var count := _peek_targets.size()
+		notes.append("%d TARGET%s" % [count, "" if count == 1 else "S"] + (" (NO SHOT LEFT)" if count > 0 and not _peek_can_fire else ""))
+		color = Color("ff6a50") if count > 0 and _peek_can_fire else NEUTRAL_COLOR
+	elif not _flankers.is_empty():
 		notes.append("EXPOSED TO %d" % _flankers.size())
+		color = Color("ff8a7a")
 	if not notes.is_empty():
-		var at := _proj.project(center, lift) + Vector2(-60, 20)
-		draw_string_outline(_font, at, "  ".join(notes), HORIZONTAL_ALIGNMENT_CENTER, 120, 12, 3, Color(0, 0, 0, 0.7))
-		draw_string(_font, at, "  ".join(notes), HORIZONTAL_ALIGNMENT_CENTER, 120, 12, Color("ff8a7a") if not _flankers.is_empty() else DASH_COLOR)
+		var at := _proj.project(center, lift) + Vector2(-100, 20)
+		draw_string_outline(_font, at, "  ".join(notes), HORIZONTAL_ALIGNMENT_CENTER, 200, 12, 3, Color(0, 0, 0, 0.7))
+		draw_string(_font, at, "  ".join(notes), HORIZONTAL_ALIGNMENT_CENTER, 200, 12, color)
 
 
 func _draw_shield(at: Vector2, full: bool) -> void:

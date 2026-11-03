@@ -320,9 +320,6 @@ func test_hit_chance() -> void:
 	var range_mod := shooter.weapon.range_modifier(4.0)
 	check_eq(range_mod, 8, "the Garand at 4 tiles (its table stretched by Weapon.RANGE_SCALE)")
 	check_eq(battle.shot_odds(shooter, target)["hit"], 65 + range_mod - 20, "aim + range - half cover")
-	target.hunkered = true
-	check_eq(battle.shot_odds(shooter, target)["hit"], 65 + range_mod - 40, "hunkering doubles cover")
-	target.hunkered = false
 	shooter.suppression = Unit.SUPPRESSED_AT
 	check_eq(battle.shot_odds(shooter, target)["hit"], 65 + range_mod - 20 - CombatRules.SUPPRESSED_AIM_PENALTY, "suppressed shooters aim worse")
 	shooter.suppression = 0
@@ -398,19 +395,19 @@ func test_officer_death_shakes_the_squad() -> void:
 	check(battle.units[1].suppression >= CombatRules.OFFICER_DEATH_SUPPRESSION, "squad is shaken")
 
 
-func test_machine_gun_needs_setup_and_suppresses_an_area() -> void:
+func test_machine_gun_moves_or_fires_and_suppresses_an_area() -> void:
 	var battle := make_battle([["MG", 0, Vector2i(2, 5)], ["Rifleman", 0, Vector2i(0, 15)], ["Rifleman", 1, Vector2i(9, 5)], ["Rifleman", 1, Vector2i(9, 6)]])
 	var mg := battle.units[0]
-	check(battle.can_shoot(mg, battle.units[2]) != "", "MG can't fire before setting up")
-	battle.set_up(mg)
-	check(battle.can_shoot(mg, battle.units[2]) == "", "set up, it can")
+	check(mg.weapon.heavy and mg.weapon.fires_standing_still(), "a heavy machine gun fires standing still")
+	check(battle.can_shoot(mg, battle.units[2]) == "", "standing still, it fires at once")
 	battle.units[2].hp = 100
 	battle.shoot(mg, battle.units[2])
 	check(battle.units[3].suppression >= mg.weapon.suppression / 2, "neighbours are suppressed too")
 	battle.end_turn()
 	battle.end_turn()
 	battle.move(mg, Vector2i(3, 5))
-	check(not mg.deployed, "moving packs the gun away")
+	check(battle.can_shoot(mg, battle.units[2]) != "", "after moving it can't fire")
+	check(battle.can_overwatch(mg) != "", "nor go on overwatch")
 
 
 func test_sniper_moves_or_fires_not_both() -> void:
@@ -436,7 +433,6 @@ func test_sniper_moves_or_fires_not_both() -> void:
 func test_reaction_fire_can_pin_a_runner() -> void:
 	var battle := make_battle([["MG", 0, Vector2i(0, 8)], ["Rifleman", 1, Vector2i(10, 8)], ["Rifleman", 1, Vector2i(15, 15)]])
 	var mg := battle.units[0]
-	mg.deployed = true
 	battle.overwatch(mg)
 	var runner := battle.units[1]
 	runner.hp = 100
@@ -623,13 +619,14 @@ func test_ai_does_not_see_through_fog() -> void:
 	check(ai._last_seen.is_empty(), "and not remembered")
 
 
-func test_ai_sets_up_its_machine_gun() -> void:
+func test_ai_machine_gun_fires_from_where_it_stands() -> void:
 	var battle := make_battle([["MG", 0, Vector2i(2, 5)], ["Rifleman", 1, Vector2i(10, 5)]])
 	var ai := TacticalAI.new(battle, 0)
 	var events := []
 	while battle.current_team == 0 and battle.winner == -1:
 		events.append_array(ai.act())
-	check(not events_of(events, "shot").is_empty() or battle.units[0].deployed, "MG sets up to fire")
+	check(not events_of(events, "shot").is_empty(), "the MG opens fire")
+	check(events_of(events, "move").is_empty(), "from where it stands")
 
 
 func test_ai_battle_finishes() -> void:
@@ -719,13 +716,31 @@ func test_tanks_pay_to_turn_and_back_up_slowly() -> void:
 	var events := battle.move(tank, Vector2i(8, 10))
 	check_eq(tank.facing, Vector2i(0, 1), "faces the way it turned")
 	check_eq(events_of(events, "move")[0]["facings"].size(), events_of(events, "move")[0]["path"].size(), "move events carry the hull's facing per step")
-	check_eq(battle.can_pivot(tank, Vector2i(0, 1)), "Already facing that way", "no turning to the same facing")
+	check(battle.can_move(tank, tank.pos, -1, Vector2i(0, 1)) != "", "no turning to the same facing")
 	var actions := tank.actions
-	battle.pivot(tank, Vector2i(-1, -1))
-	check_eq(tank.facing, Vector2i(-1, -1), "pivots on the spot")
-	check_eq(tank.actions, actions - 1, "a pivot costs an action")
+	events = battle.execute({"cmd": "move", "unit": tank.id, "tile": tank.pos, "facing": Vector2i(-1, -1)})
+	check_eq(tank.facing, Vector2i(-1, -1), "turns on the spot: a move to its own tile with a facing")
+	check_eq(events_of(events, "pivot").size(), 1, "shown as a pivot")
+	check_eq(tank.actions, actions - 1, "turning on the spot costs an action")
 	var soldier := make_battle([["Rifleman", 0, Vector2i(8, 8)], ["Rifleman", 1, Vector2i(15, 15)]])
-	check(soldier.can_pivot(soldier.units[0], Vector2i(0, 1)) != "", "only tanks pivot")
+	check(soldier.can_move(soldier.units[0], Vector2i(9, 8), -1, Vector2i(0, 1)) != "", "only tanks choose a facing")
+
+
+func test_tanks_choose_where_to_face_at_the_end_of_a_move() -> void:
+	var battle := make_battle([["Tank", 0, Vector2i(8, 8)], ["Rifleman", 1, Vector2i(15, 15)]])
+	var tank := battle.units[0]
+	tank.facing = Vector2i(1, 0)
+	var reach := battle.reachable(tank)
+	check_eq(battle.move_cost(tank, reach, Vector2i(10, 8), 0, Vector2i(-1, 0)), 2.0 + 4.0, "turning 180 degrees at the end adds 4")
+	check(battle.can_move(tank, Vector2i(9, 8), -1, Vector2i(0, 1)) == "", "within one action: it can")
+	check(battle.can_move(tank, Vector2i(9, 8), -1, Vector2i(3, 1)) != "", "facings are headings")
+	var events := battle.execute({"cmd": "move", "unit": tank.id, "tile": Vector2i(9, 8), "facing": Vector2i(0, 1)})
+	check_eq(tank.pos, Vector2i(9, 8), "drove there")
+	check_eq(tank.facing, Vector2i(0, 1), "and turned to face south")
+	check_eq(events_of(events, "pivot").size(), 1, "the turn shows as a pivot after the move")
+	check_eq(tank.actions, 1, "one action for both")
+	var big_turn := battle.move_cost(tank, battle.reachable(tank), Vector2i(9, 8 + int(tank.current_mobility()) - 1), 0, Vector2i(0, -1))
+	check(big_turn > tank.current_mobility(), "a long drive and a full turn may not fit")
 
 
 func test_commands_as_data_and_checksums() -> void:
@@ -903,7 +918,6 @@ func test_stray_machine_gun_rounds_hit_bystanders() -> void:
 		units[1].defense = 200
 		for u in units:
 			u.hp = 50
-		units[0].deployed = true
 		var battle := Battle.new(TacticalMap.new(16, 16), units, seed)
 		battle.start()
 		var shot: Dictionary = events_of(battle.shoot(units[0], units[1]), "shot")[0]
@@ -919,7 +933,6 @@ func test_stray_machine_gun_rounds_hit_bystanders() -> void:
 
 func test_odds_info_lists_the_stray_risk() -> void:
 	var battle := make_battle([["MG", 0, Vector2i(2, 8)], ["Rifleman", 1, Vector2i(9, 8)], ["Rifleman", 0, Vector2i(9, 9)]])
-	battle.units[0].deployed = true
 	battle.units[2].name = "Pvt. Friend"
 	var view: Node2D = load("res://scripts/view/battle_view.gd").new()
 	view.battle = battle
@@ -934,7 +947,6 @@ func test_odds_info_lists_the_stray_risk() -> void:
 func test_ai_weighs_friendly_fire() -> void:
 	var battle := make_battle([["MG", 0, Vector2i(2, 8)], ["Rifleman", 1, Vector2i(9, 8)], ["Rifleman", 0, Vector2i(9, 9)], ["Rifleman", 1, Vector2i(15, 2)]])
 	var mg := battle.units[0]
-	mg.deployed = true
 	var ai := TacticalAI.new(battle, 0)
 	var risky := ai._shot_value(mg, mg.pos, battle.units[1])
 	battle.units[2].pos = Vector2i(0, 15)
@@ -1264,7 +1276,7 @@ func test_settings_ignore_bad_values() -> void:
 	GameSettings.reset()
 
 
-# --- Stances, aimed shots and suppressive fire ---
+# --- Stances, steady shots and suppressive fire ---
 
 func has_modifier(odds: Dictionary, label: String) -> bool:
 	for m: Array in odds["modifiers"]:
@@ -1278,15 +1290,13 @@ func test_stances_cost_an_action_and_slow_movement() -> void:
 	var u := battle.units[0]
 	check(battle.can_change_stance(u, Unit.Stance.STAND) != "", "already standing")
 	check(battle.can_change_stance(u, 3) != "", "not a stance")
-	check(battle.can_change_stance(battle.units[1], Unit.Stance.CROUCH) != "", "tanks have no stances")
-	check(battle.can_change_stance(battle.units[2], Unit.Stance.CROUCH) != "", "not on the other side's turn")
-	var events := battle.change_stance(u, Unit.Stance.CROUCH)
+	check(battle.can_change_stance(u, 1) != "", "crouching is gone")
+	check(battle.can_change_stance(battle.units[1], Unit.Stance.PRONE) != "", "tanks have no stances")
+	check(battle.can_change_stance(battle.units[2], Unit.Stance.PRONE) != "", "not on the other side's turn")
+	var events := battle.change_stance(u, Unit.Stance.PRONE)
 	check_eq(events_of(events, "stance").size(), 1, "stance event")
-	check_eq(u.actions, 1, "crouching costs an action")
-	check_eq(u.current_mobility(), u.mobility / Unit.STANCE_MOVE_COST[Unit.Stance.CROUCH], "crouched moves cost x1.5")
-	check(battle.reachable(u).has(Vector2i(4, 0)) and not battle.reachable(u).has(Vector2i(5, 0)), "crouched: 4 tiles on one action")
-	battle.change_stance(u, Unit.Stance.PRONE)
-	check_eq(u.actions, 0, "going prone costs an action")
+	check_eq(u.actions, 1, "going prone costs an action")
+	check_eq(u.current_mobility(), u.mobility / Unit.STANCE_MOVE_COST[Unit.Stance.PRONE], "prone moves cost x3")
 	u.actions = 2
 	check(battle.reachable(u).has(Vector2i(4, 0)) and not battle.reachable(u).has(Vector2i(5, 0)), "crawling: 4 tiles on both actions")
 	check_eq(u.current_sight(), u.sight - Unit.STANCE_SIGHT[Unit.Stance.PRONE], "prone soldiers see less far")
@@ -1304,14 +1314,9 @@ func test_stance_modifiers_in_hit_chance() -> void:
 	var shooter := battle.units[0]
 	var target := battle.units[1]
 	var base: int = battle.shot_odds(shooter, target)["hit"]
-	target.stance = Unit.Stance.CROUCH
-	var odds := battle.shot_odds(shooter, target)
-	check_eq(odds["hit"], base - CombatRules.CROUCH_DEFENSE, "crouched targets are harder to hit")
-	check(has_modifier(odds, "Crouched"), "shown as its own line")
 	battle.map.set_object(Vector2i(7, 5), Cover.HALF)
-	check_eq(battle.shot_odds(shooter, target)["hit"], base - 20 - CombatRules.CROUCH_HALF_COVER_DEFENSE, "crouching behind half cover counts more")
 	target.stance = Unit.Stance.PRONE
-	odds = battle.shot_odds(shooter, target)
+	var odds := battle.shot_odds(shooter, target)
 	check_eq(odds["hit"], base - 20 - CombatRules.PRONE_DEFENSE - CombatRules.PRONE_LOW_COVER_DEFENSE, "prone behind low cover")
 	check(has_modifier(odds, "Prone behind low cover"), "prone line")
 	shooter.pos = Vector2i(8, 0)
@@ -1330,15 +1335,12 @@ func test_stance_modifiers_in_hit_chance() -> void:
 	check_eq(battle.shot_odds(shooter, target)["hit"], mini(100, close + CombatRules.PRONE_CLOSE_PENALTY), "prone up close: easy to hit")
 	target.stance = Unit.Stance.STAND
 	shooter.pos = Vector2i(0, 5)
-	shooter.stance = Unit.Stance.CROUCH
-	check_eq(battle.shot_odds(shooter, target)["hit"], base + CombatRules.CROUCH_AIM, "crouched shooters aim steadier")
 	shooter.stance = Unit.Stance.PRONE
-	check_eq(battle.shot_odds(shooter, target)["hit"], base + CombatRules.PRONE_AIM, "and prone ones")
+	check_eq(battle.shot_odds(shooter, target)["hit"], base + CombatRules.PRONE_AIM, "prone shooters aim steadier")
 	var mg := Unit.create(9, "MG", "MG", 0, Vector2i(0, 5))
 	var mg_base: int = battle.shot_odds(mg, target)["hit"]
 	mg.stance = Unit.Stance.PRONE
-	mg.deployed = true
-	check_eq(battle.shot_odds(mg, target)["hit"], mg_base + CombatRules.PRONE_MG_AIM, "a machine gun on its bipod, lying down")
+	check_eq(battle.shot_odds(mg, target)["hit"], mg_base + CombatRules.PRONE_MG_AIM, "a heavy machine gun on its bipod, lying down")
 
 
 func test_prone_soldiers_cannot_throw_or_fire_rockets() -> void:
@@ -1351,8 +1353,8 @@ func test_prone_soldiers_cannot_throw_or_fire_rockets() -> void:
 	check(battle.can_fire(battle.units[2]) != "", "no rockets lying down")
 	check(battle.can_fire_mortar(battle.units[3], Vector2i(9, 2), "he") != "", "no mortar lying down")
 	check_eq(battle.can_shoot(battle.units[0], battle.units[4]), "", "rifles fire fine")
-	battle.units[0].stance = Unit.Stance.CROUCH
-	check_eq(battle.can_throw_grenade(battle.units[0], Vector2i(6, 2)), "", "crouched soldiers can throw")
+	battle.units[0].stance = Unit.Stance.STAND
+	check_eq(battle.can_throw_grenade(battle.units[0], Vector2i(6, 2)), "", "standing soldiers can throw")
 
 
 func test_prone_in_the_wheat_hides_until_it_fires() -> void:
@@ -1383,26 +1385,32 @@ func test_prone_soldiers_recover_faster() -> void:
 	check_eq(u.suppression, 90 - CombatRules.SUPPRESSION_RECOVERY - CombatRules.PRONE_RECOVERY_BONUS, "lying flat helps")
 
 
-func test_aimed_shot_takes_both_actions() -> void:
+func test_a_shot_with_both_actions_is_steady() -> void:
 	var battle := make_battle([["Rifleman", 0, Vector2i(0, 5)], ["Rifleman", 1, Vector2i(8, 5)]])
 	var u := battle.units[0]
 	var target := battle.units[1]
 	target.hp = 100
 	var normal: int = battle.shot_odds(u, target)["hit"]
 	var odds := battle.shot_odds(u, target, false, true)
-	check_eq(odds["hit"], normal + CombatRules.AIMED_SHOT_BONUS, "aimed shots hit more often")
-	check(has_modifier(odds, "Aimed shot"), "shown as its own line")
-	u.actions = 1
-	check(battle.can_aimed_shot(u, target) != "", "needs both actions")
-	check(battle.execute({"cmd": "aimed_shot", "unit": u.id, "target": target.id}).is_empty(), "rejected as data too")
-	u.actions = 2
-	var events := battle.execute({"cmd": "aimed_shot", "unit": u.id, "target": target.id})
+	check_eq(odds["hit"], normal + CombatRules.STEADY_SHOT_BONUS, "steady shots hit more often")
+	check(has_modifier(odds, "Steady shot"), "shown as its own line")
+	check(not has_modifier(battle.shot_odds(u, target, true, true), "Steady shot"), "never for reaction fire")
+	check(battle.execute({"cmd": "aimed_shot", "unit": u.id, "target": target.id}).is_empty(), "the old aimed shot command is gone")
+	check(Battle.is_steady(u), "both actions left: steady")
+	var events := battle.execute({"cmd": "shoot", "unit": u.id, "target": target.id})
 	var shots := events_of(events, "shot")
 	check_eq(shots.size(), 1, "one shot")
-	check(shots[0].get("aimed", false), "marked as aimed")
-	check_eq(shots[0]["chance"], normal + CombatRules.AIMED_SHOT_BONUS, "rolled at the aimed chance")
+	check(shots[0].get("steady", false), "marked as steady")
+	check_eq(shots[0]["chance"], normal + CombatRules.STEADY_SHOT_BONUS, "rolled at the steady chance")
 	check_eq(u.actions, 0, "ends the turn")
-	check(u.fired, "the shooter has fired")
+	check_eq(battle.current_team, 1, "and with nobody left to act, the side's turn")
+	battle.end_turn()
+	battle.move(u, Vector2i(1, 5))
+	check(not Battle.is_steady(u), "after moving: not steady")
+	events = battle.execute({"cmd": "shoot", "unit": u.id, "target": target.id})
+	shots = events_of(events, "shot")
+	check(not shots[0].get("steady", false), "a plain shot")
+	check_eq(shots[0]["chance"], battle.shot_odds(u, target)["hit"], "rolled at the plain chance")
 
 
 func test_suppressive_fire_pins_without_damage() -> void:
@@ -1410,10 +1418,10 @@ func test_suppressive_fire_pins_without_damage() -> void:
 			["Rifleman", 1, Vector2i(8, 6)], ["Tank", 1, Vector2i(12, 12)]])
 	var mg := battle.units[0]
 	var target := battle.units[2]
-	check(battle.can_suppress(mg, target) != "", "the MG must be set up")
-	mg.deployed = true
 	check(battle.can_suppress(mg, battle.units[4]) != "", "tanks ignore suppression")
 	check(battle.can_suppress(battle.units[1], target) != "", "rockets can't suppress")
+	var rifles := make_battle([["Rifleman", 0, Vector2i(0, 5)], ["Rifleman", 1, Vector2i(8, 5)]])
+	check_eq(rifles.can_suppress(rifles.units[0], rifles.units[1]), "Only machine gunners lay down suppressive fire", "nor can riflemen")
 	mg.ammo = 1
 	check(battle.can_suppress(mg, target) != "", "needs two rounds")
 	mg.ammo = mg.weapon.clip_size
@@ -1448,6 +1456,9 @@ func test_stances_replay_and_save() -> void:
 	check_eq(copy.units[0].stance, Unit.Stance.PRONE, "stance saved")
 	check(copy.units[1].under_fire and copy.units[1].fired, "fire state saved")
 	check_eq(copy.checksum(), a.checksum(), "identical after loading")
+	var crouched := a.units[0].to_dict()
+	crouched["stance"] = 1
+	check_eq(Unit.from_dict(crouched).stance, Unit.Stance.STAND, "a save from when crouching existed loads standing")
 	var old := a.units[0].to_dict()
 	old.erase("stance")
 	old.erase("fired")
@@ -1522,7 +1533,6 @@ func test_war_campaign_deployment_and_scoring() -> void:
 	for u in battle.alive_units(0):
 		north += int(u.pos.y < size / 2)
 		check(u.pos.x < size / 2, "Allies deploy on their own half")
-		check_eq(u.stance, Unit.Stance.CROUCH, "a defensive deployment starts crouched")
 		sandbags += int(battle.map.get_object_kind(u.pos + Vector2i(1, 0)) == "sandbags")
 	check_eq(north, 5, "left flank for the Allies is north")
 	check(sandbags >= 3, "defensive soldiers start behind sandbags (%d)" % sandbags)
@@ -1600,8 +1610,7 @@ func test_skirmish_deployments() -> void:
 	var allies := battle.units.filter(func(u: Unit) -> bool: return u.team == 0)
 	var germans := battle.units.filter(func(u: Unit) -> bool: return u.team == 1)
 	check(allies.all(func(u: Unit) -> bool: return u.pos.y < 44 / 2 + 2), "Allies massed on their left (north)")
-	check(allies.all(func(u: Unit) -> bool: return u.stance == Unit.Stance.STAND), "offensive Allies stand")
-	check(germans.all(func(u: Unit) -> bool: return u.vehicle or u.stance == Unit.Stance.CROUCH), "defensive Germans crouch")
+	check(battle.units.all(func(u: Unit) -> bool: return u.stance == Unit.Stance.STAND), "everyone starts standing")
 	var sandbags := germans.filter(func(u: Unit) -> bool:
 		var front: Vector2i = u.pos + Vector2i(-1, 0)
 		return battle.map.in_bounds(front) and battle.map.get_object(front) == Cover.HALF)

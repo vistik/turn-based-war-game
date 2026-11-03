@@ -78,7 +78,6 @@ static func build_skirmish(setup: Dictionary) -> Array:
 	var prepared := Mission.prepare(theatre, layout, WarCampaign.deploy(layout, forces["rosters"], deployments), mission_setup, seed, forces["max_rounds"])
 	options["mission"] = prepared["mission"]
 	var battle := BattleFactory.create(prepared["layout"], prepared["rosters"], seed, options)
-	WarCampaign.brace(battle, deployments)
 	if Mission.type_of(mission_setup) != Mission.POINTS:
 		title += ": " + Mission.title(Mission.type_of(mission_setup))
 	return [battle, title]

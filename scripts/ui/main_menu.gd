@@ -1135,7 +1135,7 @@ func _show_orders(side: int) -> void:
 	_text(posture_row, "How", MUTED, 15)
 	var posture := OptionButton.new()
 	posture.add_item("Offensive: deploy further forward, closer to the objectives")
-	posture.add_item("Defensive: deploy back, behind sandbags, crouched")
+	posture.add_item("Defensive: deploy back, behind sandbags")
 	posture.item_selected.connect(func(i: int) -> void: _order_posture = WarCampaign.POSTURES[i])
 	posture_row.add_child(posture)
 

@@ -30,7 +30,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
     through **tunnels**: from one of their entrances to another in a turn. Their reinforcements come up out of
     the ground. Americans find entrances by walking past or seeing them used, and blow them in with G.
   - New ground: **jungle** (slow, hides anyone in it beyond 3 tiles, and sight reaches only one tile into it),
-    **rice paddies** behind low dykes (slow, bog vehicles down) and **elephant grass** (hides crouching soldiers).
+    **rice paddies** behind low dykes (slow, bog vehicles down) and **elephant grass** (hides prone soldiers).
     Maps have a hamlet of bamboo huts, a trail crossing and a landing zone cut out of the jungle.
   - The Americans score for **ground**; the Viet Cong score for **every American killed**.
 - **Iraq 2004**: Helmand's walled compounds, wheat fields and irrigation ditches, or an Iraqi town of
@@ -55,15 +55,18 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   and stance. The exact hit chance is shown, with every modifier itemised.
 - Soldiers see 18 tiles (snipers further) and rifles stay accurate to about 9-10, so a unit can shoot about as
   far as it can run.
-- Snipers move or fire in a turn, not both: after moving they can't shoot or go on overwatch, and after firing
-  they can't move until their next turn.
+- A short list of actions per soldier: move, shoot, overwatch, reload and go prone for everyone, plus what the
+  role brings (grenades, suppressive fire, rally, smoke, medkit, mortar...).
+- A soldier who shoots with both actions left (nothing else done that turn) takes a steady shot: +15 aim.
+- Snipers and heavy machine guns move or fire in a turn, not both: after moving they can't shoot or go on
+  overwatch, and after firing they can't move until their next turn.
 - Directional half and full cover, flanking and line of sight that steps out around corners. Fog of war,
   overwatch, and destructible cover with craters.
 - Fog of war hides what the enemy does out of sight: no turning, stance changes, reloading, healing or damage
   shown for units you can't see, only what you'd notice from afar (a mortar firing, smoke rising, a mine
   going off).
 - Enemies show only who and where they are: their side and role. Never their health, suppression, wounds or
-  status (overwatch, MG set up, hunkered); a hit on one just says HIT. The agent link and move suggestions
+  status (overwatch); a hit on one just says HIT. The agent link and move suggestions
   follow the same rule.
 - Overwatch holds its fire for targets it can't hurt, such as rifles and machine guns against a tank.
 - The selected unit stands out: a pulsing gold ring and glow under it and a bobbing gold arrow over its
@@ -78,17 +81,18 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 - Roles:
   - Officer, Rifleman, SMG and Sniper
   - Medic, with medkits
-  - MG, which has to be set up before firing
-  - Mortar, whose delayed, scattering shells can be high explosive or smoke. It is indirect fire: it can shell
+  - MG, the only role that lays down suppressive fire; it can't fire after moving
+  - Mortar, with delayed, scattering high explosive shells. It is indirect fire: it can shell
     any tile in range, even one nobody can see, though unobserved rounds scatter 1.5 times as far
   - AT with Bazooka or Panzerschreck
   - Sherman and Panzer IV tanks
-- Tanks have front, side and rear armour. They turn slowly (each 45° costs movement), can back up, and can
-  pivot on the spot. They flatten crates, walls, hedges and trees, and leave burning wrecks.
-- Stances, each with a trade-off:
-  - crouch: harder to hit, moves slower
-  - prone: very hard to hit at range and hidden in wheat, but crawls and is exposed up close
-- Aimed shots and suppressive fire. Grenades scatter, and missed rockets, tank shells and MG bursts can hit
+- Tanks have front, side and rear armour. They turn slowly (each 45° costs movement) and can back up. A tank's
+  move takes two clicks: where to go, then where to face when it gets there (click the destination again to
+  keep the heading); click the selected tank itself to turn it on the spot. They flatten crates, walls,
+  hedges and trees, and leave burning wrecks.
+- Going prone has a trade-off: very hard to hit at range and hidden in wheat, but crawls and is exposed up
+  close.
+- Suppressive fire from machine guns. Grenades scatter, and missed rockets, tank shells and MG bursts can hit
   someone else, friends included. The odds panel tells you who is at risk.
 - Objectives (church, crossroads, farm) score victory points every round. Reinforcement waves arrive mid-battle.
 - **Height**:
@@ -134,14 +138,14 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   - each role carries its own gear: officer's cap or striped helmet, MG ammo belt, sniper's helmet scrim,
     mortar baseplate, rocket bag;
   - the sides wear their own uniforms: Americans in khaki field jackets, canvas leggings and the round M1
-    helmet, Germans in field grey with jackboots and the flared Stahlhelm. Soldiers bend at the knee to crouch
-    and hold their rifles at the ready.
+    helmet, Germans in field grey with jackboots and the flared Stahlhelm. Machine gunners kneel behind their gun
+    while they stay put, and everyone holds their rifle at the ready.
 
 **Missions** (win conditions besides points)
 - Every skirmish (village or random map), online game, scenario and two-player campaign map can be a
   mission instead of a fight for points. One side attacks and moves first; the defender wins if the
   round limit comes first. Wiping out the enemy still wins anything.
-  - **Last stand**: one objective, dug in by the defender (crouched, behind sandbags, no reinforcements)
+  - **Last stand**: one objective, dug in by the defender (in cover, behind sandbags, no reinforcements)
     against a stronger attacker. The attacker wins by still holding it alone at the start of its own turn,
     so it has to keep it through the defender's whole turn. The defender holds out for 8 rounds (more on
     bigger maps).
@@ -171,7 +175,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   - Before every map both sides secretly commit 12–45 supply and buy units with it (rifleman 3 up to tank 15).
     Committed supply is gone; the rest carries over to later maps.
   - Each side also picks a deployment: balanced, left or right flank, and offensive (deployed further
-    forward) or defensive (further back, behind sandbags, crouched).
+    forward) or defensive (further back, behind sandbags).
   - Win a map to take its points; a draw splits them. Most points wins.
   - Some maps are missions (see Missions above) rather than a fight for points.
 - **Skirmish** on the hand-made Normandy village, a random map, or your own scenarios.
@@ -191,8 +195,8 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
     (church, crossroads, farm, bazaar, landing zone...) so that both sides walk about as far to them. Play vs AI, hotseat, watch AI vs AI, or let an AI agent play a side
   (Agent vs AI, Me vs agent). On the village and random
   maps each side picks a deployment, as in the two-player campaign: the usual spawns, balanced or massed on
-  the left or right flank, offensive (further forward) or defensive (further back, behind sandbags,
-  crouched), or random. Online, the host picks both. Pick a mission and the attacking side too.
+  the left or right flank, offensive (further forward) or defensive (further back, behind sandbags),
+  or random. Online, the host picks both. Pick a mission and the attacking side too.
 - **Online**: two computers connect directly, at home or over the internet, no server needed.
   - Every game has a password. The joiner proves it knows the password before the host lets it in (the
     password itself never travels); wrong guesses are turned away, and a run of them locks the game for a
@@ -233,16 +237,12 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 
 | Key | Action |
 |---|---|
-| Left click | Select a soldier, move, pick a target |
+| Left click | Select a soldier, move, pick a target. Tanks: click where to go, then where to face; click the selected tank to turn it on the spot |
 | Right click / Esc | Cancel |
-| 1 – 0 | Shoot, overwatch, hunker, reload, grenade, smoke, set up MG, rally, medkit, mortar |
-| Action bar | Bottom right: every action the soldier has as an icon with its key in the corner and what's left (grenades, smoke, medkits, ammo); hover for its name |
-| T | Turn a tank on the spot |
-| C / Z | Crouch / go prone (press again to stand up) |
-| X / B | Aimed shot / suppressive fire |
-| G | Clear a spotted mine next to the soldier, or blow in an enemy tunnel entrance (Vietnam) |
-| U / J / K | Vietnam: go through the tunnels / lay a punji trap. Iraq 2004: plant an IED / K set one off |
-| 1 on drums / an oil tank | In shoot mode, click fuel drums or an oil tank to blow them up |
+| 1 – 4 | The actions every soldier has, always on the same keys: 1 shoot (a steady shot with both actions left), 2 overwatch, 3 reload, 4 go prone / stand up (tanks have no 4) |
+| 5 – 0 | The role's own actions, numbered in the order they sit on the bar: suppressive fire, grenade, smoke, rally, medkit, mortar, trap, IED, then the ones that only show up now and then (a demolition charge, a tunnel entrance, a mine or tunnel next to the soldier). An officer: 5 grenade, 6 smoke, 7 rally. Gear that runs out stays on the bar, greyed, so the keys never shift |
+| Action bar | Bottom right: every action the soldier has as an icon with its key in the corner and what's left (grenades, smoke, medkits, ammo); hover for its name. The icons share one look: ink only, the same size and line weight |
+| Shoot on drums / an oil tank | In shoot mode, click fuel drums or an oil tank to blow them up |
 | H / Shift+H | Suggest a move / suggest for the selected soldier |
 | Tab / Enter | Next soldier / end turn (the camera centres on each newly selected soldier) |
 | WASD, arrows, middle drag, left drag (no soldier selected) | Pan |

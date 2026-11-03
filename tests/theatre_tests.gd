@@ -155,13 +155,13 @@ func test_jungle_hides_and_blocks_sight() -> void:
 	check(LineOfSight.has_line(battle.map, us.pos, vc.pos), "one tile doesn't")
 
 
-func test_tall_grass_hides_crouching_soldiers_and_paddies_slow() -> void:
+func test_tall_grass_hides_prone_soldiers_and_paddies_slow() -> void:
 	var battle := make_battle([["Rifleman", 0, Vector2i(2, 8)], ["Guerrilla", 1, Vector2i(8, 8)]])
 	var vc := battle.units[1]
 	battle.map.set_terrain(vc.pos, TacticalMap.Terrain.TALL_GRASS)
 	check(battle.can_see(battle.units[0], vc), "standing in tall grass is seen")
-	vc.stance = Unit.Stance.CROUCH
-	check(not battle.can_see(battle.units[0], vc), "crouching in it isn't")
+	vc.stance = Unit.Stance.PRONE
+	check(not battle.can_see(battle.units[0], vc), "lying in it isn't")
 	check(battle.map.step_cost(Vector2i(3, 3), Vector2i(4, 3)) < 1.5, "grass is quick going")
 	battle.map.set_terrain(Vector2i(4, 3), TacticalMap.Terrain.PADDY)
 	check_eq(battle.map.step_cost(Vector2i(3, 3), Vector2i(4, 3)), 2.0, "a paddy is slow on foot")

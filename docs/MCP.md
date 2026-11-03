@@ -103,7 +103,8 @@ tell it the same.
 The server's instructions spell out the rules agents tend to get wrong: an objective stays held after its soldiers
 leave and keeps scoring for its holder even while contested, so it has to be taken, not just contested; a mortar
 round lands at the start of the firer's next turn; grenades need a clear line; a dash leaves no action to shoot;
-hunkering needs cover; a medkit can treat its carrier.
+a shot with both actions left is a steady shot (+15 aim); snipers and heavy machine guns move or fire, not both;
+only machine gunners lay down suppressive fire; a medkit can treat its carrier.
 
 The reports respect the fog of war like everything else. The link lives as long as the battle screen: after the
 battle, start the next one from the menu (the agent keeps the same token if **Keep the agent token** is on).
@@ -114,9 +115,11 @@ time, and checks a list of orders with `fast` on its first turn.
 
 Tiles are `[x, y]` (x east, y south). Commands use the engine's format (`Battle.execute`) with tiles as `[x, y]`:
 `{"cmd": "move", "unit": 3, "tile": [12, 30]}`, `{"cmd": "shoot", "unit": 3, "target": 11}`,
-`{"cmd": "overwatch" | "hunker" | "reload" | "set_up" | "rally", "unit": 3}`,
-`{"cmd": "grenade" | "smoke", "unit": 3, "tile": [x, y]}`, `{"cmd": "mortar", "unit": 7, "tile": [x, y], "kind": "he" | "smoke"}`,
-`{"cmd": "medkit", "unit": 3, "target": 4}`, `{"cmd": "pivot", "unit": 9, "tile": [1, -1]}` (a heading),
+`{"cmd": "overwatch" | "reload" | "rally", "unit": 3}`, `{"cmd": "suppress", "unit": 5, "target": 11}` (machine gunners),
+`{"cmd": "stance", "unit": 3, "stance": 0 | 2}` (stand / prone),
+`{"cmd": "grenade" | "smoke", "unit": 3, "tile": [x, y]}`, `{"cmd": "mortar", "unit": 7, "tile": [x, y], "kind": "he" | "napalm"}`,
+`{"cmd": "medkit", "unit": 3, "target": 4}`, `{"cmd": "move", "unit": 9, "tile": [12, 30], "facing": [1, -1]}` (tanks: the heading to end on;
+the tank's own tile with a facing turns it on the spot),
 `{"cmd": "plant" | "defuse", "unit": 3, "tile": [x, y]}` (a Demolition target next to the unit), `{"cmd": "end_turn"}`.
 
 On maps with height a move may name the floor to end on: `{"cmd": "move", "unit": 3, "tile": [12, 30], "level": 2}`

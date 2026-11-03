@@ -12,6 +12,7 @@ extends RefCounted
 ##
 ## Every command can also be given as data through execute(), which is how AI moves, saved replays
 ## and the online opponent's moves are applied: {"cmd": "move", "unit": id, "tile": Vector2i}, etc.
+## A "pivot" event is a tank turning on the spot at the end of a move that names a "facing".
 
 ## Emitted after execute() applied a command (one that produced events), so it can be recorded for replays.
 signal executed(command: Dictionary)
@@ -135,7 +136,7 @@ func actions_for_cost(u: Unit, cost: float) -> int:
 	return 1 if cost <= u.current_mobility() + 0.001 else 2
 
 
-## A soldier lying in the wheat (crouching in tall grass, anywhere in the jungle) can't be seen beyond its
+## A soldier lying in the wheat or tall grass (or anywhere in the jungle) can't be seen beyond its
 ## concealment range (TacticalMap.CONCEALMENT), unless he has fired.
 func can_see(viewer: Unit, target: Unit) -> bool:
 	if is_hidden_from(viewer.pos, target):
@@ -228,8 +229,14 @@ func target_level(pos: Vector2i, level: int, p: Vector2i, sight: float) -> int:
 	return -1
 
 
-func shot_odds(shooter: Unit, target: Unit, reaction := false, aimed := false) -> Dictionary:
-	return CombatRules.shot_odds(map, shooter, target, reaction, aimed)
+## `steady`: whether it's a steady shot (see is_steady); off for reaction fire.
+func shot_odds(shooter: Unit, target: Unit, reaction := false, steady := false) -> Dictionary:
+	return CombatRules.shot_odds(map, shooter, target, reaction, steady and not reaction)
+
+
+## A shot fired now with both actions left (nothing else done this turn) is steady: +STEADY_SHOT_BONUS aim.
+static func is_steady(shooter: Unit) -> bool:
+	return shooter.actions >= Unit.ACTIONS_PER_TURN
 
 
 func theatre() -> Theatre:
@@ -337,7 +344,7 @@ func stray_risks(shooter: Unit, from: Vector2i, target: Unit) -> Array[Dictionar
 	var result: Array[Dictionary] = []
 	var weapon := shooter.weapon
 	var rolls := weapon.damage_max - weapon.damage_min + 1
-	if weapon.needs_setup:
+	if weapon.heavy:
 		var half := 0.0
 		for d in range(weapon.damage_min, weapon.damage_max + 1):
 			half += maxi(1, floori(d / 2.0)) / float(rolls)
@@ -542,23 +549,39 @@ func can_act(u: Unit) -> String:
 	return ""
 
 
-## `level`: the floor to end on (-1: the cheapest to reach).
-func can_move(u: Unit, dest: Vector2i, level := -1) -> String:
+## `level`: the floor to end on (-1: the cheapest to reach). `facing`: tanks only, the way to face at the end
+## (Vector2i.ZERO: the way the move leaves it). A tank may also move to its own tile just to turn on the spot.
+func can_move(u: Unit, dest: Vector2i, level := -1, facing := Vector2i.ZERO) -> String:
 	var err := can_act(u)
 	if err != "":
 		return err
 	if u.is_pinned():
 		return "Pinned down, can't move"
 	if u.weapon.fires_standing_still() and u.fired:
-		return "A sniper can't move after firing this turn"
+		return "Can't move after firing this turn"
+	if facing != Vector2i.ZERO and (not u.vehicle or not Pathfinder.HEADINGS.has(facing)):
+		return "Only tanks choose where to face"
 	var reach := reachable(u)
 	if not reach.has(dest):
 		return "Can't reach that tile"
 	if level < 0:
 		level = reach[dest]["level"]
-	if (dest == u.pos and level == u.level) or Pathfinder.cost_to(reach, dest, level) == INF:
+	if dest == u.pos and level == u.level:
+		if facing == Vector2i.ZERO or facing == u.facing:
+			return "Already there" if u.vehicle else "Can't reach that tile"
+	elif Pathfinder.cost_to(reach, dest, level) == INF:
 		return "Can't reach that tile" if level == 0 or not map.can_stand(dest, level) else "Can't reach that floor"
+	if move_cost(u, reach, dest, level, facing) > u.current_mobility() * mini(u.actions, Unit.ACTIONS_PER_TURN) + 0.001:
+		return "Not enough movement left to turn that way"
 	return ""
+
+
+## Path cost of a move, plus turning the hull at the end to face `facing` (tanks; Vector2i.ZERO: no turn).
+func move_cost(u: Unit, reach: Dictionary, dest: Vector2i, level: int, facing := Vector2i.ZERO) -> float:
+	var cost := Pathfinder.cost_to(reach, dest, level)
+	if facing != Vector2i.ZERO:
+		cost += Pathfinder.turn_cost(reach[dest].get("facing", u.facing), facing)
+	return cost
 
 
 func can_shoot(u: Unit, target: Unit) -> String:
@@ -579,32 +602,20 @@ func can_fire(u: Unit) -> String:
 		return err
 	if u.ammo <= 0:
 		return "Out of ammo, reload first"
-	if u.weapon.needs_setup and not u.deployed:
-		return "Set up the machine gun first"
 	if u.weapon.fires_standing_still() and u.moved:
-		return "A sniper can't fire after moving this turn"
+		return "Can't fire after moving this turn"
 	if u.weapon.kind == "at" and u.stance == Unit.Stance.PRONE:
 		return "Can't fire a rocket lying down"
 	return ""
 
 
-## Both actions for a better shot.
-func can_aimed_shot(u: Unit, target: Unit) -> String:
-	var err := can_shoot(u, target)
-	if err != "":
-		return err
-	if u.actions < Unit.ACTIONS_PER_TURN:
-		return "An aimed shot needs both actions"
-	return ""
-
-
-## Suppressive fire: no damage, heavy suppression on the target and anyone next to it.
+## Suppressive fire, machine gunners only: no damage, heavy suppression on the target and anyone next to it.
 func can_suppress(u: Unit, target: Unit) -> String:
 	var err := can_fire(u)
 	if err != "":
 		return err
-	if u.weapon.anti_tank:
-		return "This weapon can't lay down suppressive fire"
+	if not can_lay_suppressive_fire(u):
+		return "Only machine gunners lay down suppressive fire"
 	if u.ammo < CombatRules.SUPPRESSIVE_FIRE_AMMO:
 		return "Needs %d rounds, reload first" % CombatRules.SUPPRESSIVE_FIRE_AMMO
 	if target == null or not target.is_alive() or target.team == u.team:
@@ -616,14 +627,19 @@ func can_suppress(u: Unit, target: Unit) -> String:
 	return ""
 
 
-## Standing, crouching and going prone each cost an action. Tanks have no stances.
+## Whether the unit's weapon lays down suppressive fire at all: machine guns carried by soldiers.
+static func can_lay_suppressive_fire(u: Unit) -> bool:
+	return u.weapon.kind == "mg" and not u.vehicle
+
+
+## Going prone and standing up each cost an action. Tanks have no stances.
 func can_change_stance(u: Unit, stance: int) -> String:
 	var err := can_act(u)
 	if err != "":
 		return err
 	if u.vehicle:
 		return "Tanks don't change stance"
-	if stance < Unit.Stance.STAND or stance > Unit.Stance.PRONE:
+	if stance != Unit.Stance.STAND and stance != Unit.Stance.PRONE:
 		return "Not a stance"
 	if stance == u.stance:
 		return "Already %s" % Unit.STANCE_NAMES[stance].to_lower()
@@ -636,31 +652,6 @@ func can_overwatch(u: Unit) -> String:
 		return err
 	if u.is_pinned():
 		return "Pinned down"
-	return ""
-
-
-func can_set_up(u: Unit) -> String:
-	var err := can_act(u)
-	if err != "":
-		return err
-	if not u.weapon.needs_setup:
-		return "Only machine guns need setting up"
-	if u.deployed:
-		return "Already set up"
-	return ""
-
-
-## Tanks can turn on the spot to face a direction (one of Pathfinder.HEADINGS) for one action.
-func can_pivot(u: Unit, dir: Vector2i) -> String:
-	var err := can_act(u)
-	if err != "":
-		return err
-	if not u.vehicle:
-		return "Only tanks turn on the spot"
-	if not Pathfinder.HEADINGS.has(dir):
-		return "Not a direction"
-	if dir == u.facing:
-		return "Already facing that way"
 	return ""
 
 
@@ -776,17 +767,6 @@ func mines_known_to(team: int) -> Dictionary:
 	return known_mines[team]
 
 
-func can_hunker(u: Unit) -> String:
-	var err := can_act(u)
-	if err != "":
-		return err
-	if u.vehicle:
-		return "Tanks can't hunker down"
-	if not map.has_cover(u.pos, u.level):
-		return "Needs cover to hunker down"
-	return ""
-
-
 func can_reload(u: Unit) -> String:
 	var err := can_act(u)
 	if err != "":
@@ -898,14 +878,13 @@ func aim_level(u: Unit, tile: Vector2i, reach: float) -> int:
 
 # --- Commands: return [] when not allowed ---
 
-func move(u: Unit, dest: Vector2i, level := -1) -> Array:
-	if can_move(u, dest, level) != "":
+func move(u: Unit, dest: Vector2i, level := -1, facing := Vector2i.ZERO) -> Array:
+	if can_move(u, dest, level, facing) != "":
 		return []
 	var reach := reachable(u)
 	if level < 0:
 		level = reach[dest]["level"]
-	u.actions -= actions_for_cost(u, Pathfinder.cost_to(reach, dest, level))
-	u.deployed = false
+	u.actions -= actions_for_cost(u, move_cost(u, reach, dest, level, facing))
 	u.moved = true
 	var events := []
 	var segment: Array[Vector2i] = [u.pos]
@@ -989,6 +968,10 @@ func move(u: Unit, dest: Vector2i, level := -1) -> Array:
 			break
 	if segment.size() > 1:
 		events.append(_move_event(u, segment, segment_facings, segment_levels, tall))
+	# A tank that got there turns to face the way it was told to.
+	if facing != Vector2i.ZERO and u.is_alive() and u.pos == dest and u.facing != facing:
+		events.append({"type": "pivot", "unit": u.id, "from": u.facing, "to": facing})
+		u.facing = facing
 	events.append_array(_after_action())
 	return events
 
@@ -1001,23 +984,15 @@ func _move_event(u: Unit, segment: Array[Vector2i], facings: Array[Vector2i], le
 	return event
 
 
-## Shooting always ends the unit's turn.
+## Shooting always ends the unit's turn. With both actions left it's a steady shot (is_steady).
 func shoot(u: Unit, target: Unit) -> Array:
 	if can_shoot(u, target) != "":
 		return []
+	var steady := is_steady(u)
 	u.actions = 0
-	var events := _fire(u, target, false)
-	events.append_array(_after_action())
-	return events
-
-
-## Takes both actions for +AIMED_SHOT_BONUS aim.
-func aimed_shot(u: Unit, target: Unit) -> Array:
-	if can_aimed_shot(u, target) != "":
-		return []
-	u.actions = 0
-	var events := _fire(u, target, false, true)
-	events[0]["aimed"] = true
+	var events := _fire(u, target, false, steady)
+	if steady:
+		events[0]["steady"] = true
 	events.append_array(_after_action())
 	return events
 
@@ -1041,7 +1016,7 @@ func suppressive_fire(u: Unit, target: Unit) -> Array:
 	return events
 
 
-## Stand, crouch or go prone, for one action. Moving keeps the stance, at its speed.
+## Stand up or go prone, for one action. Moving keeps the stance, at its speed.
 func change_stance(u: Unit, stance: int) -> Array:
 	if can_change_stance(u, stance) != "":
 		return []
@@ -1060,22 +1035,6 @@ func overwatch(u: Unit) -> Array:
 	return _status(u, "Overwatch")
 
 
-func set_up(u: Unit) -> Array:
-	if can_set_up(u) != "":
-		return []
-	u.actions -= 1
-	u.deployed = true
-	return _status(u, "MG set up")
-
-
-func pivot(u: Unit, dir: Vector2i) -> Array:
-	if can_pivot(u, dir) != "":
-		return []
-	u.actions -= 1
-	var events: Array = [{"type": "pivot", "unit": u.id, "from": u.facing, "to": dir}]
-	u.facing = dir
-	events.append_array(_after_action())
-	return events
 
 
 func shoot_object(u: Unit, tile: Vector2i) -> Array:
@@ -1120,7 +1079,6 @@ func tunnel(u: Unit, dest: Vector2i) -> Array:
 	if can_tunnel(u, dest) != "":
 		return []
 	u.actions = 0
-	u.deployed = false
 	var from := u.pos
 	var events: Array = []
 	var saw_in := _teams_seeing(u)
@@ -1163,14 +1121,6 @@ func lay_trap(u: Unit, tile: Vector2i) -> Array:
 	var events: Array = [{"type": "trap_laid", "unit": u.id, "tile": tile}]
 	events.append_array(_after_action())
 	return events
-
-
-func hunker(u: Unit) -> Array:
-	if can_hunker(u) != "":
-		return []
-	u.actions = 0
-	u.hunkered = true
-	return _status(u, "Hunkered down")
 
 
 func reload(u: Unit) -> Array:
@@ -1277,23 +1227,15 @@ func _apply_command(command: Dictionary) -> Array:
 	var target := get_unit(command.get("target", -1))
 	match cmd:
 		"move":
-			return move(u, tile, int(command.get("level", -1)))
-		"pivot":
-			return pivot(u, tile)
+			return move(u, tile, int(command.get("level", -1)), command.get("facing", Vector2i.ZERO))
 		"shoot":
 			return shoot(u, target) if target != null else []
-		"aimed_shot":
-			return aimed_shot(u, target) if target != null else []
 		"suppress":
 			return suppressive_fire(u, target) if target != null else []
 		"stance":
 			return change_stance(u, int(command.get("stance", -1)))
 		"overwatch":
 			return overwatch(u)
-		"set_up":
-			return set_up(u)
-		"hunker":
-			return hunker(u)
 		"reload":
 			return reload(u)
 		"rally":
@@ -1349,7 +1291,7 @@ func end_turn() -> Array:
 # --- Internals ---
 
 ## Starts a team's turn: reinforcements, its mortar shells land, smoke clears, suppression wears off.
-## Overwatch and hunker last until the start of the unit's own next turn.
+## Overwatch lasts until the start of the unit's own next turn.
 func _begin_turn(team: int) -> Array:
 	var events: Array = [{"type": "turn", "team": team, "round": round_number}]
 	events.append_array(_arrive_reinforcements(team))
@@ -1373,7 +1315,6 @@ func _begin_turn(team: int) -> Array:
 	for u in alive_units(team):
 		u.actions = 0 if u.hiding else Unit.ACTIONS_PER_TURN
 		u.overwatch = false
-		u.hunkered = false
 		u.fired = false
 		u.moved = false
 		if u.under_fire:
@@ -1738,7 +1679,7 @@ func _open_step(a: Vector2i, via: Vector2i, b: Vector2i) -> bool:
 func _stray(shooter: Unit, target: Unit, shot: Dictionary) -> Array:
 	var weapon := shooter.weapon
 	var events := []
-	if weapon.needs_setup:
+	if weapon.heavy:
 		for bystander in mg_bystanders(shooter, shooter.pos, target):
 			if rng.randi_range(0, 99) < CombatRules.MG_STRAY_CHANCE:
 				shot["stray"] = bystander.pos
@@ -1805,8 +1746,8 @@ func _overwatchers_seeing(u: Unit) -> Array[Unit]:
 	return result
 
 
-func _fire(shooter: Unit, target: Unit, reaction: bool, aimed := false) -> Array:
-	var odds := shot_odds(shooter, target, reaction, aimed)
+func _fire(shooter: Unit, target: Unit, reaction: bool, steady := false) -> Array:
+	var odds := shot_odds(shooter, target, reaction, steady)
 	shooter.ammo -= 1
 	shooter.fired = true
 	if reaction:
@@ -1845,7 +1786,7 @@ func _fire(shooter: Unit, target: Unit, reaction: bool, aimed := false) -> Array
 	if target.is_alive():
 		var suppression := shooter.weapon.suppression + (CombatRules.HIT_SUPPRESSION_BONUS if result != "miss" else 0)
 		events.append_array(_suppress(target, suppression))
-	if shooter.weapon.needs_setup:
+	if shooter.weapon.heavy:
 		for ally in alive_units(target.team):
 			if ally != target and Vector2(ally.pos).distance_to(Vector2(target.pos)) <= CombatRules.MG_AREA_RADIUS:
 				events.append_array(_suppress(ally, int(shooter.weapon.suppression / 2.0)))
@@ -1864,7 +1805,6 @@ func _damage(target: Unit, amount: int, shred: int, attacker: Unit = null) -> Ar
 	var events: Array = [{"type": "damage", "unit": target.id, "amount": dealt, "absorbed": absorbed, "hp": target.hp, "wounded": target.is_wounded()}]
 	if not target.is_alive():
 		target.overwatch = false
-		target.hunkered = false
 		target.actions = 0
 		if attacker != null and attacker.team != target.team:
 			attacker.kills += 1

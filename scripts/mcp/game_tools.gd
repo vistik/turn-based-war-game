@@ -24,19 +24,19 @@ const MAX_SPOTS := 30
 const MAX_BATCH := 20
 const TERRAIN_GLYPHS := [".", ",", ";", "_", "=", "\"", "o", "~", "x", "&", "%", "'"]
 const LEGEND := {
-	"tiles": ". grass  , rough ground  ; rubble  _ indoor floor  = road  \" wheat (hides you beyond 4 tiles; trampled when walked through)  ~ trampled wheat  x barbed wire (slow on foot)  o shell crater (half cover all round)  & jungle (slow, hides anyone in it beyond 3 tiles, sight only reaches 1 tile into it)  % rice paddy (slow, no cover)  ' elephant grass (hides crouching and prone soldiers beyond 3 tiles)",
+	"tiles": ". grass  , rough ground  ; rubble  _ indoor floor  = road  \" wheat (hides you beyond 4 tiles; trampled when walked through)  ~ trampled wheat  x barbed wire (slow on foot)  o shell crater (half cover all round)  & jungle (slow, hides anyone in it beyond 3 tiles, sight only reaches 1 tile into it)  % rice paddy (slow, no cover)  ' elephant grass (hides prone soldiers beyond 3 tiles)",
 	"objects": "T tree (full cover)  # rock or other full cover  W burning wreck (full cover)  + crate/sandbags/hay (half cover)  F fuel drums (half cover, explode)  O oil tank (full cover, big explosion). Objects block movement. Shoot drums/tanks with shoot_object",
 	"hazards": "^ fire (impassable, burns whoever stands in it)  M a mine or punji trap your side knows of (clear it with clear_mine from next to it). Unspotted mines are hidden  U a tunnel entrance your side knows of",
 	"units": "A-Z your units, a-z enemies in sight (see the unit lists for which is which), ? where an enemy was last seen",
 	"smoke": "* smoke (blocks sight)",
 	"edges": "Each tile is two characters: the tile, then its east edge. Between tile rows, a line shows each tile's south edge. | or - wall/hedge (full cover, blocks sight), ! or : fence/low wall/window (half cover)",
 }
-const COMMAND_HELP := "Commands: {\"cmd\": \"move\", \"unit\": id, \"tile\": [x, y], \"level\": floor (optional, maps with height)} | {\"cmd\": \"shoot\", \"unit\": id, \"target\": enemy id} | " \
-		+ "{\"cmd\": \"overwatch\"|\"hunker\"|\"reload\"|\"set_up\"|\"rally\", \"unit\": id} | {\"cmd\": \"grenade\"|\"smoke\", \"unit\": id, \"tile\": [x, y]} | " \
-		+ "{\"cmd\": \"mortar\", \"unit\": id, \"tile\": [x, y], \"kind\": \"he\"|\"smoke\"|\"napalm\"} | {\"cmd\": \"tunnel\"|\"trap\"|\"detonate\", \"unit\": id, \"tile\": [x, y]} | {\"cmd\": \"medkit\", \"unit\": id, \"target\": ally id} | " \
-		+ "{\"cmd\": \"aimed_shot\"|\"suppress\", \"unit\": id, \"target\": enemy id} | {\"cmd\": \"stance\", \"unit\": id, \"stance\": 0 stand, 1 crouch, 2 prone} | " \
+const COMMAND_HELP := "Commands: {\"cmd\": \"move\", \"unit\": id, \"tile\": [x, y], \"level\": floor (optional, maps with height), \"facing\": tanks only, heading to end on such as [1, 0] or [1, -1] (optional; a tank's own tile with a facing turns it on the spot)} | " \
+		+ "{\"cmd\": \"shoot\", \"unit\": id, \"target\": enemy id} | " \
+		+ "{\"cmd\": \"overwatch\"|\"reload\"|\"rally\", \"unit\": id} | {\"cmd\": \"grenade\"|\"smoke\", \"unit\": id, \"tile\": [x, y]} | " \
+		+ "{\"cmd\": \"mortar\", \"unit\": id, \"tile\": [x, y], \"kind\": \"he\"|\"napalm\"} | {\"cmd\": \"tunnel\"|\"trap\"|\"detonate\", \"unit\": id, \"tile\": [x, y]} | {\"cmd\": \"medkit\", \"unit\": id, \"target\": ally id} | " \
+		+ "{\"cmd\": \"suppress\", \"unit\": machine gunner id, \"target\": enemy id} | {\"cmd\": \"stance\", \"unit\": id, \"stance\": 0 stand, 2 prone} | " \
 		+ "{\"cmd\": \"shoot_object\"|\"clear_mine\", \"unit\": id, \"tile\": [x, y]} | " \
-		+ "{\"cmd\": \"pivot\", \"unit\": tank id, \"tile\": heading such as [1, 0] or [1, -1]} | " \
 		+ "{\"cmd\": \"plant\"|\"defuse\", \"unit\": id, \"tile\": demolition target [x, y]} | {\"cmd\": \"end_turn\"}"
 
 var battle: Battle
@@ -77,13 +77,13 @@ const HEIGHT_RULES := "Height (maps with hills or tall buildings): ground rises 
 		+ "Shooting down from a level or more above gives +10 aim (High ground) and ignores low (half) cover; from two levels above, full cover only counts as half. " \
 		+ "Standing higher sees 2 tiles further per level and sees over walls and hedges; ridges, floors and roofs block sight. Blasts only hurt those within a level of where they go off; shells land on roofs. "
 const RULES := "Rules in brief: 2 actions per turn; a move within the unit's mobility uses 1 action, a longer one (a dash) uses both, so a unit that dashes can't shoot that turn. " \
-		+ "Shooting, overwatch, hunkering, grenades, smoke and the mortar end the unit's turn. " \
-		+ "Cover is directional: half -20, full -40 to hit; no cover from the shooter's side means flanked (+40 crit). Range, hunkering and crouching behind cover lower the odds further. " \
+		+ "Shooting, overwatch, grenades and the mortar end the unit's turn. A shot fired with both actions left (nothing else done that turn) is a steady shot: +15 aim. " \
+		+ "Cover is directional: half -20, full -40 to hit; no cover from the shooter's side means flanked (+40 crit). Range, and a prone target at range, lower the odds further. " \
 		+ "Objectives: one changes hands when only one side has soldiers inside its radius, and stays held after they leave. At the end of every round each held objective scores 1 point for its holder, " \
 		+ "even while the other side stands in it too, so to stop the enemy scoring you must take it (be the only side inside), not just contest it. " \
 		+ "Grenades and smoke need a clear line to the tile within range and can't be thrown lying down. " \
 		+ "The mortar needs both actions (it can't fire after moving), a target 5-22 tiles away (it fires blind too: a tile nobody on your side can see scatters 1.5x as far), and its round lands at the start of your NEXT turn, with some scatter; enemy strikes show in get_state as incoming_mortar_strikes, so move out of their radius. " \
-		+ "A medkit treats an adjacent ally or the unit carrying it. Hunkering needs cover. A machine gun must set up (1 action) before it can shoot or overwatch, and moving packs it up again. " \
+		+ "A medkit treats an adjacent ally or the unit carrying it. Snipers and heavy machine guns move or fire in a turn, not both. Only machine gunners lay down suppressive fire. Tanks turn on the spot with a move to their own tile and a facing. " \
 		+ "Enemies out of sight may be on overwatch: moving across open ground in front of unscouted positions draws fire. Small arms can't hurt tanks; tanks take more damage from the side and rear. " \
 		+ "Vietnam: the Viet Cong move between their tunnel entrances (tunnel: both actions, from one of your entrances to another) and sappers lay punji traps next to them (trap); " \
 		+ "an enemy tunnel entrance you have found can be blown in from next to it with clear_mine. The radio operator's artillery (mortar command, he or napalm) needs no setting up but he must see the target himself. " \
@@ -115,9 +115,10 @@ func tool_list() -> Array:
 	var command_arg := {
 		"type": "object", "description": COMMAND_HELP,
 		"properties": {
-			"cmd": {"type": "string", "enum": ["move", "shoot", "aimed_shot", "suppress", "stance", "shoot_object", "clear_mine", "overwatch", "hunker", "reload", "set_up", "rally", "grenade", "smoke", "mortar", "medkit", "pivot", "tunnel", "trap", "detonate", "plant", "defuse", "end_turn"]},
-			"unit": {"type": "integer"}, "target": {"type": "integer"}, "tile": tile_arg, "kind": {"type": "string", "enum": ["he", "smoke", "napalm"]},
-			"stance": {"type": "integer", "enum": [0, 1, 2], "description": "0 stand, 1 crouch, 2 prone"},
+			"cmd": {"type": "string", "enum": ["move", "shoot", "suppress", "stance", "shoot_object", "clear_mine", "overwatch", "reload", "rally", "grenade", "smoke", "mortar", "medkit", "tunnel", "trap", "detonate", "plant", "defuse", "end_turn"]},
+			"unit": {"type": "integer"}, "target": {"type": "integer"}, "tile": tile_arg, "kind": {"type": "string", "enum": ["he", "napalm"]},
+			"stance": {"type": "integer", "enum": [0, 2], "description": "0 stand, 2 prone"},
+			"facing": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2, "description": "move, tanks only: the heading to end on, e.g. [1, 0] or [1, -1]"},
 			"level": {"type": "integer", "minimum": 0, "description": "move: the floor to end on (0 ground, a building's storey count its roof); default the cheapest"},
 		},
 		"required": ["cmd"],
@@ -308,7 +309,7 @@ func _own_unit(u: Unit) -> Dictionary:
 		"id": u.id, "name": u.name, "role": u.role, "pos": _tile(u.pos), "hp": u.hp, "max_hp": u.max_hp,
 		"actions": u.actions, "mobility": u.current_mobility(), "aim": u.aim, "sight": u.sight,
 		"weapon": {"name": u.weapon.name, "damage": [u.weapon.damage_min, u.weapon.damage_max], "ammo": u.ammo, "clip": u.weapon.clip_size,
-				"needs_setup": u.weapon.needs_setup, "anti_tank": u.weapon.anti_tank},
+				"heavy": u.weapon.heavy, "anti_tank": u.weapon.anti_tank},
 		"suppression": u.suppression, "status": _status(u), "cover_here": _cover_sides(u.pos, u.level),
 	}
 	_add_height(data, u)
@@ -350,7 +351,7 @@ func _status(u: Unit) -> Array:
 		tags.append("suppressed")
 	if u.is_wounded():
 		tags.append("wounded")
-	for flag: Array in [[u.overwatch, "overwatch"], [u.hunkered, "hunkered"], [u.deployed, "mg_set_up"], [u.vehicle, "tank"]]:
+	for flag: Array in [[u.overwatch, "overwatch"], [u.vehicle, "tank"]]:
 		if flag[0]:
 			tags.append(flag[1])
 	return tags
@@ -553,20 +554,16 @@ func unit_options(id: int, all_tiles := false, filters := {}) -> Dictionary:
 	actions["move"] = battle.can_act(u) if battle.can_act(u) != "" else ("" if not reach.is_empty() else "Can't move")
 	actions["shoot"] = battle.can_fire(u) if battle.can_fire(u) != "" else ("" if not targets.is_empty() else "No enemy in line of sight")
 	actions["overwatch"] = battle.can_overwatch(u)
-	actions["hunker"] = battle.can_hunker(u)
 	actions["reload"] = battle.can_reload(u)
-	actions["set_up"] = battle.can_set_up(u)
 	actions["rally"] = battle.can_rally(u)
 	actions["grenade"] = battle.can_act(u) if u.grenades > 0 else "No grenades"
 	actions["smoke"] = battle.can_act(u) if u.smoke_grenades > 0 else "No smoke grenades"
 	actions["medkit"] = battle.can_act(u) if u.medkits > 0 else "No medkits"
 	if not u.indirect.is_empty():
 		actions["mortar"] = battle.can_act(u) if u.actions >= Unit.ACTIONS_PER_TURN or not u.indirect["still"] else "The %s can't fire after moving" % u.indirect["name"]
-	if u.vehicle:
-		actions["pivot"] = battle.can_act(u)
-	else:
+	if not u.vehicle:
 		actions["stance"] = battle.can_act(u)
-		actions["aimed_shot"] = actions["shoot"] if u.actions >= Unit.ACTIONS_PER_TURN or actions["shoot"] != "" else "Needs both actions"
+	if Battle.can_lay_suppressive_fire(u):
 		actions["suppress"] = actions["shoot"]
 	var allowed := []
 	var blocked := {}
@@ -667,7 +664,7 @@ func preview(id: int, tile_value: Variant, level := -1) -> Dictionary:
 			entry["your_shot"] = {"hit": odds["hit"], "crit": odds["crit"], "flanked": odds["flanked"]}
 		against.append(entry)
 	advisor._at_level = level
-	var danger: float = advisor._danger(u, tile, seen)[0]
+	var danger: float = advisor._danger(u, tile, seen)
 	advisor._at_level = -1
 	u.pos = saved_pos
 	u.level = saved_level
@@ -999,13 +996,19 @@ func command_from_json(value: Variant) -> Dictionary:
 		command["stance"] = int(value["stance"])
 	if value.has("level"):
 		command["level"] = int(value["level"])
+	if value.has("facing"):
+		var facing: Variant = _parse_tile(value["facing"])
+		if facing == null:
+			return {"error": "facing must be [x, y]"}
+		command["facing"] = facing
 	return command
 
 
 static func command_to_json(command: Dictionary) -> Dictionary:
 	var result := command.duplicate()
-	if result.get("tile") is Vector2i:
-		result["tile"] = [result["tile"].x, result["tile"].y]
+	for key in ["tile", "facing"]:
+		if result.get(key) is Vector2i:
+			result[key] = [result[key].x, result[key].y]
 	return result
 
 
@@ -1031,23 +1034,17 @@ func validate(command: Dictionary) -> String:
 		return "%s needs a tile" % cmd
 	match cmd:
 		"move":
-			return battle.can_move(u, tile, int(command.get("level", -1)))
-		"shoot", "aimed_shot", "suppress":
+			return battle.can_move(u, tile, int(command.get("level", -1)), command.get("facing", Vector2i.ZERO))
+		"shoot", "suppress":
 			if target == null or target.team == side or not target.is_alive() or not battle.team_sees(side, target):
 				return "Unknown target: not an enemy in sight"
-			if cmd == "aimed_shot":
-				return battle.can_aimed_shot(u, target)
 			return battle.can_suppress(u, target) if cmd == "suppress" else battle.can_shoot(u, target)
 		"stance":
-			return battle.can_change_stance(u, command.get("stance", -1)) if command.has("stance") else "stance needs 0 (stand), 1 (crouch) or 2 (prone)"
+			return battle.can_change_stance(u, command.get("stance", -1)) if command.has("stance") else "stance needs 0 (stand) or 2 (prone)"
 		"overwatch":
 			return battle.can_overwatch(u)
-		"hunker":
-			return battle.can_hunker(u)
 		"reload":
 			return battle.can_reload(u)
-		"set_up":
-			return battle.can_set_up(u)
 		"rally":
 			return battle.can_rally(u)
 		"grenade":
@@ -1058,8 +1055,6 @@ func validate(command: Dictionary) -> String:
 			return battle.can_fire_mortar(u, tile, command.get("kind", "he"))
 		"medkit":
 			return battle.can_use_medkit(u, target)
-		"pivot":
-			return battle.can_pivot(u, tile) if command.has("tile") else "pivot needs a heading, e.g. [1, 0]"
 		"shoot_object":
 			return battle.can_shoot_object(u, tile)
 		"clear_mine":
@@ -1092,8 +1087,10 @@ func describe(command: Dictionary) -> String:
 		if cmd == "move" and int(command.get("level", 0)) > 0:
 			var level: int = command["level"]
 			text += " roof" if battle.map.is_roof(command["tile"], level) else " floor %d" % level
-	if cmd == "stance" and command.get("stance", -1) in [0, 1, 2]:
-		text = "%s: %s" % [u.name, ["stand up", "crouch", "go prone"][command["stance"]]]
+	if cmd == "move" and command.get("facing") is Vector2i:
+		text += ", facing [%d, %d]" % [command["facing"].x, command["facing"].y]
+	if cmd == "stance" and command.get("stance", -1) in [Unit.Stance.STAND, Unit.Stance.PRONE]:
+		text = "%s: %s" % [u.name, "go prone" if command["stance"] == Unit.Stance.PRONE else "stand up"]
 	return text
 
 
@@ -1108,14 +1105,15 @@ func _seen_enemies(side: int) -> Array[Unit]:
 
 
 func _shot(u: Unit, e: Unit) -> Dictionary:
-	var odds := battle.shot_odds(u, e)
+	var steady := Battle.is_steady(u)
+	var odds := battle.shot_odds(u, e, false, steady)
 	var modifiers := []
 	for m: Array in odds["modifiers"]:
 		modifiers.append([m[0], m[1]])
 	var entry := {"target": e.id, "name": e.name, "role": e.role, "hit": odds["hit"], "graze": odds["graze"], "crit": odds["crit"],
 			"flanked": odds["flanked"], "target_cover": Cover.NAMES[odds["cover"]].to_lower(), "distance": snappedf(odds["distance"], 0.1),
 			"modifiers": modifiers}
-	var outcome: Array[float] = advisor_for(u.team)._expected_damage(u, u.pos, e, e.pos)
+	var outcome: Array[float] = advisor_for(u.team)._expected_damage(u, u.pos, e, e.pos, steady)
 	entry["expected_damage"] = snappedf(outcome[0], 0.01)
 	entry["kill_chance"] = snappedf(outcome[1], 0.01)
 	if e.vehicle:
@@ -1125,10 +1123,10 @@ func _shot(u: Unit, e: Unit) -> Dictionary:
 	return entry
 
 
-## Whether the unit's weapon could fire after it has spent an action moving (a machine gun packs up when it
-## moves; a sniper can't fire after moving; an empty weapon needs reloading first).
+## Whether the unit's weapon could fire after it has spent an action moving (snipers and heavy machine guns
+## can't fire after moving; an empty weapon needs reloading first).
 func _can_shoot_after_moving(u: Unit) -> bool:
-	return u.ammo > 0 and not u.weapon.needs_setup and not u.weapon.fires_standing_still()
+	return u.ammo > 0 and not u.weapon.fires_standing_still()
 
 
 ## The unit's odds against an enemy if it stood on `tile` ({hit, crit, flanked}), or null without a line of sight.

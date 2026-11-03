@@ -50,6 +50,17 @@ var hills := 0.0
 var hill_height := 2
 ## Chance a hill two levels high or more is an escarpment, with one side a cliff nobody climbs.
 var scarp_chance := 0.35
+## Whether hills are cleared of field boundaries (hedges, walls, fences), so high ground reads as open knolls.
+var clear_hill_edges := false
+## Field borders: whether they slant and bend (or run straight with the odd step), whether their openings are
+## two-tile gateways spread along them (or single gaps anywhere), and the shortest run of field boundary that
+## finish() keeps (0 keeps every stub).
+var slanted_fields := true
+var gateways := false
+var shortest_run := 0
+## Simple field boundaries: none along roads, none alongside another boundary a tile away, and none round
+## fields too small or narrow to read as a field, so every hedge is one clear line.
+var simple_boundaries := false
 ## Chance a house gets upper floors, and the most storeys it may have (2 or 3). Bamboo huts stay low.
 var tall_chance := 0.0
 var tall_max := 2
@@ -491,10 +502,10 @@ func patchwork(spacing: float, dress: Callable, accept := Callable()) -> Array:
 				for ox in range(maxi(0, gx - 2), mini(cols, gx + 3)):
 					var i := oy * cols + ox
 					var d := Vector2(p) + Vector2(0.5, 0.5) - sites[i]
-					# Nearly square distance: borders run mostly straight along the grid with the odd slant,
-					# as hedgerows do. Smooth noise bends them gently, a different way for each site.
-					var dist := maxf(absf(d.x), absf(d.y)) + 0.2 * minf(absf(d.x), absf(d.y)) \
-							+ _wet.get_noise_2d(p.x + i * 37.0, p.y - i * 53.0) * spacing * 0.18
+					# Square distance: borders run straight along the grid, as hedgerows do, and only now and then
+					# step. Smooth noise bends them gently, a different way for each site.
+					var dist := maxf(absf(d.x), absf(d.y)) + (0.2 * minf(absf(d.x), absf(d.y)) if slanted_fields else 0.0) \
+							+ _wet.get_noise_2d(p.x + i * 37.0, p.y - i * 53.0) * spacing * (0.18 if slanted_fields else 0.09)
 					if dist < best_d:
 						best_d = dist
 						best = i
@@ -506,7 +517,7 @@ func patchwork(spacing: float, dress: Callable, accept := Callable()) -> Array:
 		if cells[i].is_empty():
 			continue
 		var decision: Dictionary = dress.call(cells[i])
-		if cells[i].size() < 6:
+		if cells[i].size() < (12 if simple_boundaries else 6) or (simple_boundaries and _narrow(cells[i])):
 			decision = {"edge": "", "cover": Cover.NONE, "gaps": 0}
 		decisions[i] = decision
 		fields.append(cells[i])
@@ -521,13 +532,17 @@ func patchwork(spacing: float, dress: Callable, accept := Callable()) -> Array:
 				var other: int = cell_of.get(q, -1)
 				if other == i or (other != -1 and other < i):
 					continue
-				if other == -1 and (not reserved.has(q) or wooded.has(q)):
+				if other == -1 and (not reserved.has(q) or wooded.has(q) or (simple_boundaries and roads.has(q))):
 					continue
 				var key := Vector2i(i, other)
 				if not borders.has(key):
 					borders[key] = []
 				borders[key].append([p, q])
-	for key: Vector2i in borders:
+	var order: Array = borders.keys()
+	if simple_boundaries:
+		# The longest borders first, so where two would run side by side the longer one is the one built.
+		order.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return borders[a].size() > borders[b].size())
+	for key: Vector2i in order:
 		var mine: Dictionary = decisions[key.x]
 		var chosen := mine
 		if key.y != -1:
@@ -538,15 +553,95 @@ func patchwork(spacing: float, dress: Callable, accept := Callable()) -> Array:
 			continue
 		var line: Array = borders[key]
 		var gaps := {}
-		var openings := maxi(1, line.size() / (5 if key.y == -1 else 7)) + int(chosen.get("gaps", 0))
-		for g in openings:
-			gaps[rng.randi_range(0, line.size() - 1)] = true
+		if gateways:
+			# Gates two tiles wide, spread along the border away from its ends, so the hedge runs unbroken
+			# between them.
+			line.sort_custom(func(a: Array, b: Array) -> bool:
+				var ma: Vector2i = a[0] + a[1]
+				var mb: Vector2i = b[0] + b[1]
+				return ma.x + ma.y * 1000 < mb.x + mb.y * 1000 if _wide(line) else ma.y + ma.x * 1000 < mb.y + mb.x * 1000)
+			var count := 1 + int(line.size() >= 16) + int(chosen.get("gaps", 0))
+			for g in count:
+				var at := clampi(int(line.size() * (g + 0.5) / count + rng.randi_range(-2, 2)), 0, line.size() - 1)
+				gaps[at] = true
+				gaps[mini(at + 1, line.size() - 1)] = true
+		else:
+			var openings := maxi(1, line.size() / (5 if key.y == -1 else 7)) + int(chosen.get("gaps", 0))
+			for g in openings:
+				gaps[rng.randi_range(0, line.size() - 1)] = true
 		for j in line.size():
 			var pair: Array = line[j]
 			if gaps.has(j) or map.get_edge(pair[0], pair[1]) != Cover.NONE:
 				continue
+			if simple_boundaries and _beside_boundary(pair[0], pair[1]):
+				continue
 			map.set_edge(pair[0], pair[1], chosen["cover"], chosen["edge"])
 	return fields
+
+
+## Whether a field is less than 3 tiles across one way.
+static func _narrow(tiles: Array) -> bool:
+	var lo := Vector2i(1 << 20, 1 << 20)
+	var hi := -lo
+	for p: Vector2i in tiles:
+		lo = Vector2i(mini(lo.x, p.x), mini(lo.y, p.y))
+		hi = Vector2i(maxi(hi.x, p.x), maxi(hi.y, p.y))
+	return hi.x - lo.x < 2 or hi.y - lo.y < 2
+
+
+## Whether a boundary already runs alongside the side between a and b, one tile away on either hand.
+func _beside_boundary(a: Vector2i, b: Vector2i) -> bool:
+	var across := b - a
+	for shift: Vector2i in [across, -across]:
+		var na := a + shift
+		var nb := b + shift
+		if map.in_bounds(na) and map.in_bounds(nb) and map.get_edge(na, nb) != Cover.NONE and not solid.has(na) and not solid.has(nb):
+			return true
+	return false
+
+
+## Whether a border's tiles spread wider east-west than north-south.
+static func _wide(line: Array) -> bool:
+	var lo := Vector2i(1 << 20, 1 << 20)
+	var hi := -lo
+	for pair: Array in line:
+		lo = Vector2i(mini(lo.x, pair[0].x), mini(lo.y, pair[0].y))
+		hi = Vector2i(maxi(hi.x, pair[0].x), maxi(hi.y, pair[0].y))
+	return hi.x - lo.x >= hi.y - lo.y
+
+
+## Removes runs of field boundary (hedges, low walls, fences, dykes) shorter than `shortest` sides, counting
+## sides that meet end to end or at a corner as one run. Walls of buildings and walled yards stay.
+func prune_stubs(shortest: int) -> void:
+	var kinds := ["hedge", "stone", "fence", "dyke"]
+	var parent := {}
+	var find := func(find: Callable, v: Vector2i) -> Vector2i:
+		while parent[v] != v:
+			v = parent[v]
+		return v
+	var runs := []
+	for key: Vector3i in map.get_edges().keys():
+		var pair := TacticalMap.edge_tiles(key)
+		if map.edge_kind(key) not in kinds or solid.has(pair[0]) or solid.has(pair[1]):
+			continue
+		var ends: Array = [Vector2i(key.x + 1, key.y), Vector2i(key.x + 1, key.y + 1)] if key.z == 0 \
+				else [Vector2i(key.x, key.y + 1), Vector2i(key.x + 1, key.y + 1)]
+		for v: Vector2i in ends:
+			if not parent.has(v):
+				parent[v] = v
+		var a: Vector2i = find.call(find, ends[0])
+		var b: Vector2i = find.call(find, ends[1])
+		if a != b:
+			parent[a] = b
+		runs.append([key, ends[0]])
+	var sizes := {}
+	for run: Array in runs:
+		var root: Vector2i = find.call(find, run[1])
+		sizes[root] = sizes.get(root, 0) + 1
+	for run: Array in runs:
+		if sizes[find.call(find, run[1])] < shortest:
+			var pair := TacticalMap.edge_tiles(run[0])
+			map.set_edge(pair[0], pair[1], Cover.NONE)
 
 
 ## Fills a field with a crop: `kind` terrain over all its tiles.
@@ -738,6 +833,8 @@ static func is_playable(layout: Dictionary) -> bool:
 ## if there is one), and objectives fair to both; {} if no fair set of objectives could be found.
 func finish(extra := {}) -> Dictionary:
 	_raise_hills()
+	if shortest_run > 0:
+		prune_stubs(shortest_run)
 	var centers := []
 	for team in 2:
 		var entry := road_entry(team)
@@ -775,6 +872,11 @@ func _raise_hills() -> void:
 			for dx in range(-1, 2):
 				flat[p + Vector2i(dx, dy)] = true
 	var tops := HeightGenerator.raise_hills(build, rng, flat, count, hill_height, wild, scarp_chance)
+	if clear_hill_edges:
+		for key: Vector3i in map.get_edges().keys():
+			var pair := TacticalMap.edge_tiles(key)
+			if (map.get_elevation(pair[0]) > 0 or map.get_elevation(pair[1]) > 0) and not solid.has(pair[0]) and not solid.has(pair[1]):
+				map.set_edge(pair[0], pair[1], Cover.NONE)
 	for i in tops.size():
 		var top := nearest_open(tops[i])
 		landmark("Hill %d" % (80 + map.get_elevation(top) * 15 + i * 7 + rng.randi_range(0, 5)), top, 0.3)

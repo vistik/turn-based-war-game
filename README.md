@@ -73,8 +73,8 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 - Overwatch holds its fire for targets it can't hurt, such as rifles and machine guns against a tank.
 - The selected unit stands out: a pulsing gold ring and glow under it and a bobbing gold arrow over its
   health bar.
-- The selected soldier's field of fire: an outline round everything it can see, green where its gun is at its
-  best and a red tint where the range is poor (filled in while aiming).
+- The selected soldier's field of fire, while aiming: an outline round everything it can see, green where its
+  gun is at its best and a red tint where the range is poor. Moving shows only the move range.
 - Moving shows the cover at the destination, and "EXPOSED TO 2" if seen enemies would have it in the open.
 - Hold the right mouse button while moving to see how many seen enemies the soldier could shoot at from the
   hovered destination ("3 TARGETS" in place of "EXPOSED TO", the targets ringed in red; "NO SHOT LEFT" if the move would leave no action to fire).
@@ -105,8 +105,11 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
     slope: anyone can walk up it for one more movement (going down is free). Hills are drawn low, and higher
     ground a shade lighter per level, so they don't hide the tiles, hedges and move range behind them. Two levels or more is a cliff,
     drawn as a sheer face of rock, that nobody climbs.
-    Random maps raise hills on rough ground, off the roads, buildings and both sides' starts. Some hills are
-    escarpments, sloping up on most sides with one side a cliff. A hilltop can be an objective ("Hill 104").
+    Random maps raise hills on rough ground, off the roads, buildings and both sides' starts. In Normandy
+    hills are open knolls, with no hedges or walls across them, and hedgerows run in long straight lines
+    with two-tile gateways: never along a road, never two side by side, never round a sliver of a field,
+    and without short stubs. Some hills are escarpments, sloping up on
+    most sides with one side a cliff. A hilltop can be an objective ("Hill 104").
   - Buildings of two or three storeys (the church's bell tower, village houses and farmhouses, Iraqi town
     houses, compound towers) have stairs up through every floor to a flat roof. Upstairs, cover is the walls
     and windows; the roof's parapet is half cover. Only one soldier stands on a tile, whatever the floor.

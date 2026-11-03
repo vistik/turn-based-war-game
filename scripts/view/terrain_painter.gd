@@ -36,7 +36,9 @@ const HAY := Color("c7a95a")
 const WOOD := Color("7b5b37")
 const MASONRY := Color("c6bca7")
 const STONE_WALL := Color("9b9183")
-const HEDGE := [Color("34502a"), Color("426236"), Color("2c4322")]
+## A hedge's sides, its sunlit top and the dark line along the top's edges.
+const HEDGE := [Color("4f7442"), Color("679350"), Color("1b2a15")]
+const HEDGE_HALF_THICKNESS := 0.15
 const TRUNK := Color("5a4330")
 const LEAVES := [Color("38562a"), Color("466a33"), Color("57793d")]
 const GLASS := Color(0.65, 0.82, 0.95, 0.28)
@@ -48,7 +50,9 @@ const FLAME := [Color(1.0, 0.82, 0.3), Color(1.0, 0.5, 0.12), Color(0.85, 0.22, 
 const MINE := Color("3d3a33")
 const MINE_SIGN := Color("e7d9a8")
 const WALL_HEIGHT := 1.05
-const HEDGE_HEIGHT := 1.0
+## How tall a hedge is drawn: kept low, about a fuel drum, so soldiers and props behind it stay in view. For
+## sight and cover it is as tall as TacticalMap.HEDGE_HEIGHT.
+const HEDGE_HEIGHT := 0.5
 const LOW_WALL_HEIGHT := 0.45
 const SILL_HEIGHT := 0.4
 const LINTEL_BASE := 0.84
@@ -207,18 +211,15 @@ static func draw_tile(c: Object, proj: ViewProjection, map: TacticalMap, p: Vect
 					_leaf(c, proj.project(tuft), proj.project(tuft + dir * 0.13, 0.1), 2.2, TROPIC_BLADES[j % 3].darkened(0.1), false)
 		TacticalMap.Terrain.FLOOR:
 			c.draw_colored_polygon(tile_poly(proj, p), GRASS[0].lerp(GRASS[1], n))
-			for i in 6:
+			for i in 3:
 				var at := g + Vector2(0.1, 0.1) + Vector2(noise(p, i * 2 + 1), noise(p, i * 2 + 2)) * 0.8
 				c.draw_line(proj.project(at), proj.project(at + Vector2(0.04, -0.05), 0.1), GRASS_BLADES[i % 3], 1.5)
 		TacticalMap.Terrain.ROUGH:
+			# Low scrub: a couple of flat patches a shade darker than the ground, so it reads without the clutter.
 			c.draw_colored_polygon(tile_poly(proj, p), DRY_GROUND[0].lerp(DRY_GROUND[1], n))
 			for i in 2:
-				var at := g + Vector2(0.25, 0.25) + Vector2(noise(p, i * 3 + 7), noise(p, i * 3 + 8)) * 0.5
-				for j in 3:
-					var offset := Vector2.from_angle(TAU * j / 3.0 + n) * 0.07
-					var color: Color = BUSH[(i + j) % 2]
-					c.draw_circle(proj.project(at + offset, 0.06), 4.0 + noise(p, i + j) * 2.0, color)
-				c.draw_circle(proj.project(at + Vector2(-0.03, -0.03), 0.12), 2.5, BUSH[1].lightened(0.25))
+				var at := g + Vector2(0.3, 0.3) + Vector2(noise(p, i * 3 + 7), noise(p, i * 3 + 8)) * 0.4
+				c.draw_colored_polygon(ground_circle(proj, at, 0.12 + noise(p, i + 4) * 0.06, false), BUSH[i % 2].lerp(DRY_GROUND[0], 0.35))
 		TacticalMap.Terrain.RUBBLE:
 			c.draw_colored_polygon(tile_poly(proj, p), RUBBLE.lerp(RUBBLE.lightened(0.1), n))
 			for i in 7:
@@ -281,13 +282,13 @@ static func draw_tile(c: Object, proj: ViewProjection, map: TacticalMap, p: Vect
 				var at := g + Vector2(noise(p, i + 3), noise(p, i + 9)) * 0.9 + Vector2(0.05, 0.05)
 				c.draw_circle(proj.project(at), 1.5, ROAD[0].darkened(0.25))
 		TacticalMap.Terrain.WHEAT:
+			# Rows of standing wheat, drawn flat: the colour says "wheat" without a forest of stalks.
 			c.draw_colored_polygon(tile_poly(proj, p), WHEAT[0].lerp(WHEAT[1], n))
-			for i in 12:
-				var at := g + Vector2(0.06, 0.06) + Vector2(noise(p, i * 2 + 1), noise(p, i * 2 + 2)) * 0.88
-				var top := proj.project(at + Vector2(0.02, -0.02), 0.35 + noise(p, i + 40) * 0.1)
-				var color: Color = WHEAT_STALKS[i % 3]
-				c.draw_line(proj.project(at), top, color.darkened(0.2), 1.2)
-				c.draw_circle(top, 1.6, color)
+			for row in 3:
+				var t := 0.2 + row * 0.3
+				for k in 3:
+					var from := 0.06 + k * 0.32 + noise(p, row * 3 + k) * 0.08
+					c.draw_line(proj.project(g + Vector2(from, t)), proj.project(g + Vector2(from + 0.14, t)), WHEAT[0].darkened(0.1), 1.2)
 		TacticalMap.Terrain.TRENCH:
 			_draw_trench(c, proj, map, p, g)
 		TacticalMap.Terrain.CRATER:
@@ -307,7 +308,7 @@ static func draw_tile(c: Object, proj: ViewProjection, map: TacticalMap, p: Vect
 		TacticalMap.Terrain.TRAMPLED:
 			# Flattened stalks lying every which way on churned soil.
 			c.draw_colored_polygon(tile_poly(proj, p), WHEAT[0].darkened(0.18).lerp(DRY_GROUND[1], 0.3 + n * 0.2))
-			for i in 10:
+			for i in 4:
 				var at := g + Vector2(0.08, 0.08) + Vector2(noise(p, i * 2 + 1), noise(p, i * 2 + 2)) * 0.84
 				var lie := Vector2.from_angle(noise(p, i + 50) * TAU) * 0.16
 				c.draw_line(proj.project(at), proj.project(at + lie, 0.02), WHEAT_STALKS[i % 3].darkened(0.15), 1.4)
@@ -397,7 +398,7 @@ static func _draw_edge_shadow(c: Object, proj: ViewProjection, map: TacticalMap,
 		"mud_window": WALL_HEIGHT}.get(kind, 0.25)
 	if kind == "dyke" and _arid():
 		height = DITCH_BANK_HEIGHT
-	var thickness: float = {"hedge": 0.1, "dyke": 0.15, "mud_wall": MUD_HALF_THICKNESS, "mud_window": MUD_HALF_THICKNESS}.get(kind, WALL_HALF_THICKNESS)
+	var thickness: float = {"hedge": HEDGE_HALF_THICKNESS, "dyke": 0.15, "mud_wall": MUD_HALF_THICKNESS, "mud_window": MUD_HALF_THICKNESS}.get(kind, WALL_HALF_THICKNESS)
 	draw_shadow(c, proj, _edge_rect(key, 0.0, 1.0, thickness), height)
 
 
@@ -450,8 +451,9 @@ static func _draw_trench(c: Object, proj: ViewProjection, map: TacticalMap, p: V
 # --- Props ---
 
 ## A vertical prism over a convex grid footprint, lit from LIGHT. Returns the visible side faces
-## as screen quads [bottom a, bottom b, top b, top a] so callers can add surface detail.
-static func prism(c: Object, proj: ViewProjection, footprint: PackedVector2Array, base: float, top: float, color: Color, alpha := 1.0) -> Array:
+## as screen quads [bottom a, bottom b, top b, top a] so callers can add surface detail. Without draw_top the
+## caller draws the top face itself.
+static func prism(c: Object, proj: ViewProjection, footprint: PackedVector2Array, base: float, top: float, color: Color, alpha := 1.0, draw_top := true) -> Array:
 	var faces := []
 	var center := Vector2.ZERO
 	for p in footprint:
@@ -473,6 +475,8 @@ static func prism(c: Object, proj: ViewProjection, footprint: PackedVector2Array
 			var quad := PackedVector2Array([proj.project(a, base), proj.project(b, base), proj.project(b, top), proj.project(a, top)])
 			c.draw_colored_polygon(quad, Color(color.darkened(1.0 - shade), alpha))
 			faces.append(quad)
+	if not draw_top:
+		return faces
 	var top_poly := PackedVector2Array()
 	for p in footprint:
 		top_poly.append(proj.project(p, top))
@@ -694,15 +698,7 @@ static func draw_edge_as(c: Object, proj: ViewProjection, kind: String, key: Vec
 			prism(c, proj, _edge_rect(key, 0.9, 1.0, WALL_HALF_THICKNESS), 0.0, WALL_HEIGHT, color, alpha)
 			prism(c, proj, _edge_rect(key, 0.0, 1.0, WALL_HALF_THICKNESS), LINTEL_BASE, WALL_HEIGHT, color, alpha)
 		"hedge":
-			var p := Vector2i(key.x * 2 + key.z, key.y)
-			var color: Color = HEDGE[0].darkened(tint)
-			prism(c, proj, _edge_rect(key, 0.0, 1.0, 0.1), 0.0, HEDGE_HEIGHT * 0.85, color, alpha)
-			var frame := _edge_frame(key)
-			for i in 5:
-				var t := (i + 0.5) / 5.0
-				var at: Vector2 = frame[0] + frame[1] * t + frame[2] * (noise(p, i) - 0.5) * 0.15
-				var leaf: Color = HEDGE[(i + key.x + key.y) % 3]
-				c.draw_circle(proj.project(at, HEDGE_HEIGHT * (0.75 + noise(p, i + 10) * 0.2)), 8.0 + noise(p, i + 20) * 3.0, Color(leaf.darkened(tint), alpha))
+			_draw_hedge(c, proj, key, tint, alpha)
 		"stone":
 			var color := STONE_WALL.darkened(tint)
 			var faces := prism(c, proj, _edge_rect(key, 0.0, 1.0, 0.09), 0.0, LOW_WALL_HEIGHT, color, alpha)
@@ -735,6 +731,23 @@ static func draw_edge_as(c: Object, proj: ViewProjection, kind: String, key: Vec
 				prism(c, proj, _edge_rect(key, t - 0.04, t + 0.04, 0.045), 0.0, 0.55, color.darkened(0.1), alpha)
 			for rail: Array in [[0.14, 0.21], [0.34, 0.41]]:
 				prism(c, proj, _edge_rect(key, 0.0, 1.0, 0.025), rail[0], rail[1], color, alpha)
+
+
+## A hedge, kept plain so it reads at a glance: a box of foliage with a lighter top. It reaches past both
+## ends of its edge by its thickness, which fills the corners where hedges meet and rounds off the ends at
+## gaps; only the top's long sides are outlined, so a run of segments reads as one hedge, without seams.
+static func _draw_hedge(c: Object, proj: ViewProjection, key: Vector3i, tint: float, alpha: float) -> void:
+	var top := HEDGE_HEIGHT
+	var ht := HEDGE_HALF_THICKNESS
+	var footprint := _edge_rect(key, -ht, 1.0 + ht, ht)
+	prism(c, proj, footprint, 0.0, top, HEDGE[0].darkened(tint), alpha, false)
+	var top_poly := PackedVector2Array()
+	for g in footprint:
+		top_poly.append(proj.project(g, top))
+	c.draw_colored_polygon(top_poly, Color(HEDGE[1].darkened(tint), alpha))
+	var line := Color(HEDGE[2].darkened(tint), alpha * 0.8)
+	c.draw_line(top_poly[0], top_poly[1], line, 1.0)
+	c.draw_line(top_poly[2], top_poly[3], line, 1.0)
 
 
 ## A drifting cloud of smoke over a tile.
@@ -1455,11 +1468,7 @@ static func draw_terrace(c: Object, proj: ViewProjection, map: TacticalMap, p: V
 				var color := _bank_color(p, i).darkened(shade)
 				var out := d * BANK_SLOPE
 				c.draw_colored_polygon(PackedVector2Array([proj.project(a + out, base), proj.project(b + out, base), proj.project(b, top), proj.project(a, top)]), color)
-				# Tufts down the slope, and the line where it meets the ground.
-				for k in 3:
-					var t := (k + 0.5 + noise(p, 80 + i * 3 + k) * 0.4) / 3.2
-					var at := a.lerp(b, t)
-					c.draw_line(proj.project(at + out * 0.25, lerpf(top, base, 0.25)), proj.project(at + out * 0.7, lerpf(top, base, 0.7)), color.darkened(0.18), 1.0)
+				# The line where the slope meets the ground.
 				c.draw_line(proj.project(a + out, base), proj.project(b + out, base), color.darkened(0.3), 1.0)
 				# Where two banks meet at an outside corner, a wedge of slope joins them.
 				var j := (i + 1) % 4
@@ -1471,12 +1480,7 @@ static func draw_terrace(c: Object, proj: ViewProjection, map: TacticalMap, p: V
 			else:
 				var rock: Color = ROCK[(p.x + p.y) % 2].lerp(ROCK[1], noise(p, 60 + i) * 0.5).darkened(shade + 0.1)
 				c.draw_colored_polygon(PackedVector2Array([proj.project(a, base), proj.project(b, base), proj.project(b, top), proj.project(a, top)]), rock)
-				# Cracks down the face, a lip of turf at the top, and a dark foot.
-				for k in 3:
-					var t := (k + 0.6 + noise(p, 90 + i * 3 + k) * 0.6) / 3.6
-					var at := a.lerp(b, t)
-					var wobble := (noise(p, 95 + k) - 0.5) * 0.12
-					c.draw_line(proj.project(at, top - 0.1), proj.project(at.lerp(b, wobble), lerpf(top, base, 0.55)), rock.darkened(0.3), 1.2)
+				# A lip of turf at the top and a dark foot.
 				c.draw_line(proj.project(a, top), proj.project(b, top), _bank_color(p, i).darkened(tint), 2.0)
 				c.draw_line(proj.project(a, base), proj.project(b, base), rock.darkened(0.5), 1.5)
 	proj.lift = top

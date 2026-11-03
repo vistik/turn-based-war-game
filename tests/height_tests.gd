@@ -320,6 +320,17 @@ func test_generated_maps_have_walkable_hills_and_tall_buildings() -> void:
 			if theatre_id == "normandy":
 				check(MapGenerator.is_playable(layout), "%s is playable" % name)
 
+	# Normandy's random maps have few hills and only some are escarpments, so look across more of them.
+	for seed in range(5, 17):
+		if total_cliffs > 0:
+			break
+		var map: TacticalMap = Theatres.get_theatre("normandy").generate_map(seed, Vector2i(44, 44))["map"]
+		for y in map.height:
+			for x in map.width:
+				var p := Vector2i(x, y)
+				for d: Vector2i in TacticalMap.DIRS8:
+					if map.in_bounds(p + d) and absi(map.get_elevation(p) - map.get_elevation(p + d)) > 1:
+						total_cliffs += 1
 	check(total_cliffs > 0, "some hills are escarpments with a cliff side")
 
 

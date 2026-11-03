@@ -53,6 +53,9 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 **Battles**
 - Two actions per soldier per turn: move, dash, or move and act. Path cost depends on terrain, hedgerows, walls
   and stance. The exact hit chance is shown, with every modifier itemised.
+- The planned move warns where you'd be seen: steps an enemy your side can see now would spot the soldier
+  turn orange, an eye marks where each one first would, a dashed line runs back to him, and the panel names
+  them. Enemies out of sight are never counted, so the preview gives nothing away.
 - Soldiers see 18 tiles (snipers further) and rifles stay accurate to about 9-10, so a unit can shoot about as
   far as it can run.
 - A short list of actions per soldier: move, shoot, overwatch, reload and go prone for everyone, plus what the
@@ -73,8 +76,9 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 - Overwatch holds its fire for targets it can't hurt, such as rifles and machine guns against a tank.
 - The selected unit stands out: a pulsing gold ring and glow under it and a bobbing gold arrow over its
   health bar.
-- The selected soldier's field of fire, while aiming: an outline round everything it can see, green where its
-  gun is at its best and a red tint where the range is poor. Moving shows only the move range.
+- Aiming (1) shows the selected soldier's field of fire in red: where he can shoot, which is everywhere he
+  can see (shooting range is sight range; the further off, the harder to hit, by the weapon's range table),
+  the deeper red where the gun is at its best. Moving shows only the move range: blue to walk, yellow to dash.
 - Moving shows the cover at the destination, and "EXPOSED TO 2" if seen enemies would have it in the open.
 - Hold the right mouse button while moving to see how many seen enemies the soldier could shoot at from the
   hovered destination ("3 TARGETS" in place of "EXPOSED TO", the targets ringed in red; "NO SHOT LEFT" if the move would leave no action to fire).

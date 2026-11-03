@@ -26,6 +26,10 @@ const MOVE_COLOR := Color("4aa3ff")
 ## Demolition targets' rings by state.
 const MISSION_TARGET_COLORS := {"intact": Color("e8e2cf"), "armed": Color("ff6a3d"), "destroyed": Color(0.4, 0.4, 0.4, 0.6)}
 const DASH_COLOR := Color("f5c542")
+## Stretches of a planned move a known enemy would see.
+const SPOTTED_COLOR := Color("ff6a3d")
+## The selected soldier's field of fire: where he can shoot.
+const FIRE_COLOR := Color("ff3b30")
 const KEY_ACTIONS := {KEY_TAB: "next", KEY_ENTER: "end", KEY_KP_ENTER: "end"}
 ## Number keys, by the bar slot they press (1 the first, 0 the tenth).
 const SLOT_KEYS := {KEY_1: 1, KEY_2: 2, KEY_3: 3, KEY_4: 4, KEY_5: 5, KEY_6: 6, KEY_7: 7, KEY_8: 8, KEY_9: 9, KEY_0: 10}
@@ -141,6 +145,10 @@ var _flankers: Array[Unit] = []
 var _peeking := false
 var _peek_targets: Array[Unit] = []
 var _peek_can_fire := false
+## Steps of the planned move (index into its path) where an enemy the side can see would spot the mover,
+## each with who: {index: Array[Unit]}. And everyone who would, in order of who spots him first.
+var _path_spotted := {}
+var _path_spotters: Array[Unit] = []
 ## The selected unit's field of fire: every tile it can see, keyed to how its gun does there
 ## (1 = at its best, 0 = fair, -1 = poor range).
 var _gun_view := {}
@@ -1817,7 +1825,7 @@ func _refresh() -> void:
 	_update_peek_targets()
 	_gun_view.clear()
 	if can_act or (selected != null and not busy and selected.team == view):
-		for p: Vector2i in battle.visible_from(selected.pos, selected.current_sight()):
+		for p: Vector2i in battle.visible_from(selected.pos, selected.current_sight(), selected.level):
 			if p == selected.pos:
 				_gun_view[p] = 0
 			else:
@@ -1862,6 +1870,41 @@ func _update_peek_targets() -> void:
 	if targets != _peek_targets:
 		_peek_targets = targets
 		_overlay_layer.queue_redraw()
+	_update_path_spotting()
+
+
+## Which known enemies (ones the side sees now) would see the selected soldier at each step of the move to the
+## hovered tile. Only enemies already in sight count, so the preview never gives away anyone new.
+func _update_path_spotting() -> void:
+	_path_spotted = {}
+	_path_spotters = []
+	if mode != Mode.MOVE or selected == null or not battle.map.in_bounds(hover) or not _reach.has(hover):
+		return
+	var dest_level := _dest_level(hover)
+	if Pathfinder.cost_to(_reach, hover, dest_level) == INF or (hover == selected.pos and dest_level == selected.level):
+		return
+	var known: Array[Unit] = []
+	for e in battle.enemies_of(selected):
+		if _seen_units.has(e.id) and battle.team_sees(selected.team, e):
+			known.append(e)
+	if known.is_empty():
+		return
+	var map := battle.map
+	var path := Pathfinder.path_to(_reach, hover, dest_level)
+	var levels := Pathfinder.path_levels(_reach, hover, dest_level)
+	for i in path.size():
+		var p := path[i]
+		if p == selected.pos and levels[i] == selected.level:
+			continue
+		var spotters: Array[Unit] = []
+		for e in known:
+			if not Battle.hidden_at(map, e.pos, selected, p, levels[i]) and LineOfSight.can_see(map, e.pos, p, e.current_sight(), true,
+					e.level, levels[i], Battle.eye_stance(e), Battle.eye_stance(selected)):
+				spotters.append(e)
+				if not _path_spotters.has(e):
+					_path_spotters.append(e)
+		if not spotters.is_empty():
+			_path_spotted[i] = spotters
 
 
 func _update_panel() -> void:
@@ -2181,6 +2224,11 @@ func _describe_tile(p: Vector2i) -> String:
 			lines.append("[color=#ff9b8a]Out of reach on this floor this turn[/color]")
 		else:
 			lines.append("Path cost %.1f: %s" % [cost, "dash, uses both actions" if cost > selected.current_mobility() + 0.001 else "one action"])
+			if p == hover and not _path_spotters.is_empty():
+				var names := PackedStringArray()
+				for e in _path_spotters:
+					names.append(e.name)
+				lines.append("[color=#ffa04d]Seen on the way by %s[/color]" % ", ".join(names))
 	if not _flankers.is_empty():
 		lines.append("[color=#ff6b6b]Flanked here by %d enemy[/color]" % _flankers.size())
 	if not _visible_tiles.has(p):
@@ -2889,6 +2937,7 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 			if _reach.has(hover) and Pathfinder.cost_to(_reach, hover, dest_level) != INF and (hover != selected.pos or dest_level != selected.level):
 				var color := MOVE_COLOR if Pathfinder.cost_to(_reach, hover, dest_level) <= selected.current_mobility() + 0.001 else DASH_COLOR
 				_draw_move_path(c, hover, dest_level, color)
+				_draw_path_spotting(c, hover, dest_level)
 				if selected.vehicle:
 					_draw_heading(c, hover, _reach[hover]["facing"], color)
 				var ring := Color("ff6a50") if _peek_can_fire else Color(1, 0.42, 0.31, 0.5)
@@ -2947,8 +2996,6 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 					c.draw_polyline(_ground_circle(_display_pos[risk["unit"].id], 0.45), Color("ff6b6b"), 2.5)
 
 
-## The selected unit's field of fire: an outline round everything it can see, a green outline round where
-## its gun is at its best, and a faint red where it's poor. Aiming fills the bands in.
 ## Redraws the ground markings, and the move range and field of fire wherever they lie.
 func _redraw_overlay() -> void:
 	_overlay_layer.queue_redraw()
@@ -2985,20 +3032,19 @@ func _regions() -> Dictionary:
 		if not fills.has(p):
 			fills[p] = []
 		fills[p].append(color)
-	# The field of fire only while aiming: on top of the move range it's two more sets of outlines to untangle.
-	if not _gun_view.is_empty() and mode not in [Mode.MOVE, Mode.GRENADE, Mode.SMOKE, Mode.MORTAR, Mode.MEDKIT, Mode.FACE]:
-		var aiming := mode == Mode.SHOOT
+	# The field of fire, in red, only while aiming (moving shows just where he can go): where the soldier can
+	# shoot, which is everywhere he can see (the further, the harder to hit), the deeper red where his gun is
+	# at its best.
+	if not _gun_view.is_empty() and battle.can_fire(selected) == "" and mode == Mode.SHOOT:
 		var good := {}
 		for p: Vector2i in _gun_view:
 			var band: int = _gun_view[p]
 			if band == 1:
 				good[p] = true
-			if aiming and band != 0:
-				add_fill.call(p, Color(0.55, 0.9, 0.45, 0.1) if band == 1 else Color(1, 0.4, 0.3, 0.08))
-			elif band == -1:
-				add_fill.call(p, Color(1, 0.4, 0.3, 0.05))
-		borders.append([_gun_view, Color(1, 0.95, 0.8, 0.45 if aiming else 0.3)])
-		borders.append([good, Color(0.55, 0.9, 0.45, 0.7 if aiming else 0.45)])
+			if p != selected.pos:
+				add_fill.call(p, FIRE_COLOR * Color(1, 1, 1, [0.08, 0.15, 0.24][band + 1]))
+		borders.append([_gun_view, FIRE_COLOR * Color(1, 1, 1, 0.8)])
+		borders.append([good, FIRE_COLOR * Color(1, 1, 1, 0.45)])
 	if mode == Mode.MOVE and not _reach.is_empty():
 		# Each tile on the floor a move there would go to. In the building under the cursor only tiles whose
 		# cursor floor can be reached; in other buildings only reachable roofs (the floors below are hidden).
@@ -3084,6 +3130,47 @@ func _draw_move_path(c: CanvasItem, dest: Vector2i, dest_level: int, color: Colo
 	_proj.lift = _tile_lift(dest, dest_level)
 	c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(dest), 0.3), color, 2.5)
 	_proj.lift = 0.0
+
+
+## Marks the stretches of the planned move a known enemy would see: the path turns orange there, an eye sits
+## where each spotter first sees him, and a dashed line runs from the spotter to it.
+func _draw_path_spotting(c: CanvasItem, dest: Vector2i, dest_level: int) -> void:
+	if _path_spotted.is_empty():
+		return
+	var path := Pathfinder.path_to(_reach, dest, dest_level)
+	var levels := Pathfinder.path_levels(_reach, dest, dest_level)
+	var points := PackedVector2Array([_proj.project(_center(selected.pos), _unit_lift(selected))])
+	for i in path.size():
+		points.append(_proj.project(_center(path[i]), _tile_lift(path[i], levels[i])))
+	for i: int in _path_spotted:
+		if i < path.size():
+			c.draw_line(points[i], points[i + 1], SPOTTED_COLOR, 4.0)
+	var marked := {}
+	for i in path.size():
+		if not _path_spotted.has(i):
+			continue
+		var first := false
+		for e: Unit in _path_spotted[i]:
+			if not marked.has(e.id):
+				marked[e.id] = true
+				first = true
+				if _display_pos.has(e.id):
+					var from := _proj.project(_display_pos[e.id], _unit_lift(e) + 0.6)
+					c.draw_dashed_line(from, points[i + 1], Color(SPOTTED_COLOR, 0.75), 1.5, 6.0)
+					c.draw_polyline(_ground_circle(_display_pos[e.id], 0.45), SPOTTED_COLOR, 2.0)
+		if first:
+			_draw_eye(c, points[i + 1] + Vector2(0, -16))
+
+
+## A small eye: the spot an enemy would see the mover.
+func _draw_eye(c: CanvasItem, at: Vector2) -> void:
+	var outline := PackedVector2Array()
+	for k in 17:
+		var t := float(k) / 16.0 * TAU
+		outline.append(at + Vector2(cos(t) * 9.0, sin(t) * 5.0))
+	c.draw_colored_polygon(outline, Color(0, 0, 0, 0.7))
+	c.draw_polyline(outline, SPOTTED_COLOR, 1.5)
+	c.draw_circle(at, 3.0, SPOTTED_COLOR)
 
 
 func _draw_heading(c: CanvasItem, tile: Vector2i, dir: Vector2i, color: Color) -> void:

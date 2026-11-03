@@ -83,7 +83,7 @@ or watch AI vs AI. Unless a row says otherwise, the rules below are shared, with
 ## Squads
 
 Officer (Thompson / MP 40, smoke), Riflemen (M1 Garand / Kar98k), AT (Bazooka / Panzerschreck), Medic (carbine,
-medkits), SMG, MG (M1919 / MG 42, moves or fires, heavy suppression), Sniper (sight 24, best at long range, moves or fires in a turn but not both: `Weapon.fires_standing_still`, `Unit.moved`),
+medkits), SMG, MG (M1919 / MG 42, moves or fires, heavy suppression), Sniper (sight 24, best at long range, moves or fires in a turn but not both: `Weapon.fires_standing_still`, `Unit.moved`; firing takes both actions and the clip is one round, so every shot needs a reload on a turn of its own),
 Mortar team (carbine, 4 HE rounds) and Tanks. No map is a mirror image: each side's ground is its own,
 and fairness comes from objectives both sides walk about as far to.
 

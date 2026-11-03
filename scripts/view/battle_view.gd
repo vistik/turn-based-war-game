@@ -2752,7 +2752,11 @@ func _see_through_buildings() -> Dictionary:
 
 func _apply_prop_modulate(node: Node2D) -> void:
 	var shade := 0.55 if node.get_meta("dark") else 1.0
-	node.modulate = Color(shade, shade, shade, 0.3 if _faded.has(node) else 1.0)
+	var faded := 0.3
+	# Hedges are drawn low enough not to hide a soldier, so in front of one they only thin out a little.
+	if node.has_meta("edge") and battle.map.edge_kind(node.get_meta("edge")) == "hedge":
+		faded = 0.75
+	node.modulate = Color(shade, shade, shade, faded if _faded.has(node) else 1.0)
 
 
 ## Whether a tall thing at grid point g stands in front of focus point f, hiding it.
@@ -2981,7 +2985,8 @@ func _regions() -> Dictionary:
 		if not fills.has(p):
 			fills[p] = []
 		fills[p].append(color)
-	if not _gun_view.is_empty() and mode not in [Mode.GRENADE, Mode.SMOKE, Mode.MORTAR, Mode.MEDKIT, Mode.FACE]:
+	# The field of fire only while aiming: on top of the move range it's two more sets of outlines to untangle.
+	if not _gun_view.is_empty() and mode not in [Mode.MOVE, Mode.GRENADE, Mode.SMOKE, Mode.MORTAR, Mode.MEDKIT, Mode.FACE]:
 		var aiming := mode == Mode.SHOOT
 		var good := {}
 		for p: Vector2i in _gun_view:
@@ -3010,8 +3015,9 @@ func _regions() -> Dictionary:
 			reach[p] = true
 			if cost <= mobility:
 				walk[p] = true
-			if p != selected.pos or level != selected.level:
-				add_fill.call(p, (MOVE_COLOR if walk.has(p) else DASH_COLOR) * Color(1, 1, 1, 0.1))
+			# Only the walk range is filled; the dash range beyond it is just its outline.
+			if walk.has(p) and (p != selected.pos or level != selected.level):
+				add_fill.call(p, MOVE_COLOR * Color(1, 1, 1, 0.07))
 		borders.append([reach, DASH_COLOR])
 		borders.append([walk, MOVE_COLOR])
 	return {"fills": fills, "borders": borders}
@@ -3097,16 +3103,35 @@ func _draw_region_border(c: CanvasItem, tiles: Dictionary, color: Color) -> void
 		_draw_tile_border(c, p, tiles, color)
 
 
-## The sides of tile p on the edge of the region `tiles` (or where the ground steps up or down).
+## The sides of tile p on the edge of the region `tiles`, over a dark casing so they show on any ground. Where
+## the edge runs on across a step down to the next tile of the region, a riser joins the two, so over hills the
+## outline is one shape rather than pieces at different heights.
 func _draw_tile_border(c: CanvasItem, p: Vector2i, tiles: Dictionary, color: Color) -> void:
 	var tall := battle.map.has_height()
 	var lift := _tile_lift(p) if tall else 0.0
+	var casing := Color(0.04, 0.04, 0.07, 0.3 * color.a)
 	for i in 4:
-		var q: Vector2i = p + TacticalMap.DIRS4[i]
-		if not tiles.has(q) or (tall and absf(_tile_lift(q) - lift) > 0.01):
-			var a: Vector2 = Vector2(p) + REGION_CORNERS[i]
-			var b: Vector2 = Vector2(p) + REGION_CORNERS[(i + 1) % 4]
-			c.draw_line(_proj.project(a, lift), _proj.project(b, lift), color, 2.5)
+		if tiles.has(p + TacticalMap.DIRS4[i]):
+			continue
+		var a: Vector2 = Vector2(p) + REGION_CORNERS[i]
+		var b: Vector2 = Vector2(p) + REGION_CORNERS[(i + 1) % 4]
+		_draw_cased_line(c, _proj.project(a, lift), _proj.project(b, lift), color, casing)
+		if not tall:
+			continue
+		# The tiles either side of p along this edge (DIRS4 and REGION_CORNERS both go round clockwise from north).
+		for end in 2:
+			var r: Vector2i = p + TacticalMap.DIRS4[(i + 3) % 4 if end == 0 else (i + 1) % 4]
+			if not tiles.has(r) or tiles.has(r + TacticalMap.DIRS4[i]):
+				continue
+			var r_lift := _tile_lift(r)
+			if r_lift < lift - 0.01:
+				var corner: Vector2 = a if end == 0 else b
+				_draw_cased_line(c, _proj.project(corner, lift), _proj.project(corner, r_lift), color, casing)
+
+
+func _draw_cased_line(c: CanvasItem, from: Vector2, to: Vector2, color: Color, casing: Color) -> void:
+	c.draw_line(from, to, casing, 4.5)
+	c.draw_line(from, to, color, 2.5)
 
 
 func _pose(u: Unit) -> Dictionary:

@@ -604,6 +604,8 @@ func can_fire(u: Unit) -> String:
 		return "Out of ammo, reload first"
 	if u.weapon.fires_standing_still() and u.moved:
 		return "Can't fire after moving this turn"
+	if u.weapon.kind == "sniper" and u.actions < Unit.ACTIONS_PER_TURN:
+		return "A sniper needs both actions to fire"
 	if u.weapon.kind == "at" and u.stance == Unit.Stance.PRONE:
 		return "Can't fire a rocket lying down"
 	return ""

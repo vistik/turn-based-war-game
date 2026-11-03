@@ -60,6 +60,8 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 - A soldier who shoots with both actions left (nothing else done that turn) takes a steady shot: +15 aim.
 - Snipers and heavy machine guns move or fire in a turn, not both: after moving they can't shoot or go on
   overwatch, and after firing they can't move until their next turn.
+- Firing takes a sniper both actions and he holds one round, so after every shot he must reload, and can't
+  reload and fire in the same turn.
 - Directional half and full cover, flanking and line of sight that steps out around corners. Fog of war,
   overwatch, and destructible cover with craters.
 - Fog of war hides what the enemy does out of sight: no turning, stance changes, reloading, healing or damage

@@ -48,6 +48,7 @@ func range_modifier(distance: float) -> int:
 ## "suppression", "range": [modifier per tile...], and optionally "heavy", "anti_tank", "blast"}.
 ## Sniper rifles and heavy machine guns fire only from where the soldier stands: he can move or fire in a turn,
 ## not both.
+## A sniper also needs both actions to fire, and his clip is one round: every shot takes a reload on a turn of its own.
 func fires_standing_still() -> bool:
 	return kind == "sniper" or heavy
 

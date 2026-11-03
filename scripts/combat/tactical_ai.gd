@@ -51,8 +51,8 @@ const EXPLOSIVE_NEARBY_PENALTY := 8.0
 const RELOAD_EMPTY_VALUE := 30.0
 const MEDKIT_VALUE_PER_HP := 8.0
 const RALLY_VALUE := 0.4
-## What being crouched / prone is worth against, for the slower movement it means from now on.
-const STANCE_MOBILITY_COST := [0.0, 2.0, 12.0]
+## What being prone is worth against, for the slower movement it means from now on.
+const STANCE_MOBILITY_COST := {Unit.Stance.STAND: 0.0, Unit.Stance.PRONE: 12.0}
 ## A stance's effect on incoming fire lasts beyond the next enemy turn, so it counts this many times over.
 const STANCE_PERSISTENCE := 2.0
 ## Pinning an enemy (or just suppressing one) through their next turn with suppressive fire, and the rounds it burns.
@@ -198,9 +198,7 @@ func _best_plan(u: Unit, seen: Array[Unit]) -> Dictionary:
 	if battle.can_fire(u) == "":
 		for e in seen:
 			if battle.can_see(u, e):
-				plans.append(_plan(u, "shoot", stay + _shot_value(u, here, e), e))
-				if battle.can_aimed_shot(u, e) == "":
-					plans.append(_plan(u, "aimed_shot", stay + _shot_value(u, here, e, true), e))
+				plans.append(_plan(u, "shoot", stay + _shot_value(u, here, e, Battle.is_steady(u)), e))
 				if battle.can_suppress(u, e) == "":
 					plans.append(_plan(u, "suppress", stay + _suppress_value(u, e, seen), e))
 		for tile in _explosives_near(seen):
@@ -213,13 +211,6 @@ func _best_plan(u: Unit, seen: Array[Unit]) -> Dictionary:
 					plans.append(_plan(u, "shoot_object", stay + value * chance - OBJECT_SHOT_COST, null, tile))
 		if not u.is_pinned():
 			plans.append(_plan(u, "overwatch", stay + _overwatch_value(u, here, seen)))
-	if battle.can_set_up(u) == "":
-		var ready_value := OVERWATCH_VALUE * 0.6
-		if u.actions >= 2:
-			for e in seen:
-				if battle.can_see(u, e):
-					ready_value = maxf(ready_value, _shot_value(u, here, e))
-		plans.append(_plan(u, "set_up", stay + ready_value))
 	if u.grenades > 0:
 		for tile in _tiles_around(seen):
 			if battle.can_throw_grenade(u, tile) == "":
@@ -249,15 +240,15 @@ func _best_plan(u: Unit, seen: Array[Unit]) -> Dictionary:
 	if u.ammo < u.weapon.clip_size:
 		var reload_value := RELOAD_EMPTY_VALUE if u.ammo == 0 else (4.0 if seen.is_empty() else 0.0)
 		plans.append(_plan(u, "reload", stay + reload_value))
-	if map.has_cover(here, u.level) and not u.vehicle:
-		plans.append(_plan(u, "hunker", stay + _danger(u, here, seen)[1]))
 	if u.vehicle:
-		# Turning on the spot to put the front armour toward the threat.
+		# Turning on the spot (a move to its own tile with a facing) to put the front armour toward the threat.
 		var facing := u.facing
 		for dir: Vector2i in Pathfinder.HEADINGS:
-			if battle.can_pivot(u, dir) == "":
+			if battle.can_move(u, here, u.level, dir) == "":
 				u.facing = dir
-				plans.append(_plan(u, "pivot", _position_score(u, here, seen) - 2.0, null, dir))
+				var turn := _plan(u, "move", _position_score(u, here, seen) - 2.0, null, here)
+				turn["facing"] = dir
+				plans.append(turn)
 		u.facing = facing
 
 	if not u.vehicle:
@@ -325,7 +316,7 @@ func _plan(u: Unit, kind: String, value: float, target: Unit = null, tile := Vec
 	return {"unit": u, "kind": kind, "value": value, "target": target, "tile": tile}
 
 
-## Changing stance on the spot (then the best thing to do there with the action left), and for a crouched or
+## Going prone or standing up on the spot (then the best thing to do there with the action left), and for a
 ## prone soldier, standing up to move further than it could crawl.
 func _stance_plans(u: Unit, seen: Array[Unit]) -> Array[Dictionary]:
 	var plans: Array[Dictionary] = []
@@ -333,7 +324,7 @@ func _stance_plans(u: Unit, seen: Array[Unit]) -> Array[Dictionary]:
 	var current := u.stance
 	var mobility_weight := 0.5 if u.is_pinned() else 1.0
 	var stay := _position_score(u, here, seen)
-	for stance: int in [Unit.Stance.STAND, Unit.Stance.CROUCH, Unit.Stance.PRONE]:
+	for stance: int in [Unit.Stance.STAND, Unit.Stance.PRONE]:
 		if battle.can_change_stance(u, stance) != "":
 			continue
 		u.stance = stance as Unit.Stance
@@ -363,12 +354,10 @@ func _stance_plans(u: Unit, seen: Array[Unit]) -> Array[Dictionary]:
 	return plans
 
 
-## Best use of an action left over when staying on the spot: shoot, overwatch, set up or reload.
+## Best use of an action left over when staying on the spot: shoot, overwatch or reload.
 func _stay_followup_value(u: Unit, seen: Array[Unit]) -> float:
 	if u.ammo == 0:
 		return RELOAD_EMPTY_VALUE
-	if battle.can_set_up(u) == "":
-		return OVERWATCH_VALUE * 0.6
 	if battle.can_fire(u) != "":
 		return 0.0
 	var best := _overwatch_value(u, u.pos, seen)
@@ -382,12 +371,14 @@ func _command(plan: Dictionary) -> Dictionary:
 	var command := {"cmd": plan["kind"], "unit": plan["unit"].id}
 	if plan["target"] != null:
 		command["target"] = plan["target"].id
-	if plan["kind"] in ["move", "pivot", "grenade", "mortar", "shoot_object", "tunnel", "trap", "detonate", "plant", "defuse"]:
+	if plan["kind"] in ["move", "grenade", "mortar", "shoot_object", "tunnel", "trap", "detonate", "plant", "defuse"]:
 		command["tile"] = plan["tile"]
 	if plan["kind"] == "stance":
 		command["stance"] = plan["stance"]
 	if plan.has("level"):
 		command["level"] = plan["level"]
+	if plan.has("facing"):
+		command["facing"] = plan["facing"]
 	if plan["kind"] == "mortar":
 		command["kind"] = "he"
 	return command
@@ -438,7 +429,7 @@ func _position_score(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 	var caution := 2.0 - float(u.hp) / u.max_hp
 	if u.id == battle.mission.get("vip", -1):
 		caution *= VIP_CAUTION
-	score -= _danger(u, tile, seen)[0] * DANGER_WEIGHT * caution
+	score -= _danger(u, tile, seen) * DANGER_WEIGHT * caution
 	score += _mission_score(u, tile)
 
 	var point := Vector2(tile) + Vector2(0.5, 0.5)
@@ -491,10 +482,9 @@ func _explosives_near(seen: Array[Unit]) -> Array[Vector2i]:
 	return result
 
 
-## [expected incoming damage x 10, how much of it hunkering down would prevent] for standing on a tile.
-func _danger(u: Unit, tile: Vector2i, seen: Array[Unit]) -> Array[float]:
+## Expected incoming damage x 10 (plus marked shells and charges) for standing on a tile.
+func _danger(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 	var danger := 0.0
-	var hunker_gain := 0.0
 	var level := _level_of(u, tile)
 	for threat in _threats(seen):
 		var e: Unit = threat[0]
@@ -508,9 +498,6 @@ func _danger(u: Unit, tile: Vector2i, seen: Array[Unit]) -> Array[float]:
 			continue
 		var outcome := _expected_damage(e, from, u, tile, false, from_level, level)
 		danger += (outcome[0] * 10.0 + outcome[1] * KILL_BONUS * 0.5) * weight
-		var cover := battle.map.cover_against(tile, from, level, from_level)
-		if cover != Cover.NONE:
-			hunker_gain += CombatRules.COVER_DEFENSE[cover] / 100.0 * _average_damage(e) * 10.0 * weight
 	for strike in battle.strikes:
 		if strike["kind"] != "smoke" and Vector2(tile).distance_to(Vector2(strike["target"])) <= battle.strike_reach(strike) + 0.5:
 			danger += STRIKE_DANGER
@@ -518,7 +505,7 @@ func _danger(u: Unit, tile: Vector2i, seen: Array[Unit]) -> Array[float]:
 		for t: Dictionary in battle.mission.get("targets", []):
 			if t["state"] == "armed" and Vector2(tile).distance_to(Vector2(t["tile"])) <= Mission.CHARGE_RADIUS + 0.5:
 				danger += CHARGE_DANGER
-	return [danger, hunker_gain]
+	return danger
 
 
 ## Best thing to do with the second action after moving to a tile.
@@ -528,11 +515,8 @@ func _followup_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 		return charge
 	if u.ammo == 0:
 		return RELOAD_EMPTY_VALUE
-	if u.weapon.needs_setup:
-		# Moving packs the gun away: the second action can only set it up again.
-		return OVERWATCH_VALUE * 0.6
 	if u.weapon.fires_standing_still():
-		# A sniper who moves can't fire (or overwatch) this turn.
+		# A sniper or heavy machine gunner who moves can't fire (or overwatch) this turn.
 		return 0.0
 	var best := _overwatch_value(u, tile, seen)
 	var level := _level_of(u, tile)
@@ -548,8 +532,8 @@ func _followup_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 	return best
 
 
-func _shot_value(u: Unit, from: Vector2i, target: Unit, aimed := false) -> float:
-	var outcome := _expected_damage(u, from, target, target.pos, aimed, _level_of(u, from), target.level)
+func _shot_value(u: Unit, from: Vector2i, target: Unit, steady := false) -> float:
+	var outcome := _expected_damage(u, from, target, target.pos, steady, _level_of(u, from), target.level)
 	var value := (outcome[0] * 10.0 + outcome[1] * KILL_BONUS) * _target_weight(target) + (5.0 if target.overwatch else 0.0)
 	if CombatRules.misses_stray(u.weapon):
 		value -= _stray_cost(u, from, target)
@@ -564,7 +548,7 @@ func _shot_value(u: Unit, from: Vector2i, target: Unit, aimed := false) -> float
 				value += splash * (-2.0 if other.team == team else 0.6)
 		if battle.map.has_cover(target.pos, target.level):
 			value += 6.0
-	if u.weapon.needs_setup:
+	if u.weapon.heavy:
 		for ally in battle.alive_units(target.team):
 			if ally != target and Vector2(ally.pos).distance_to(Vector2(target.pos)) <= CombatRules.MG_AREA_RADIUS:
 				suppression += mini(100 - ally.suppression, int(u.weapon.suppression / 2.0))
@@ -962,7 +946,7 @@ func _can_see(from: Vector2i, to: Vector2i, sight: float, from_level := 0, to_le
 
 ## [expected damage, kill probability] of shooter (standing on from) firing at target (standing on at), on the
 ## given floors (-1: where they are now).
-func _expected_damage(shooter: Unit, from: Vector2i, target: Unit, at: Vector2i, aimed := false, from_level := -1, at_level := -1) -> Array[float]:
+func _expected_damage(shooter: Unit, from: Vector2i, target: Unit, at: Vector2i, steady := false, from_level := -1, at_level := -1) -> Array[float]:
 	var saved := [shooter.pos, target.pos, shooter.level, target.level]
 	shooter.pos = from
 	target.pos = at
@@ -970,7 +954,7 @@ func _expected_damage(shooter: Unit, from: Vector2i, target: Unit, at: Vector2i,
 		shooter.level = from_level
 	if at_level >= 0:
 		target.level = at_level
-	var odds := battle.shot_odds(shooter, target, false, aimed)
+	var odds := battle.shot_odds(shooter, target, false, steady)
 	shooter.pos = saved[0]
 	target.pos = saved[1]
 	shooter.level = saved[2]

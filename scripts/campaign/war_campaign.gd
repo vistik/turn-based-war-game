@@ -4,7 +4,7 @@ extends RefCounted
 ## Each side has one pool of supply for the whole campaign. Before every map both sides secretly decide how
 ## much of it to commit (between a minimum and a maximum), buy units with it, and choose a deployment:
 ## where to stand (balanced, left or right flank) and how (offensive: deployed further forward; defensive:
-## further back, behind sandbags, crouched). Supply spent on a map is gone; whatever isn't spent stays for
+## further back, behind sandbags). Supply spent on a map is gone; whatever isn't spent stays for
 ## the maps to come. Winning a map scores its points (a draw splits them), and the most points wins.
 ##
 ## Unit prices, AI shopping lists and map names come from the theatre (Theatre.cost, the faction's
@@ -216,9 +216,7 @@ func build_battle() -> Battle:
 	options.merge(theatre().battle_options())
 	var prepared := Mission.prepare(theatre(), layout, rosters, mission_setup, m["seed"], rounds)
 	options["mission"] = prepared["mission"]
-	var battle := BattleFactory.create(prepared["layout"], prepared["rosters"], m["seed"], options)
-	brace(battle, deployments)
-	return battle
+	return BattleFactory.create(prepared["layout"], prepared["rosters"], m["seed"], options)
 
 
 ## Places both rosters as their deployments say ({"flank", "posture"}; {} keeps a side on the map's usual
@@ -254,13 +252,6 @@ static func deploy(layout: Dictionary, rosters: Array, deployments: Array) -> Ar
 			if map.in_bounds(front) and map.is_passable(front) and not taken.has(front) and map.get_edge(tile, front) == Cover.NONE:
 				map.set_object(front, Cover.HALF, "sandbags")
 	return placed
-
-
-## Defensive deployments start crouched (tanks excepted).
-static func brace(battle: Battle, deployments: Array) -> void:
-	for u in battle.units:
-		if not u.vehicle and deployments[u.team].get("posture", "") == "defensive":
-			u.stance = Unit.Stance.CROUCH
 
 
 ## Start tiles for a side's units: a band along its own edge, shifted to the chosen flank, nearer the enemy

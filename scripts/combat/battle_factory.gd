@@ -100,7 +100,7 @@ static func _make_unit(id: int, entry: Variant, team: int, pos: Vector2i, names:
 	if spec.has("facing"):
 		u.facing = spec["facing"]
 	if spec.has("stance") and not u.vehicle:
-		u.stance = spec["stance"]
+		u.stance = Unit.stance_from(spec["stance"])
 	return u
 
 

@@ -55,8 +55,9 @@ const INDIRECT_DEFAULTS := {
 	"name": "mortar", "min": 5.0, "max": 22.0, "radius": 1.5, "damage": [3, 5],
 	## Tiles off target per tile of distance, plus a flat amount.
 	"scatter": 0.08, "scatter_flat": 0.0,
-	## Shell kinds it can fire, in the order the UI offers them: "he", "smoke", "napalm".
-	"kinds": ["he", "smoke"],
+	## Shell kinds it can fire, in the order the UI offers them: "he", and "napalm" for the RTO's battery.
+	## (Smoke shells are left to the officers' smoke grenades; "smoke" still works for a spec that lists it.)
+	"kinds": ["he"],
 	## Must not have moved this turn (a mortar being set up), and who must see the target: "team", "self", or
 	## "none" (indirect fire at any tile in range, scattering further where nobody sees it: Battle.BLIND_SCATTER).
 	"still": true, "spotter": "none",

@@ -360,7 +360,7 @@ static func _target_tile(map: TacticalMap, want: Vector2i, reach: Dictionary, ta
 
 
 ## Places a defending roster around `centers` (spread over them in turn), within `spread` tiles, in cover
-## facing the attacker where it can, crouched and facing the attacker's edge; sandbags where there's no cover.
+## facing the attacker where it can, and facing the attacker's edge; sandbags where there's no cover.
 ## Units may stand next to each other only when there's no room left.
 static func _dig_in(map: TacticalMap, roster: Array, centers: Array, spread: float, attacker: int, reach: Dictionary, taken: Dictionary, rng: RandomNumberGenerator) -> void:
 	# Toward the attacker's edge.
@@ -390,8 +390,6 @@ static func _dig_in(map: TacticalMap, roster: Array, centers: Array, spread: flo
 		taken[best] = true
 		entry["pos"] = best
 		entry["facing"] = forward
-		# Crouched (BattleFactory leaves vehicles standing).
-		entry["stance"] = Unit.Stance.CROUCH
 		var front := best + forward
 		var from_edge := Vector2i(0 if attacker == 0 else map.width - 1, best.y)
 		if map.cover_against(best, from_edge) == Cover.NONE and map.in_bounds(front) and map.is_passable(front) \

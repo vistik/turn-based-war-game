@@ -7,7 +7,7 @@ extends RefCounted
 ## TRAMPLED is wheat (or tall grass) flattened by soldiers or tanks moving through it; WIRE is a barbed-wire
 ## entanglement. JUNGLE is dense undergrowth: slow, hides whoever is in it and blocks sight through it.
 ## PADDY is a flooded rice field: slow, open, and it bogs vehicles down. TALL_GRASS is elephant grass: it
-## hides crouching soldiers as well as prone ones, and is trampled like wheat. TRENCH is dug below the ground:
+## hides prone soldiers like wheat, a little closer in, and is trampled like it. TRENCH is dug below the ground:
 ## full cover against fire from outside it, none along it (fire down the trench line enfilades it), a little
 ## slow to walk and slower to climb in or out of. From in it you see along it and TRENCH_SIGHT tiles beyond its
 ## lip, and only from there (or from a level higher) can anyone see in.
@@ -31,14 +31,15 @@ const TRENCH_SIGHT := 3
 const VEHICLE_TERRAIN_COST := {Terrain.WIRE: 1.0, Terrain.JUNGLE: 3.0, Terrain.PADDY: 3.0, Terrain.TALL_GRASS: 1.0, Terrain.TRENCH: 3.0}
 ## What a tank leaves behind it.
 const VEHICLE_FLATTENS := {Terrain.WIRE: Terrain.FLOOR, Terrain.WHEAT: Terrain.TRAMPLED, Terrain.TALL_GRASS: Terrain.TRAMPLED, Terrain.JUNGLE: Terrain.ROUGH}
-## Crops and grass a standing or crouching soldier tramples flat as he walks out of it.
+## Crops and grass a standing soldier tramples flat as he walks out of it.
 const TRAMPLES := {Terrain.WHEAT: Terrain.TRAMPLED, Terrain.TALL_GRASS: Terrain.TRAMPLED}
 ## Terrain that hides those in it from anyone further than "range" tiles away, in the listed stances, unless
-## they have fired; and makes them harder to hit beyond that range ("defense", shown as "label").
+## they have fired; and makes them harder to hit beyond that range ("defense", shown as "label"). Stances are
+## Unit.Stance values (0 standing, 2 prone).
 const CONCEALMENT := {
 	Terrain.WHEAT: {"range": 4.0, "stances": [2], "defense": 10, "label": "In the wheat"},
-	Terrain.TALL_GRASS: {"range": 3.0, "stances": [1, 2], "defense": 10, "label": "In the tall grass"},
-	Terrain.JUNGLE: {"range": 3.0, "stances": [0, 1, 2], "defense": 15, "label": "In the jungle"},
+	Terrain.TALL_GRASS: {"range": 3.0, "stances": [2], "defense": 10, "label": "In the tall grass"},
+	Terrain.JUNGLE: {"range": 3.0, "stances": [0, 2], "defense": 15, "label": "In the jungle"},
 }
 ## Sight passes through at most this many jungle tiles (not counting the two ends).
 const JUNGLE_SIGHT_TILES := 1
@@ -66,8 +67,8 @@ const CRUSHABLE_EDGES := ["fence", "stone", "hedge", "dyke", "bamboo_wall", "bam
 ## a building's storey count is its roof.
 const MAX_ELEVATION := 3
 const MAX_STOREYS := 3
-## Eye height above the floor, in levels, for each stance (Unit.Stance). Vehicles count as standing.
-const STANCE_EYE := [0.55, 0.35, 0.12]
+## Eye height above the floor, in levels, for each stance (Unit.Stance: 0 standing, 2 prone). Vehicles count as standing.
+const STANCE_EYE := {0: 0.55, 2: 0.12}
 ## How tall things are, in levels, for seeing over them from higher up. Other full-cover objects stand
 ## FULL_OBJECT_HEIGHT high, free-standing full walls WALL_HEIGHT; building walls reach the roof.
 const OBJECT_HEIGHT := {"tree": 2.5, "palm": 2.5, "poplar": 3.0, "bamboo": 2.0, "oil_tank": 1.3}

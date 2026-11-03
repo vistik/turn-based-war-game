@@ -13,7 +13,7 @@ const ROCKET_RANGE := [0, 20, 15, 10, 5, 0, -5, -10, -20, -30, -40]
 
 const WEAPONS := {
 	"m16": {"name": "M16", "kind": "rifle", "damage": [3, 5], "crit": 10, "crit_damage": 2, "clip": 10, "suppression": 22, "range": M16_RANGE},
-	"m60": {"name": "M60", "kind": "mg", "damage": [4, 6], "crit": 5, "crit_damage": 2, "clip": 6, "suppression": 50, "range": MG_RANGE, "setup": true},
+	"m60": {"name": "M60", "kind": "mg", "damage": [4, 6], "crit": 5, "crit_damage": 2, "clip": 6, "suppression": 50, "range": MG_RANGE, "heavy": true},
 	## The grenadier's M79 fires buckshot at close quarters; its grenades are lobbed (long throw range).
 	"m79": {"name": "M79 (buckshot)", "kind": "launcher", "damage": [2, 5], "crit": 5, "crit_damage": 2, "clip": 1, "suppression": 20,
 		"range": [0, 30, 20, 10, 0, -10, -25, -40]},
@@ -122,8 +122,8 @@ static func _us_roles() -> Dictionary:
 		"Grenadier": Theatre.role({"name": "Grenadier", "hp": 8, "aim": 62, "mobility": 6.5, "grenades": 5, "throw_range": 15.0, "weapon": WEAPONS["m79"],
 			"range": 7.0, "cost": 5, "note": "M79: lobs grenades a long way", "kit": "Grenadier", "icon": "Grenadier"}),
 		"M60 Gunner": Theatre.role({"name": "M60 Gunner", "hp": 9, "aim": 72, "mobility": 6.0, "weapon": WEAPONS["m60"], "range": 9.0, "cost": 7,
-			"note": "Heavy suppression once set up", "kit": "MG", "icon": "MG"}),
-		"Medic": Theatre.role({"name": "Medic", "hp": 7, "aim": 58, "mobility": 6.5, "medkits": 4, "smoke": 1, "weapon": WEAPONS["m16"],
+			"note": "Heavy suppression; moves or fires, not both", "kit": "MG", "icon": "MG"}),
+		"Medic": Theatre.role({"name": "Medic", "hp": 7, "aim": 58, "mobility": 6.5, "medkits": 4, "weapon": WEAPONS["m16"],
 			"range": 6.0, "cost": 5, "note": "\"Doc\": heals and treats wounds"}),
 		"RTO": Theatre.role({"name": "RTO", "hp": 8, "aim": 62, "mobility": 6.5, "mortar_rounds": 2, "mortar_smoke": 1, "weapon": WEAPONS["m16"],
 			"indirect": ARTILLERY, "range": 8.0, "holds_back": true, "cost": 9,
@@ -150,12 +150,12 @@ static func _vc_roles() -> Dictionary:
 		"Assault": vc.call({"name": "Assault", "hp": 5, "aim": 55, "mobility": 8.0, "grenades": 2, "weapon": WEAPONS["ak47"], "range": 4.0,
 			"cost": 3, "note": "AK-47: deadly up close", "kit": "Assault", "icon": "SMG"}),
 		"RPD Gunner": vc.call({"name": "RPD Gunner", "hp": 6, "aim": 62, "mobility": 7.0, "weapon": WEAPONS["rpd"], "range": 8.0, "cost": 4,
-			"note": "Light machine gun, no setting up", "kit": "MG", "icon": "MG"}),
+			"note": "Light machine gun: moves and fires", "kit": "MG", "icon": "MG"}),
 		"RPG": vc.call({"name": "RPG", "hp": 5, "aim": 52, "mobility": 7.5, "weapon": WEAPONS["rpg"], "range": 5.0, "cost": 4,
 			"note": "RPG-2: stops armour, blows cover apart", "kit": "AT", "icon": "AT"}),
 		"Sapper": vc.call({"name": "Sapper", "hp": 5, "aim": 50, "mobility": 8.5, "grenades": 3, "weapon": WEAPONS["type50"], "range": 3.0,
 			"cost": 3, "note": "Satchel charges; lays punji traps", "kit": "Sapper", "icon": "Sapper", "traits": ["traps"], "traps": 2}),
-		"Mortar": vc.call({"name": "Mortar", "hp": 5, "aim": 50, "mobility": 6.5, "mortar_rounds": 3, "mortar_smoke": 1, "weapon": WEAPONS["sks"],
+		"Mortar": vc.call({"name": "Mortar", "hp": 5, "aim": 50, "mobility": 6.5, "mortar_rounds": 3, "weapon": WEAPONS["sks"],
 			"indirect": {"name": "mortar", "max": 20.0}, "range": 14.0, "holds_back": true, "cost": 4, "note": "60mm mortar over the treeline"}),
 	}
 

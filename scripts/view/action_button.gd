@@ -6,7 +6,7 @@ extends Button
 
 const SIZE := 50.0
 
-## Which icon to draw (an ActionIcons name; may differ from the action, e.g. "stand" for crouch when crouched).
+## Which icon to draw (an ActionIcons name; may differ from the action, e.g. "stand" for prone when lying down).
 var icon_name := ""
 var key := ""
 ## Small text in the bottom right corner ("2", "HE"), or "".
@@ -28,6 +28,14 @@ func _init(p_icon: String, p_key: String, p_title: String) -> void:
 
 func describe() -> String:
 	return "%s (%s)" % [title, key] if key != "" else title
+
+
+func set_key(p_key: String) -> void:
+	if p_key == key:
+		return
+	key = p_key
+	tooltip_text = describe()
+	queue_redraw()
 
 
 func set_look(p_icon: String, p_title: String, p_badge := "") -> void:

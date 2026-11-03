@@ -16,7 +16,7 @@ const DrawLayer := preload("res://scripts/view/draw_layer.gd")
 const PANEL_WIDTH := 280.0
 const TOP_BAR_HEIGHT := 50.0
 ## Controls listed by the "?" button in the top bar.
-const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nHold right click while moving: targets from there\nTab next unit   Enter end turn\n1-0, T, C, Z, X, B, G, U, J, K: actions (see buttons)\nH: suggest a move (Shift+H: this soldier)\nWASD / arrows / middle drag: pan\nWheel: cursor height in tall buildings (zoom on flat maps)\nCtrl/Cmd + wheel or pinch: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\nPage Up / Down or wheel: cursor up / down a floor\n+ / -: playback speed   M: music on / off"
+const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nHold right click while moving: targets from there\nTab next unit   Enter end turn\n1-9, 0: actions, by their place on the bar (1 shoot, 2 overwatch, 3 reload, 4 prone; 5 on: the role's own)\nH: suggest a move (Shift+H: this soldier)\nWASD / arrows / middle drag: pan\nWheel: cursor height in tall buildings (zoom on flat maps)\nCtrl/Cmd + wheel or pinch: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\nPage Up / Down or wheel: cursor up / down a floor\n+ / -: playback speed   M: music on / off"
 const NEUTRAL_COLOR := Color("e8e2cf")
 ## The selected unit's ring and the chevron over its head.
 const SELECTION_COLOR := Color("ffd34d")
@@ -26,24 +26,25 @@ const MOVE_COLOR := Color("4aa3ff")
 ## Demolition targets' rings by state.
 const MISSION_TARGET_COLORS := {"intact": Color("e8e2cf"), "armed": Color("ff6a3d"), "destroyed": Color(0.4, 0.4, 0.4, 0.6)}
 const DASH_COLOR := Color("f5c542")
-const KEY_ACTIONS := {
-	KEY_1: "shoot", KEY_2: "overwatch", KEY_3: "hunker", KEY_4: "reload", KEY_5: "grenade",
-	KEY_6: "smoke", KEY_7: "set_up", KEY_8: "rally", KEY_9: "medkit", KEY_0: "mortar", KEY_T: "pivot",
-	KEY_C: "crouch", KEY_Z: "prone", KEY_X: "aimed", KEY_B: "suppress", KEY_G: "clear_mine",
-	KEY_U: "tunnel", KEY_J: "trap", KEY_K: "detonate", KEY_P: "charge",
-	KEY_TAB: "next", KEY_ENTER: "end", KEY_KP_ENTER: "end",
-}
-## The action bar, in order: [action, key, name]. Each gets an icon (ActionIcons) of the same name.
+const KEY_ACTIONS := {KEY_TAB: "next", KEY_ENTER: "end", KEY_KP_ENTER: "end"}
+## Number keys, by the bar slot they press (1 the first, 0 the tenth).
+const SLOT_KEYS := {KEY_1: 1, KEY_2: 2, KEY_3: 3, KEY_4: 4, KEY_5: 5, KEY_6: 6, KEY_7: 7, KEY_8: 8, KEY_9: 9, KEY_0: 10}
+## Actions every soldier has, always on the same key: [action, slot]. Tanks have no stance, so 4 stays empty.
+const FIXED_SLOTS := {"shoot": 1, "overwatch": 2, "reload": 3, "prone": 4}
+## The action bar, in order: [action, name]. Each gets an icon (ActionIcons) of the same name. After the four
+## everyone has come the role's own (numbered 5 on in this order, among those the soldier has), then the ones
+## that only show up now and then (a demolition target, a tunnel entrance, a mine next to him), last so that
+## they never shift the others' keys.
 const ACTION_BUTTONS := [
-	["shoot", "1", "Shoot"], ["aimed", "X", "Aimed shot: both actions, +15 aim"], ["suppress", "B", "Suppressive fire"],
-	["overwatch", "2", "Overwatch"], ["hunker", "3", "Hunker down"], ["reload", "4", "Reload"],
-	["grenade", "5", "Grenade"], ["smoke", "6", "Smoke grenade"], ["set_up", "7", "Set up the MG"], ["rally", "8", "Rally"],
-	["medkit", "9", "Medkit"], ["mortar", "0", "Mortar"], ["pivot", "T", "Turn the tank"],
-	["crouch", "C", "Crouch"], ["prone", "Z", "Go prone"], ["clear_mine", "G", "Clear a mine, or blow in a tunnel"],
-	["tunnel", "U", "Through the tunnels: up at another entrance (both actions)"], ["trap", "J", "Lay a trap"], ["detonate", "K", "Set off an IED"],
-	["charge", "P", "Plant a demolition charge, or pull one"],
-	["next", "Tab", "Next soldier"], ["end", "Enter", "End turn"],
+	["shoot", "Shoot: a steady shot (+15 aim) with both actions left"], ["overwatch", "Overwatch"], ["reload", "Reload"],
+	["prone", "Go prone"],
+	["suppress", "Suppressive fire"], ["grenade", "Grenade"], ["smoke", "Smoke grenade"], ["rally", "Rally"],
+	["medkit", "Medkit"], ["mortar", "Mortar"], ["trap", "Lay a trap"], ["detonate", "Set off an IED"],
+	["charge", "Plant a demolition charge, or pull one"], ["tunnel", "Through the tunnels: up at another entrance (both actions)"],
+	["clear_mine", "Clear a mine, or blow in a tunnel"],
+	["next", "Next soldier"], ["end", "End turn"],
 ]
+const TURN_KEYS := {"next": "Tab", "end": "Enter"}
 const SHOT_LABELS := {"miss": "MISS", "graze": "GRAZE", "hit": "HIT", "crit": "CRITICAL", "suppressing": "SUPPRESSING FIRE"}
 const STANCE_COLOR := "8fd3ff"
 ## Seconds a soldier takes to fall, and for a tank to brew up.
@@ -79,7 +80,8 @@ const TOP_Z := 4000
 ## Chunks repainted per frame, to spread the cost of a full repaint.
 const CHUNK_BUDGET := 3
 
-enum Mode { MOVE, SHOOT, GRENADE, SMOKE, MEDKIT, MORTAR, PIVOT, CLEAR_MINE, TUNNEL, TRAP, DETONATE }
+## FACE: a tank's move has a destination (_face_tile) and waits for where to face at the end.
+enum Mode { MOVE, SHOOT, GRENADE, SMOKE, MEDKIT, MORTAR, FACE, CLEAR_MINE, TUNNEL, TRAP, DETONATE }
 
 var battle: Battle
 ## Per team: null for a human player, otherwise the TacticalAI playing it.
@@ -119,7 +121,12 @@ var _left_press_pos := Vector2.ZERO
 var _left_dragging := false
 var _speed_index := 0
 var _mortar_kind := "he"
-## In shooting mode: the command a click on a target gives (shoot, aimed_shot or suppress).
+## Which action each number key presses now: {slot (1-10): action}, for the buttons on the bar (_assign_keys).
+var _slot_actions := {}
+## In FACE mode: where the tank is going, and on which floor.
+var _face_tile := Vector2i.ZERO
+var _face_level := 0
+## In shooting mode: the command a click on a target gives (shoot or suppress).
 var _shot_cmd := "shoot"
 var _time := 0.0
 var _turn_started := false
@@ -377,6 +384,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_set_mode(Mode.MOVE)
 		elif KEY_ACTIONS.has(event.keycode):
 			_on_action(KEY_ACTIONS[event.keycode])
+		elif SLOT_KEYS.has(event.keycode) and _slot_actions.has(SLOT_KEYS[event.keycode]):
+			_on_action(_slot_actions[SLOT_KEYS[event.keycode]])
 		else:
 			return
 	else:
@@ -494,8 +503,20 @@ func _on_click(tile: Vector2i) -> void:
 	var err := ""
 	match mode:
 		Mode.MOVE:
-			if own:
+			if own and u == selected and u.vehicle:
+				# Clicking the selected tank: turn it on the spot.
+				err = battle.can_act(u)
+				if err == "":
+					_face_tile = u.pos
+					_face_level = u.level
+					_set_mode(Mode.FACE)
+			elif own:
 				_select(u)
+			elif selected != null and selected.vehicle and battle.can_move(selected, tile, _dest_level(tile)) == "" and u == null:
+				# Tanks pick where to face once they get there: a second click.
+				_face_tile = tile
+				_face_level = _dest_level(tile)
+				_set_mode(Mode.FACE)
 			elif selected != null and battle.can_move(selected, tile, _dest_level(tile)) == "" and (u == null or u == selected):
 				var command := {"cmd": "move", "unit": selected.id, "tile": tile}
 				if battle.map.has_height():
@@ -545,11 +566,19 @@ func _on_click(tile: Vector2i) -> void:
 			err = battle.can_use_medkit(selected, u)
 			if err == "":
 				_command({"cmd": "medkit", "unit": selected.id, "target": u.id})
-		Mode.PIVOT:
-			var dir := _pivot_dir(tile)
-			err = battle.can_pivot(selected, dir) if tile != selected.pos else "Click where the tank should face"
+		Mode.FACE:
+			var facing := _face_dir(tile)
+			if tile == _face_tile and _face_tile == selected.pos:
+				err = "Click where the tank should face"
+			else:
+				err = battle.can_move(selected, _face_tile, _face_level, facing)
 			if err == "":
-				_command({"cmd": "pivot", "unit": selected.id, "tile": dir})
+				var command := {"cmd": "move", "unit": selected.id, "tile": _face_tile}
+				if facing != Vector2i.ZERO:
+					command["facing"] = facing
+				if battle.map.has_height():
+					command["level"] = _face_level
+				_command(command)
 	if err != "":
 		_flash(err)
 
@@ -596,18 +625,16 @@ func _on_action(action: String) -> void:
 		return
 	var err := ""
 	match action:
-		"shoot", "aimed", "suppress":
+		"shoot", "suppress":
 			err = battle.can_fire(selected)
-			if err == "" and action == "aimed" and selected.actions < Unit.ACTIONS_PER_TURN:
-				err = "An aimed shot needs both actions"
-			if err == "" and action == "suppress" and (selected.vehicle or selected.weapon.anti_tank):
-				err = "This weapon can't lay down suppressive fire"
+			if err == "" and action == "suppress" and not Battle.can_lay_suppressive_fire(selected):
+				err = "Only machine gunners lay down suppressive fire"
 			if err == "" and action == "suppress" and selected.ammo < CombatRules.SUPPRESSIVE_FIRE_AMMO:
 				err = "Needs %d rounds, reload first" % CombatRules.SUPPRESSIVE_FIRE_AMMO
 			if err == "" and battle.visible_enemies(selected).is_empty() and (action != "shoot" or _explosives_in_sight(selected).is_empty()):
 				err = "No enemies in line of sight"
 			if err == "":
-				_shot_cmd = {"shoot": "shoot", "aimed": "aimed_shot", "suppress": "suppress"}[action]
+				_shot_cmd = action
 				_set_mode(Mode.SHOOT)
 		"clear_mine":
 			err = battle.can_act(selected)
@@ -645,8 +672,8 @@ func _on_action(action: String) -> void:
 			if err == "":
 				var cmd := "plant" if battle.can_plant(selected, tiles[0]) == "" else "defuse"
 				_command({"cmd": cmd, "unit": selected.id, "tile": tiles[0]})
-		"crouch", "prone":
-			var stance := _stance_for(action)
+		"prone":
+			var stance := Unit.Stance.STAND if selected.stance == Unit.Stance.PRONE else Unit.Stance.PRONE
 			err = battle.can_change_stance(selected, stance)
 			if err == "":
 				_command({"cmd": "stance", "unit": selected.id, "stance": stance})
@@ -654,18 +681,10 @@ func _on_action(action: String) -> void:
 			err = battle.can_overwatch(selected)
 			if err == "":
 				_command({"cmd": "overwatch", "unit": selected.id})
-		"hunker":
-			err = battle.can_hunker(selected)
-			if err == "":
-				_command({"cmd": "hunker", "unit": selected.id})
 		"reload":
 			err = battle.can_reload(selected)
 			if err == "":
 				_command({"cmd": "reload", "unit": selected.id})
-		"set_up":
-			err = battle.can_set_up(selected)
-			if err == "":
-				_command({"cmd": "set_up", "unit": selected.id})
 		"rally":
 			err = battle.can_rally(selected)
 			if err == "":
@@ -688,18 +707,12 @@ func _on_action(action: String) -> void:
 				err = "No medkits left"
 			if err == "":
 				_set_mode(Mode.MEDKIT)
-		"pivot":
-			err = battle.can_act(selected)
-			if err == "" and not selected.vehicle:
-				err = "Only tanks turn on the spot"
-			if err == "":
-				_set_mode(Mode.PIVOT)
 		"mortar":
 			err = battle.can_act(selected)
 			if err == "" and selected.indirect.is_empty():
 				err = "Only the mortar team can fire the mortar"
 			if err == "":
-				# Pressing again switches to the next kind of round (high explosive, smoke, napalm).
+				# Pressing again switches to the next kind of round (high explosive, napalm).
 				var kinds: Array = selected.indirect["kinds"].filter(func(k: String) -> bool: return selected.rounds_left(k) > 0)
 				if kinds.is_empty():
 					kinds = selected.indirect["kinds"]
@@ -972,24 +985,16 @@ func _is_human_turn() -> bool:
 	return controllers[battle.current_team] == null
 
 
-## The heading (one of Pathfinder.HEADINGS) from the selected tank toward a tile.
-func _pivot_dir(tile: Vector2i) -> Vector2i:
-	return Pathfinder.HEADINGS[Pathfinder.heading_index(tile - selected.pos)] if tile != selected.pos else selected.facing
-
-
-## The stance the crouch or prone button switches to: down into it, or back up when already in it.
-func _stance_for(action: String) -> int:
-	var stance := Unit.Stance.CROUCH if action == "crouch" else Unit.Stance.PRONE
-	return Unit.Stance.STAND if selected.stance == stance else stance
+## The heading (one of Pathfinder.HEADINGS) from the tank's destination toward a tile; Vector2i.ZERO on the
+## destination itself (keep the heading the move leaves it with).
+func _face_dir(tile: Vector2i) -> Vector2i:
+	return Pathfinder.HEADINGS[Pathfinder.heading_index(tile - _face_tile)] if tile != _face_tile else Vector2i.ZERO
 
 
 ## Whether the selected soldier can fire at a unit in the current shooting mode.
 func _can_fire_at(target: Unit) -> String:
-	match _shot_cmd:
-		"aimed_shot":
-			return battle.can_aimed_shot(selected, target)
-		"suppress":
-			return battle.can_suppress(selected, target)
+	if _shot_cmd == "suppress":
+		return battle.can_suppress(selected, target)
 	return battle.can_shoot(selected, target)
 
 
@@ -1218,7 +1223,7 @@ func _play_event(e: Dictionary) -> void:
 			await _play_throw(e)
 		"stance":
 			var u := battle.get_unit(e["unit"])
-			var text: String = ["Stands up", "Crouches", "Goes prone"][e["stance"]]
+			var text: String = "Goes prone" if e["stance"] == Unit.Stance.PRONE else "Stands up"
 			_float(_display_pos[u.id], text, Color(STANCE_COLOR))
 			_log_line("%s %s." % [u.name, text.to_lower()])
 			await _wait(0.25)
@@ -1602,7 +1607,7 @@ func _play_shot(e: Dictionary) -> void:
 	var chance := "" if suppressing else " (%d%%)" % e["chance"]
 	_float(_display_pos[target.id], label + chance, Color.WHITE if e["result"] != "crit" else Color("ffb84d"))
 	var armour := " on its %s armour" % e["armor"] if e.has("armor") else ""
-	var kind := "Overwatch: " if e["reaction"] else ("Aimed shot: " if e.get("aimed", false) else "")
+	var kind := "Overwatch: " if e["reaction"] else ("Steady shot: " if e.get("steady", false) else "")
 	_log_line("%s%s shoots at %s: %s%s%s" % [kind, shooter.name, target.name, label, chance, armour])
 	if e.has("stray_unit"):
 		var victim := battle.get_unit(e["stray_unit"])
@@ -1795,7 +1800,7 @@ func _refresh() -> void:
 				_seen_units[u.id] = true
 	var can_act := selected != null and battle.can_act(selected) == "" and _is_human_turn()
 	var stays_put := can_act and selected.weapon.fires_standing_still() and selected.fired
-	_reach = battle.reachable(selected) if can_act and mode == Mode.MOVE and not stays_put else {}
+	_reach = battle.reachable(selected) if can_act and mode in [Mode.MOVE, Mode.FACE] and not stays_put else {}
 	_move_tiles.clear()
 	for p: Vector2i in _reach:
 		if _reach[p]["cost"] <= selected.current_mobility() + 0.001:
@@ -1807,7 +1812,7 @@ func _refresh() -> void:
 				if battle.can_suppress(selected, e) == "":
 					_target_odds[e.id] = roundi(selected.weapon.suppression * CombatRules.SUPPRESSIVE_FIRE_FACTOR)
 			else:
-				_target_odds[e.id] = battle.shot_odds(selected, e, false, _shot_cmd == "aimed_shot")["hit"]
+				_target_odds[e.id] = battle.shot_odds(selected, e, false, Battle.is_steady(selected))["hit"]
 	_flankers = _compute_flankers()
 	_update_peek_targets()
 	_gun_view.clear()
@@ -1847,7 +1852,7 @@ func _update_peek_targets() -> void:
 		var cost := Pathfinder.cost_to(_reach, hover, dest_level)
 		if cost != INF:
 			_peek_can_fire = selected.actions > battle.actions_for_cost(selected, cost) \
-					and not selected.weapon.fires_standing_still() and not selected.weapon.needs_setup and selected.ammo > 0
+					and not selected.weapon.fires_standing_still() and selected.ammo > 0
 			# Only enemies the side already sees from where it stands now: the preview never reveals anyone new.
 			for e in battle.enemies_of(selected):
 				if _seen_units.has(e.id) and battle.team_sees(selected.team, e) and not Battle.hidden_at(battle.map, hover, e, e.pos, e.level) \
@@ -1881,13 +1886,13 @@ func _update_panel() -> void:
 	else:
 		_unit_info.text = "No soldier selected.\nClick one of your soldiers."
 	var s := selected if _is_human_turn() else null
+	# Gear stays on the bar (greyed out) once it's used up, so the keys after it don't move.
 	var visible := {
-		"grenade": s != null and s.grenades > 0, "smoke": s != null and s.smoke_grenades > 0,
-		"set_up": s != null and s.weapon.needs_setup, "rally": s != null and s.leader,
-		"medkit": s != null and s.medkits > 0, "mortar": s != null and not s.indirect.is_empty(),
-		"pivot": s != null and s.vehicle, "hunker": s == null or not s.vehicle,
-		"crouch": s == null or not s.vehicle, "prone": s == null or not s.vehicle,
-		"suppress": s == null or not (s.vehicle or s.weapon.anti_tank),
+		"grenade": s != null and s.def.get("grenades", 0) > 0, "smoke": s != null and s.def.get("smoke", 0) > 0,
+		"rally": s != null and s.leader,
+		"medkit": s != null and s.def.get("medkits", 0) > 0, "mortar": s != null and not s.indirect.is_empty(),
+		"prone": s == null or not s.vehicle,
+		"suppress": s != null and Battle.can_lay_suppressive_fire(s),
 		"clear_mine": s != null and not s.vehicle and not _clearable_mines(s).is_empty(),
 		"tunnel": s != null and s.has_trait("tunnels") and battle.map.tunnel_owner(s.pos) == s.team,
 		"trap": s != null and s.has_trait("traps"),
@@ -1896,14 +1901,17 @@ func _update_panel() -> void:
 	}
 	for action: String in visible:
 		_buttons[action].visible = visible[action]
+	_assign_keys()
 	_buttons["shoot"].disabled = s == null or battle.can_fire(s) != ""
 	_buttons["overwatch"].disabled = s == null or battle.can_overwatch(s) != ""
-	_buttons["hunker"].disabled = s == null or battle.can_hunker(s) != ""
 	_buttons["reload"].disabled = s == null or battle.can_reload(s) != ""
-	_buttons["set_up"].disabled = s == null or battle.can_set_up(s) != ""
 	_buttons["rally"].disabled = s == null or battle.can_rally(s) != ""
-	for action in ["grenade", "smoke", "medkit", "mortar", "pivot"]:
+	for action in ["grenade", "smoke", "medkit", "mortar"]:
 		_buttons[action].disabled = s == null or battle.can_act(s) != ""
+	if s != null:
+		_buttons["grenade"].disabled = _buttons["grenade"].disabled or s.grenades <= 0
+		_buttons["smoke"].disabled = _buttons["smoke"].disabled or s.smoke_grenades <= 0
+		_buttons["medkit"].disabled = _buttons["medkit"].disabled or s.medkits <= 0
 	_buttons["tunnel"].disabled = s == null or battle.can_act(s) != "" or s.actions < Unit.ACTIONS_PER_TURN or s.is_pinned()
 	_buttons["trap"].disabled = s == null or battle.can_act(s) != "" or s.traps <= 0
 	var ied: bool = s != null and s.def.get("trap_kind", "punji") == "ied"
@@ -1916,13 +1924,11 @@ func _update_panel() -> void:
 	if s != null and not s.indirect.is_empty():
 		_buttons["mortar"].disabled = s.actions < Unit.ACTIONS_PER_TURN and s.indirect["still"]
 		var kind: String = _mortar_kind if mode == Mode.MORTAR else s.indirect["kinds"][0]
-		_buttons["mortar"].set_look("mortar", "%s: %s (press again to switch)" % [String(s.indirect["name"]).capitalize(), Battle.KIND_NAMES.get(kind, kind)],
+		var switch := " (press again to switch rounds)" if s.indirect["kinds"].size() > 1 else ""
+		_buttons["mortar"].set_look("mortar", "%s: %s%s" % [String(s.indirect["name"]).capitalize(), Battle.KIND_NAMES.get(kind, kind), switch],
 				KIND_TAGS.get(kind, "HE"))
-	for action in ["crouch", "prone"]:
-		_buttons[action].disabled = s == null or s.vehicle or battle.can_change_stance(s, _stance_for(action)) != ""
-	var crouched := s != null and s.stance == Unit.Stance.CROUCH
 	var prone := s != null and s.stance == Unit.Stance.PRONE
-	_buttons["crouch"].set_look("stand" if crouched else "crouch", "Stand up" if crouched else "Crouch: harder to hit, moves slower")
+	_buttons["prone"].disabled = s == null or s.vehicle or battle.can_change_stance(s, Unit.Stance.STAND if prone else Unit.Stance.PRONE) != ""
 	_buttons["prone"].set_look("stand" if prone else "prone", "Stand up" if prone else "Go prone: very hard to hit at range, crawls")
 	_buttons["grenade"].set_look("grenade", "Grenade", str(s.grenades) if s != null else "")
 	_buttons["smoke"].set_look("smoke", "Smoke grenade", str(s.smoke_grenades) if s != null else "")
@@ -1930,7 +1936,6 @@ func _update_panel() -> void:
 	_buttons["reload"].set_look("reload", "Reload", "%d/%d" % [s.ammo, s.weapon.clip_size] if s != null else "")
 	for button: Node in _action_bar.find_children("*", "ActionButton", true, false):
 		button.queue_redraw()
-	_buttons["aimed"].disabled = s == null or battle.can_fire(s) != "" or s.actions < Unit.ACTIONS_PER_TURN
 	_buttons["suppress"].disabled = s == null or battle.can_fire(s) != "" or s.ammo < CombatRules.SUPPRESSIVE_FIRE_AMMO
 	_buttons["next"].disabled = s == null or _next_ready_unit(s) == null
 	_buttons["end"].disabled = battle.winner != -1 or not _is_human_turn()
@@ -1944,7 +1949,8 @@ func _describe_unit(u: Unit) -> String:
 	lines.append("HP %d/%d   Aim %d   Move %.0f%s   Ammo %d/%d" % [u.hp, u.max_hp, u.aim, u.current_mobility(),
 			"" if u.current_mobility() == u.mobility else " (of %.0f)" % u.mobility, u.ammo, u.weapon.clip_size])
 	var kit := PackedStringArray()
-	for item: Array in [[u.grenades, "grenades"], [u.smoke_grenades, "smoke"], [u.medkits, "medkits"], [u.mortar_rounds, "HE rounds"], [u.mortar_smoke, "smoke rounds"]]:
+	for item: Array in [[u.grenades, "grenades"], [u.smoke_grenades, "smoke"], [u.medkits, "medkits"], [u.mortar_rounds, "HE rounds"],
+			[u.mortar_smoke, "napalm rounds" if u.indirect.get("kinds", []).has("napalm") else "smoke rounds"]]:
 		if item[0] > 0:
 			kit.append("%d %s" % [item[0], item[1]])
 	if not kit.is_empty():
@@ -1956,22 +1962,17 @@ func _describe_unit(u: Unit) -> String:
 		status.append("[color=#ffa040]Suppression %d[/color]" % u.suppression)
 	if u.is_wounded():
 		status.append("[color=#ff8080]Wounded (%d turns)[/color]" % u.wounded_turns)
-	if u.deployed:
-		status.append("[color=#ffd34d]MG set up[/color]")
 	if u.overwatch:
 		status.append("[color=#ffd34d]Overwatch[/color]")
-	if u.hunkered:
-		status.append("[color=#8fd3ff]Hunkered[/color]")
 	if u.stance != Unit.Stance.STAND:
 		status.append("[color=#%s]%s (moves cost x%s)[/color]" % [STANCE_COLOR, Unit.STANCE_NAMES[u.stance], str(Unit.STANCE_MOVE_COST[u.stance])])
 	lines.append("   ".join(status))
 	match mode:
-		Mode.SHOOT when _shot_cmd == "aimed_shot":
-			lines.append("[color=#ff9b8a]Aimed shot (both actions, +%d aim): click a target. Right click cancels.[/color]" % CombatRules.AIMED_SHOT_BONUS)
 		Mode.SHOOT when _shot_cmd == "suppress":
 			lines.append("[color=#ffb84d]Suppressive fire (%d rounds, no damage): click a target. Right click cancels.[/color]" % CombatRules.SUPPRESSIVE_FIRE_AMMO)
 		Mode.SHOOT:
-			lines.append("[color=#ff9b8a]Shooting: click a target, or fuel drums / an oil tank to blow them up. Right click cancels.[/color]")
+			var steady := " Steady shot: +%d aim." % CombatRules.STEADY_SHOT_BONUS if Battle.is_steady(selected) else ""
+			lines.append("[color=#ff9b8a]Shooting: click a target, or fuel drums / an oil tank to blow them up.%s Right click cancels.[/color]" % steady)
 		Mode.CLEAR_MINE:
 			lines.append("[color=#e7d9a8]Clear mine: click a spotted mine, or an enemy tunnel entrance to blow it in, next to the soldier (1 action). Right click cancels.[/color]")
 		Mode.TUNNEL:
@@ -1985,12 +1986,14 @@ func _describe_unit(u: Unit) -> String:
 		Mode.SMOKE:
 			lines.append("[color=#c8d0d8]Smoke: click a tile in range. Right click cancels.[/color]")
 		Mode.MORTAR:
-			lines.append("[color=#ffb84d]%s (%s): click a%s tile in range. Press 0 to switch rounds.[/color]" % [String(selected.indirect["name"]).capitalize(),
-					Battle.KIND_NAMES.get(_mortar_kind, _mortar_kind), {"self": " visible", "team": " spotted"}.get(selected.indirect["spotter"], "")])
+			var switch := " Press %s again to switch rounds." % _key_for("mortar") if selected.indirect["kinds"].size() > 1 else ""
+			lines.append("[color=#ffb84d]%s (%s): click a%s tile in range.%s[/color]" % [String(selected.indirect["name"]).capitalize(),
+					Battle.KIND_NAMES.get(_mortar_kind, _mortar_kind), {"self": " visible", "team": " spotted"}.get(selected.indirect["spotter"], ""), switch])
 		Mode.MEDKIT:
 			lines.append("[color=#6bff8a]Medkit: click yourself or an adjacent ally. Right click cancels.[/color]")
-		Mode.PIVOT:
-			lines.append("[color=#ffd34d]Turn tank: click where the front should face (1 action). Right click cancels.[/color]")
+		Mode.FACE:
+			var keep := "" if _face_tile == selected.pos else ", or the destination again to keep the heading"
+			lines.append("[color=#ffd34d]Click where the front should face%s. Right click cancels.[/color]" % keep)
 	return "\n".join(lines)
 
 
@@ -2030,11 +2033,12 @@ func _update_target_info() -> void:
 					String(spec["name"]).capitalize(), Battle.KIND_NAMES.get(_mortar_kind, _mortar_kind), spec["min"], spec["max"],
 					battle.firing_scatter(selected, hover), needs]
 				text += _error_line(battle.can_fire_mortar(selected, hover, _mortar_kind))
-			Mode.PIVOT:
-				text = "[b]Turn on the spot[/b]  1 action\nArmour: front %d, side %d, rear %d.\nOn the move, every 45° turned costs %.0f movement; backing up costs double." % [
+			Mode.FACE:
+				text = "[b]%s[/b]\nArmour: front %d, side %d, rear %d.\nEvery 45° turned costs %.0f movement; backing up costs double." % [
+					"Turn on the spot" if _face_tile == selected.pos else "Where to face",
 					CombatRules.armor_value(selected, "front"), CombatRules.armor_value(selected, "side"), CombatRules.armor_value(selected, "rear"), Pathfinder.TURN_COST]
-				if hover != selected.pos:
-					text += _error_line(battle.can_pivot(selected, _pivot_dir(hover)))
+				if hover != _face_tile:
+					text += _error_line(battle.can_move(selected, _face_tile, _face_level, _face_dir(hover)))
 	if text == "" and map.in_bounds(hover):
 		text = _describe_tile(hover)
 	_target_info.text = text
@@ -2064,7 +2068,7 @@ func _describe_suppression(shooter: Unit, target: Unit) -> String:
 
 
 func _describe_odds(shooter: Unit, target: Unit) -> String:
-	var odds := battle.shot_odds(shooter, target, false, mode == Mode.SHOOT and _shot_cmd == "aimed_shot")
+	var odds := battle.shot_odds(shooter, target, false, Battle.is_steady(shooter))
 	var lines := PackedStringArray()
 	lines.append("[b]Target: %s[/b] (%s)%s" % [target.name, target.def.get("name", target.role),
 			"  HP %d/%d" % [target.hp, target.max_hp] if _knows(target) else ""])
@@ -2085,7 +2089,7 @@ func _describe_odds(shooter: Unit, target: Unit) -> String:
 	if target.overwatch and _knows(target):
 		lines.append("[color=#ffd34d]On overwatch[/color]")
 	if CombatRules.misses_stray(shooter.weapon):
-		if shooter.weapon.needs_setup:
+		if shooter.weapon.heavy:
 			lines.append("Misses may hit anyone beside the target or in the line of fire")
 		else:
 			lines.append("Misses fly on and burst up to %d tiles past the target" % CombatRules.STRAY_LONG)
@@ -2152,14 +2156,14 @@ func _describe_tile(p: Vector2i) -> String:
 	if map.has_fire(p):
 		lines.append("[color=#ffb84d]Burning: no one can enter; burns anyone in it[/color]")
 	if map.has_mine(p) and _mine_known(p):
-		lines.append("[color=#ff6b6b]Mine (spotted): G to clear from next to it[/color]")
+		lines.append("[color=#ff6b6b]Mine (spotted): clear it from next to it[/color]")
 	match map.get_terrain(p):
 		TacticalMap.Terrain.WHEAT:
 			lines.append("Hides soldiers at range; trampled flat when walked through")
 		TacticalMap.Terrain.WIRE:
 			lines.append("Slow to cross on foot; tanks and explosions flatten it")
 		TacticalMap.Terrain.TALL_GRASS:
-			lines.append("Hides crouching and prone soldiers beyond 3 tiles; trampled flat when walked through")
+			lines.append("Hides prone soldiers beyond 3 tiles; trampled flat when walked through")
 		TacticalMap.Terrain.JUNGLE:
 			lines.append("Hides anyone in it beyond 3 tiles; sight goes no further than one tile of jungle")
 		TacticalMap.Terrain.PADDY:
@@ -2384,7 +2388,7 @@ func _build_action_bar(layer: CanvasLayer) -> void:
 	turn.add_theme_constant_override("separation", 4)
 	row.add_child(turn)
 	for spec: Array in ACTION_BUTTONS:
-		var button := ActionButton.new(spec[0], spec[1], spec[2])
+		var button := ActionButton.new(spec[0], TURN_KEYS.get(spec[0], ""), spec[1])
 		button.pressed.connect(_on_action.bind(spec[0]))
 		button.mouse_entered.connect(func() -> void: _action_caption.text = button.describe())
 		button.mouse_exited.connect(func() -> void: _action_caption.text = "")
@@ -2392,6 +2396,35 @@ func _build_action_bar(layer: CanvasLayer) -> void:
 		_buttons[spec[0]] = button
 	_buttons["end"].theme_type_variation = "PrimaryButton"
 	_buttons["end"].primary = true
+
+
+## Numbers the buttons on the bar: the actions every soldier has on their fixed keys, then the role's own from
+## 5 on in bar order. Buttons past 0 get no key.
+func _assign_keys() -> void:
+	_slot_actions.clear()
+	var next := FIXED_SLOTS.size() + 1
+	for spec: Array in ACTION_BUTTONS:
+		var action: String = spec[0]
+		if TURN_KEYS.has(action):
+			continue
+		var button: ActionButton = _buttons[action]
+		var slot: int = FIXED_SLOTS.get(action, 0)
+		if slot == 0 and button.visible and next <= SLOT_KEYS.size():
+			slot = next
+			next += 1
+		if button.visible and slot > 0:
+			_slot_actions[slot] = action
+			button.set_key(str(slot % 10))
+		else:
+			button.set_key("")
+
+
+## The key that presses an action's button now ("" if none).
+func _key_for(action: String) -> String:
+	for slot: int in _slot_actions:
+		if _slot_actions[slot] == action:
+			return str(slot % 10)
+	return ""
 
 
 ## Folds the log away (the panel then only takes the height it needs) or opens it down to the bottom of the screen.
@@ -2763,7 +2796,7 @@ func _update_units() -> void:
 		if not view.has_point(_proj.project(at)):
 			continue
 		var drawn: Array = _unit_drawn.get(u.id, [])
-		var state := [at, _facing[u.id], u.stance, u == selected, mode, _display_hp[u.id], _display_suppression[u.id], u.deployed]
+		var state := [at, _facing[u.id], u.stance, u == selected, mode, _display_hp[u.id], _display_suppression[u.id], u.moved]
 		var busy_now: bool = _walking.has(u.id) or _time - _hit_at.get(u.id, -10.0) < 0.5 or _time - _died_at.get(u.id, -10.0) < DEATH_TIME + 3.5 \
 				or u == selected or (mode == Mode.SHOOT and _target_odds.has(u.id))
 		if busy_now or drawn.is_empty() or drawn[1] != state or _time - drawn[0] >= 1.0 / IDLE_REDRAW:
@@ -2851,23 +2884,22 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 			var dest_level := _dest_level(hover)
 			if _reach.has(hover) and Pathfinder.cost_to(_reach, hover, dest_level) != INF and (hover != selected.pos or dest_level != selected.level):
 				var color := MOVE_COLOR if Pathfinder.cost_to(_reach, hover, dest_level) <= selected.current_mobility() + 0.001 else DASH_COLOR
-				var points := PackedVector2Array([_proj.project(_center(selected.pos), _unit_lift(selected))])
-				var path := Pathfinder.path_to(_reach, hover, dest_level)
-				var levels := Pathfinder.path_levels(_reach, hover, dest_level)
-				for i in path.size():
-					points.append(_proj.project(_center(path[i]), _tile_lift(path[i], levels[i])))
-				c.draw_polyline(points, color, 3.0)
-				_proj.lift = _tile_lift(hover, dest_level)
-				c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(hover), 0.3), color, 2.5)
-				_proj.lift = 0.0
+				_draw_move_path(c, hover, dest_level, color)
 				if selected.vehicle:
 					_draw_heading(c, hover, _reach[hover]["facing"], color)
 				var ring := Color("ff6a50") if _peek_can_fire else Color(1, 0.42, 0.31, 0.5)
 				for e in _peek_targets:
 					c.draw_polyline(_ground_circle(_display_pos[e.id], 0.45), ring, 2.5)
-		Mode.PIVOT:
-			if hover != selected.pos:
-				_draw_heading(c, selected.pos, _pivot_dir(hover), Color("ffd34d"))
+		Mode.FACE:
+			if _reach.has(_face_tile):
+				var facing := _face_dir(hover)
+				var cost := battle.move_cost(selected, _reach, _face_tile, _face_level, facing)
+				var color := MOVE_COLOR if cost <= selected.current_mobility() + 0.001 else DASH_COLOR
+				if battle.can_move(selected, _face_tile, _face_level, facing) != "" and hover != _face_tile:
+					color = Color("ff6b6b")
+				if _face_tile != selected.pos:
+					_draw_move_path(c, _face_tile, _face_level, color)
+				_draw_heading(c, _face_tile, facing if facing != Vector2i.ZERO else _reach[_face_tile]["facing"], color)
 		Mode.GRENADE, Mode.SMOKE:
 			var grenade := mode == Mode.GRENADE
 			var throw_range := CombatRules.GRENADE_RANGE if grenade else CombatRules.SMOKE_RANGE
@@ -2949,7 +2981,7 @@ func _regions() -> Dictionary:
 		if not fills.has(p):
 			fills[p] = []
 		fills[p].append(color)
-	if not _gun_view.is_empty() and mode not in [Mode.GRENADE, Mode.SMOKE, Mode.MORTAR, Mode.MEDKIT, Mode.PIVOT]:
+	if not _gun_view.is_empty() and mode not in [Mode.GRENADE, Mode.SMOKE, Mode.MORTAR, Mode.MEDKIT, Mode.FACE]:
 		var aiming := mode == Mode.SHOOT
 		var good := {}
 		for p: Vector2i in _gun_view:
@@ -3035,6 +3067,19 @@ func _draw_cursor_height(c: CanvasItem) -> void:
 
 
 ## An arrow on the ground showing which way a tank will face on a tile.
+## The path a move to `dest` takes, ending in a ring on the destination.
+func _draw_move_path(c: CanvasItem, dest: Vector2i, dest_level: int, color: Color) -> void:
+	var points := PackedVector2Array([_proj.project(_center(selected.pos), _unit_lift(selected))])
+	var path := Pathfinder.path_to(_reach, dest, dest_level)
+	var levels := Pathfinder.path_levels(_reach, dest, dest_level)
+	for i in path.size():
+		points.append(_proj.project(_center(path[i]), _tile_lift(path[i], levels[i])))
+	c.draw_polyline(points, color, 3.0)
+	_proj.lift = _tile_lift(dest, dest_level)
+	c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(dest), 0.3), color, 2.5)
+	_proj.lift = 0.0
+
+
 func _draw_heading(c: CanvasItem, tile: Vector2i, dir: Vector2i, color: Color) -> void:
 	var at := _center(tile)
 	var forward := Vector2(dir).normalized()
@@ -3073,10 +3118,11 @@ func _pose(u: Unit) -> Dictionary:
 		"facing": _facing[u.id],
 		"walk": 1.0 if _walking.has(u.id) else 0.0,
 		"phase": _time * 14.0 + u.id,
-		"crouch": (u.hunkered or u.stance == Unit.Stance.CROUCH) and alive,
+		"crouch": false,
 		"prone": u.stance == Unit.Stance.PRONE and not u.vehicle,
 		"pinned": _display_suppression[u.id] >= Unit.PINNED_AT and alive,
-		"deployed": u.deployed and alive,
+		# A heavy machine gun on its bipod while the gunner stays put.
+		"deployed": u.weapon.heavy and not u.moved and alive,
 		"wounded": u.is_wounded() and alive,
 		"death": death,
 		"fall_forward": _death_style.get(u.id, {}).get("forward", false),
@@ -3187,9 +3233,9 @@ func _draw_markers() -> void:
 		draw_string(_font, top + Vector2(-60, -8), objective["name"], HORIZONTAL_ALIGNMENT_CENTER, 120, 13, color)
 	for strike in battle.strikes:
 		var at := _proj.project(_center(strike["target"]), 0.4 + _lift_at(_center(strike["target"])))
-		var label := "INCOMING" if strike["kind"] == "he" else "SMOKE ROUND"
+		var label := "SMOKE ROUND" if strike["kind"] == "smoke" else "INCOMING"
 		draw_string_outline(_font, at + Vector2(-60, 0), label, HORIZONTAL_ALIGNMENT_CENTER, 120, 12, 4, Color(0, 0, 0, 0.8))
-		draw_string(_font, at + Vector2(-60, 0), label, HORIZONTAL_ALIGNMENT_CENTER, 120, 12, Color("ff6a50") if strike["kind"] == "he" else Color("d8dee4"))
+		draw_string(_font, at + Vector2(-60, 0), label, HORIZONTAL_ALIGNMENT_CENTER, 120, 12, Color("d8dee4") if strike["kind"] == "smoke" else Color("ff6a50"))
 
 	var view := _view_rect()
 	for u in battle.units:
@@ -3232,10 +3278,6 @@ func _draw_markers() -> void:
 			tags.append("DAMAGED" if u.vehicle else "WOUNDED")
 		if u.overwatch:
 			tags.append("OVERWATCH")
-		elif u.deployed:
-			tags.append("MG READY")
-		if u.hunkered:
-			tags.append("HUNKERED")
 		if not tags.is_empty():
 			var tag_color := Color("ff7060") if suppression >= Unit.SUPPRESSED_AT or u.is_wounded() else Color("ffd34d")
 			draw_string_outline(_font, top + Vector2(-60, -5), " ".join(tags), HORIZONTAL_ALIGNMENT_CENTER, 120, 10, 3, Color(0, 0, 0, 0.7))

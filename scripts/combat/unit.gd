@@ -15,13 +15,14 @@ const MIN_MOBILITY := 2.0
 const RANK_NAMES := ["Pvt.", "Cpl.", "Sgt."]
 ## Each rank above private adds this much aim and one hit point.
 const RANK_AIM := 5
-## Stances. Crouched and prone soldiers are harder to hit but move slower; tanks always count as standing.
-enum Stance { STAND, CROUCH, PRONE }
-const STANCE_NAMES := ["Standing", "Crouched", "Prone"]
-## Path cost is multiplied by this in each stance (crouched walking, crawling).
-const STANCE_MOVE_COST := [1.0, 1.5, 3.0]
+## Stances. Prone soldiers are harder to hit but crawl; tanks always count as standing. 1 was crouching, which
+## is gone: saves and scenarios that still have it load standing (see Unit.stance_from).
+enum Stance { STAND = 0, PRONE = 2 }
+const STANCE_NAMES := {Stance.STAND: "Standing", Stance.PRONE: "Prone"}
+## Path cost is multiplied by this in each stance (crawling).
+const STANCE_MOVE_COST := {Stance.STAND: 1.0, Stance.PRONE: 3.0}
 ## Sight lost in each stance: the lower the eyes, the less they see over grass and walls.
-const STANCE_SIGHT := [0.0, 1.0, 2.0]
+const STANCE_SIGHT := {Stance.STAND: 0.0, Stance.PRONE: 2.0}
 ## A crawling soldier always gets at least this far per action.
 const MIN_CRAWL := 1.0
 ## Fields written to save files only when they differ from these defaults (newer abilities, so that units
@@ -30,8 +31,8 @@ const OPTIONAL_FIELDS := {"traps": 0, "hiding": false, "level": 0, "moved": fals
 ## Fields written to save files.
 const SAVED_FIELDS := [
 	"id", "name", "role", "team", "pos", "max_hp", "hp", "armor", "aim", "defense", "mobility", "sight", "ammo",
-	"grenades", "smoke_grenades", "medkits", "mortar_rounds", "mortar_smoke", "actions", "overwatch", "hunkered",
-	"deployed", "suppression", "wounded_turns", "vehicle", "facing", "kills", "rank", "record_id", "stance", "fired",
+	"grenades", "smoke_grenades", "medkits", "mortar_rounds", "mortar_smoke", "actions", "overwatch",
+	"suppression", "wounded_turns", "vehicle", "facing", "kills", "rank", "record_id", "stance", "fired",
 	"under_fire",
 ]
 
@@ -61,9 +62,6 @@ var mortar_rounds := 0
 var mortar_smoke := 0
 var actions := 0
 var overwatch := false
-var hunkered := false
-## Machine gun set up and ready to fire.
-var deployed := false
 var suppression := 0
 var wounded_turns := 0
 ## Tanks: immune to small arms and suppression, armour depends on which side is hit.
@@ -74,11 +72,11 @@ var kills := 0
 var rank := 0
 ## The campaign soldier this unit represents, or -1.
 var record_id := -1
-## Standing, crouched or prone (Stance). Kept until the soldier changes it, which costs an action.
+## Standing or prone (Stance). Kept until the soldier changes it, which costs an action.
 var stance := Stance.STAND
 ## Fired since the start of its own last turn. The muzzle flash gives away a soldier hidden in the wheat.
 var fired := false
-## Moved since the start of its own turn. A sniper can't fire after moving (Weapon.fires_standing_still).
+## Moved since the start of its own turn. Snipers and machine guns can't fire after moving (Weapon.fires_standing_still).
 var moved := false
 ## Caught by suppressive fire: keeps its head down and doesn't recover suppression at the start of its next turn.
 var under_fire := false
@@ -106,6 +104,11 @@ func has_trait(trait_name: String) -> bool:
 ## Rounds left for indirect fire of this kind: high explosive, or the second kind it fires (smoke, napalm).
 func rounds_left(kind: String) -> int:
 	return mortar_rounds if kind == "he" else mortar_smoke
+
+
+## A stance read from a save or scenario: anything that isn't one any more (crouching) is standing.
+static func stance_from(value: Variant) -> Stance:
+	return Stance.PRONE if int(value) == Stance.PRONE else Stance.STAND
 
 
 func is_alive() -> bool:
@@ -160,6 +163,7 @@ static func from_dict(data: Dictionary, p_theatre := Theatres.DEFAULT) -> Unit:
 		# Saves from before a field existed keep its default.
 		if data.has(field):
 			u.set(field, data[field])
+	u.stance = stance_from(u.stance)
 	for field: String in OPTIONAL_FIELDS:
 		u.set(field, data.get(field, OPTIONAL_FIELDS[field]))
 	return u

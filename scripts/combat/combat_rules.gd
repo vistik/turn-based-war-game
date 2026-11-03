@@ -4,8 +4,6 @@ extends RefCounted
 
 ## Defense given by none / half / full cover.
 const COVER_DEFENSE := [0, 20, 40]
-## Hunkering down doubles the defense a unit's cover gives.
-const HUNKER_MULTIPLIER := 2
 ## Overwatch shots hit with 70% of normal aim, and targets on the move get no cover.
 const REACTION_AIM_FACTOR := 0.7
 ## Extra crit chance against targets with no cover from the shooter's angle.
@@ -116,10 +114,7 @@ const ROCKET_BLAST_RADIUS := 0.5
 const MG_STRAY_LINE := 0.75
 const MG_STRAY_CHANCE := 20
 
-# --- Stances, aimed shots and suppressive fire ---
-## Crouching makes a soldier a little harder to hit, and a lot harder behind half cover (the low wall hides him).
-const CROUCH_DEFENSE := 10
-const CROUCH_HALF_COVER_DEFENSE := 20
+# --- Stances, steady shots and suppressive fire ---
 ## Prone soldiers are small targets at range, smaller still behind low cover, but easy to hit up close
 ## or from a side their cover doesn't face (they lie side-on to the shooter).
 const PRONE_DEFENSE := 20
@@ -127,15 +122,14 @@ const PRONE_LOW_COVER_DEFENSE := 10
 const PRONE_CLOSE_RANGE := 2.5
 const PRONE_CLOSE_PENALTY := 15
 const PRONE_FLANKED_PENALTY := 10
-## Steadier aim crouched or prone; a machine gun set up on its bipod lying down steadier still.
-const CROUCH_AIM := 5
+## Steadier aim prone; a heavy machine gun on its bipod lying down steadier still.
 const PRONE_AIM := 5
 const PRONE_MG_AIM := 15
 ## Lying flat helps a soldier get over being shot at.
 const PRONE_RECOVERY_BONUS := 10
-## An aimed shot takes both actions.
-const AIMED_SHOT_BONUS := 15
-## Suppressive fire: no damage, but this times the weapon's suppression on the target and the full amount
+## A steady shot: fired with both actions left (nothing else done that turn) for extra aim.
+const STEADY_SHOT_BONUS := 15
+## Suppressive fire, machine guns only: no damage, but this times the weapon's suppression on the target and the full amount
 ## on the target's allies close by, none of whom recover suppression at the start of their next turn.
 ## Burns this many rounds.
 const SUPPRESSIVE_FIRE_FACTOR := 1.5
@@ -197,11 +191,9 @@ static func can_hurt(weapon: Weapon, target: Unit, from: Vector2i) -> bool:
 
 ## Whether a weapon's misses can hit something else: machine guns, rockets and tank guns.
 static func misses_stray(weapon: Weapon) -> bool:
-	return weapon.needs_setup or weapon.anti_tank
+	return weapon.heavy or weapon.anti_tank
 
 
-## Hit, graze and crit chances (0-100) plus the itemised modifiers behind the hit chance.
-## `aimed`: an aimed shot (both actions) for extra aim.
 ## Chance (0-100) to hit an explosive object of `kind` on `tile` from `from`.
 static func object_odds(shooter: Unit, from: Vector2i, tile: Vector2i, kind: String) -> int:
 	var hit: int = shooter.aim + shooter.weapon.range_modifier(Vector2(from).distance_to(Vector2(tile))) + OBJECT_SHOT_BONUS.get(kind, 0)
@@ -212,7 +204,9 @@ static func object_odds(shooter: Unit, from: Vector2i, tile: Vector2i, kind: Str
 	return clampi(hit, 0, 100)
 
 
-static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction := false, aimed := false) -> Dictionary:
+## Hit, graze and crit chances (0-100) plus the itemised modifiers behind the hit chance.
+## `steady`: a steady shot (fired with both actions left) for extra aim.
+static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction := false, steady := false) -> Dictionary:
 	var distance := Vector2(shooter.pos).distance_to(Vector2(target.pos))
 	var modifiers := [["Aim", shooter.aim]]
 	var hit := shooter.aim
@@ -229,17 +223,13 @@ static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction :=
 		modifiers.append(["Suppressed", -SUPPRESSED_AIM_PENALTY])
 		hit -= SUPPRESSED_AIM_PENALTY
 
-	if aimed:
-		modifiers.append(["Aimed shot", AIMED_SHOT_BONUS])
-		hit += AIMED_SHOT_BONUS
-	var steady := 0
-	if shooter.stance == Unit.Stance.CROUCH:
-		steady = CROUCH_AIM
-	elif shooter.stance == Unit.Stance.PRONE:
-		steady = PRONE_MG_AIM if shooter.deployed else PRONE_AIM
-	if steady != 0:
-		modifiers.append(["%s, steady aim" % Unit.STANCE_NAMES[shooter.stance], steady])
-		hit += steady
+	if steady:
+		modifiers.append(["Steady shot", STEADY_SHOT_BONUS])
+		hit += STEADY_SHOT_BONUS
+	if shooter.stance == Unit.Stance.PRONE:
+		var prone_aim := PRONE_MG_AIM if shooter.weapon.heavy else PRONE_AIM
+		modifiers.append(["Prone, steady aim", prone_aim])
+		hit += prone_aim
 
 	if map.has_height() and map.floor_height(shooter.pos, shooter.level) - map.floor_height(target.pos, target.level) >= 1.0:
 		modifiers.append(["High ground", HIGH_GROUND_AIM])
@@ -250,10 +240,6 @@ static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction :=
 		var defense: int = COVER_DEFENSE[cover]
 		modifiers.append(["%s cover" % Cover.NAMES[cover], -defense])
 		hit -= defense
-		if target.hunkered:
-			var bonus := defense * (HUNKER_MULTIPLIER - 1)
-			modifiers.append(["Hunkered", -bonus])
-			hit -= bonus
 
 	if not target.vehicle and target.stance != Unit.Stance.STAND:
 		var stance_mod := _stance_defense(map, target, cover, distance, reaction)
@@ -291,12 +277,8 @@ static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction :=
 	}
 
 
-## The [label, hit modifier] a crouched or prone target gives a shot.
+## The [label, hit modifier] a prone target gives a shot.
 static func _stance_defense(map: TacticalMap, target: Unit, cover: int, distance: float, reaction: bool) -> Array:
-	if target.stance == Unit.Stance.CROUCH:
-		if cover == Cover.HALF:
-			return ["Crouched behind cover", -CROUCH_HALF_COVER_DEFENSE]
-		return ["Crouched", -CROUCH_DEFENSE]
 	if distance <= PRONE_CLOSE_RANGE:
 		return ["Prone, close range", PRONE_CLOSE_PENALTY]
 	if not reaction and cover == Cover.NONE and map.has_cover(target.pos, target.level):

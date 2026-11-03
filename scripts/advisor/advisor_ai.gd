@@ -65,6 +65,8 @@ func suggest(only: Unit = null) -> Dictionary:
 func _headline(u: Unit, plan: Dictionary, seen: Array[Unit]) -> String:
 	var target: Unit = plan["target"]
 	match plan["kind"]:
+		"move" when plan["tile"] == u.pos and plan.has("facing"):
+			return "%s: turn to face %s" % [u.name, _compass(plan["facing"])]
 		"move":
 			var tile: Vector2i = plan["tile"]
 			var spot := _cover_name(tile) if not u.vehicle else ""
@@ -73,28 +75,23 @@ func _headline(u: Unit, plan: Dictionary, seen: Array[Unit]) -> String:
 					spot = "the %s" % objective["name"].to_lower() if spot == "" else spot + " at the %s" % objective["name"].to_lower()
 					break
 			var verb := "Dash" if battle.actions_for_cost(u, battle.reachable(u)[tile]["cost"]) > 1 else "Move"
-			return "%s %s to %s" % [verb, u.name, spot if spot != "" else "(%d, %d)" % [tile.x, tile.y]]
+			var heading := ", facing %s" % _compass(plan["facing"]) if plan.has("facing") else ""
+			return "%s %s to %s%s" % [verb, u.name, spot if spot != "" else "(%d, %d)" % [tile.x, tile.y], heading]
 		"shoot":
 			return "%s: shoot %s" % [u.name, target.name]
-		"aimed_shot":
-			return "%s: aimed shot at %s" % [u.name, target.name]
 		"suppress":
 			return "%s: suppressive fire on %s" % [u.name, target.name]
 		"stance":
-			return "%s: %s" % [u.name, ["stand up", "crouch", "go prone"][plan["stance"]]]
+			return "%s: %s" % [u.name, "go prone" if plan["stance"] == Unit.Stance.PRONE else "stand up"]
 		"medkit":
 			return "%s: treat %s" % [u.name, "himself" if target == u else target.name]
 		"grenade":
 			return "%s: grenade at (%d, %d)" % [u.name, plan["tile"].x, plan["tile"].y]
 		"mortar":
 			return "%s: mortar strike at (%d, %d)" % [u.name, plan["tile"].x, plan["tile"].y]
-		"pivot":
-			return "%s: turn to face %s" % [u.name, _compass(plan["tile"])]
 		"shoot_object":
 			var what := "oil tank" if battle.map.get_object_kind(plan["tile"]) == "oil_tank" else "fuel drums"
 			return "%s: blow up the %s at (%d, %d)" % [u.name, what, plan["tile"].x, plan["tile"].y]
-		"set_up":
-			return "%s: set up the machine gun" % u.name
 		"plant":
 			return "%s: plant a charge on the %s" % [u.name, battle.target_at(plan["tile"]).get("name", "target")]
 		"defuse":
@@ -106,13 +103,18 @@ func _reasons(u: Unit, plan: Dictionary, seen: Array[Unit]) -> Array[String]:
 	var reasons: Array[String] = []
 	var target: Unit = plan["target"]
 	match plan["kind"]:
+		"move" when plan["tile"] == u.pos and plan.has("facing"):
+			reasons.append("front armour toward the threat")
 		"move":
 			_at_level = plan.get("level", -1)
 			reasons = _move_reasons(u, plan["tile"], seen)
 			_at_level = -1
-		"shoot", "aimed_shot":
-			var odds := battle.shot_odds(u, target, false, plan["kind"] == "aimed_shot")
+		"shoot":
+			var steady := Battle.is_steady(u)
+			var odds := battle.shot_odds(u, target, false, steady)
 			reasons.append("%d%% hit" % odds["hit"])
+			if steady:
+				reasons.append("steady shot")
 			if target.vehicle:
 				reasons.append("hits its %s armour" % CombatRules.armor_side(target, u.pos))
 			elif odds["flanked"]:
@@ -136,9 +138,6 @@ func _reasons(u: Unit, plan: Dictionary, seen: Array[Unit]) -> Array[String]:
 				if Vector2(u.pos).distance_to(Vector2(e.pos)) <= u.sight + 3.0:
 					near += 1
 			reasons.append("%s in range if they move" % _enemies(near) if near > 0 else "watches the approach")
-		"hunker":
-			var threats := _cover_counts(u.pos, seen)
-			reasons.append("doubles cover against %s in sight" % _enemies(threats[0] + threats[1]) if not seen.is_empty() else "stays hidden")
 		"reload":
 			reasons.append("%d/%d rounds left" % [u.ammo, u.weapon.clip_size])
 		"rally":
@@ -167,10 +166,6 @@ func _reasons(u: Unit, plan: Dictionary, seen: Array[Unit]) -> Array[String]:
 				reasons.append("catches " + ", ".join(names))
 			if plan["kind"] == "mortar":
 				reasons.append("lands next turn")
-		"set_up":
-			reasons.append("ready to fire next action" if u.actions >= 2 else "ready for next turn")
-		"pivot":
-			reasons.append("front armour toward the threat")
 	return reasons
 
 
@@ -206,9 +201,9 @@ func _move_reasons(u: Unit, tile: Vector2i, seen: Array[Unit]) -> Array[String]:
 		reasons.insert(0, "higher ground")
 	var at_level := _at_level
 	_at_level = -1
-	var here := _danger(u, u.pos, seen)[0]
+	var here := _danger(u, u.pos, seen)
 	_at_level = at_level
-	var there := _danger(u, tile, seen)[0]
+	var there := _danger(u, tile, seen)
 	if there + 1.0 < here * 0.7:
 		reasons.append("safer than where %s stands" % ("it" if u.vehicle else "he"))
 	for objective in battle.objectives:
@@ -219,7 +214,7 @@ func _move_reasons(u: Unit, tile: Vector2i, seen: Array[Unit]) -> Array[String]:
 		var closer := Vector2(u.pos).distance_to(goal) - Vector2(tile).distance_to(goal)
 		if closer >= 1.0:
 			reasons.append("%.0f tiles closer to %s" % [closer, _goal_name(goal)])
-	elif u.actions >= 2 and battle.actions_for_cost(u, battle.reachable(u)[tile]["cost"]) == 1 and u.ammo > 0 and not u.weapon.needs_setup and not u.weapon.fires_standing_still():
+	elif u.actions >= 2 and battle.actions_for_cost(u, battle.reachable(u)[tile]["cost"]) == 1 and u.ammo > 0 and not u.weapon.fires_standing_still():
 		# The follow-up the AI counted on: the best shot from the new spot.
 		var best_target: Unit = null
 		var best_hit := -1

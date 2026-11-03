@@ -29,9 +29,7 @@ static func build(seed := 0, deployments := [{}, {}]) -> Battle:
 	for team in Battle.TEAM_COUNT:
 		waves.append({"round": REINFORCEMENT_ROUND, "team": team, "roster": REINFORCEMENTS})
 	var village := layout()
-	var battle := BattleFactory.create(village, WarCampaign.deploy(village, [ROSTER, ROSTER], deployments), seed, {"reinforcements": waves})
-	WarCampaign.brace(battle, deployments)
-	return battle
+	return BattleFactory.create(village, WarCampaign.deploy(village, [ROSTER, ROSTER], deployments), seed, {"reinforcements": waves})
 
 
 static func layout() -> Dictionary:

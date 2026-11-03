@@ -126,7 +126,7 @@ func show_proposal(suggestion: Dictionary) -> void:
 	if u != null:
 		view._select(u, true)
 		match suggestion["kind"]:
-			"shoot", "aimed_shot", "suppress":
+			"shoot", "suppress":
 				view._shot_cmd = suggestion["kind"]
 				view._set_mode(view.Mode.SHOOT)
 			"shoot_object":
@@ -445,12 +445,17 @@ func _draw() -> void:
 				if c != Cover.NONE:
 					_draw_shield(proj.project(at + Vector2(d) * 0.36, 0.5), c == Cover.FULL)
 			proj.lift = 0.0
-			if reach.has(tile) and battle.actions_for_cost(u, Pathfinder.cost_to(reach, tile, level)) > 1:
+			var facing: Vector2i = command.get("facing", Vector2i.ZERO)
+			if facing != Vector2i.ZERO:
+				view._draw_heading(self, tile, facing, color)
+			if tile == u.pos:
+				label = "TURN"
+			elif reach.has(tile) and battle.actions_for_cost(u, battle.move_cost(u, reach, tile, level, facing)) > 1:
 				label = "DASH HERE"
 			else:
 				label = "MOVE HERE"
 			label_at = at
-		"shoot", "aimed_shot", "suppress", "medkit":
+		"shoot", "suppress", "medkit":
 			if target != null:
 				var at: Vector2 = view._display_pos[target.id]
 				draw_line(proj.project(from, 0.6), proj.project(at, 0.6), Color(color, 0.8), 2.5)
@@ -461,10 +466,10 @@ func _draw() -> void:
 					"suppress":
 						label = "SUPPRESS"
 					_:
-						label = "%d%%" % battle.shot_odds(u, target, false, command["cmd"] == "aimed_shot")["hit"]
+						label = "%d%%" % battle.shot_odds(u, target, false, Battle.is_steady(u))["hit"]
 				label_at = at
 		"stance":
-			label = ["STAND UP", "CROUCH", "GO PRONE"][command.get("stance", 0)]
+			label = "GO PRONE" if command.get("stance", 0) == Unit.Stance.PRONE else "STAND UP"
 		"grenade", "smoke", "mortar":
 			var tile: Vector2i = command["tile"]
 			var shooter := battle.get_unit(command.get("unit", -1))
@@ -474,9 +479,6 @@ func _draw() -> void:
 			draw_polyline(TerrainPainter.ground_circle(proj, at, radius), color, 3.0)
 			label = command["cmd"].to_upper()
 			label_at = at
-		"pivot":
-			view._draw_heading(self, u.pos, command["tile"], color)
-			label = "TURN"
 		"shoot_object", "clear_mine", "plant", "defuse":
 			var at: Vector2 = view._center(command["tile"])
 			draw_line(proj.project(from, 0.6), proj.project(at, 0.4), Color(color, 0.8), 2.5)

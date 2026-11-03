@@ -93,7 +93,8 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 - Objectives (church, crossroads, farm) score victory points every round. Reinforcement waves arrive mid-battle.
 - **Height**:
   - Ground rises in levels on rolling hills, ridges and knolls. A one-level step is a grassy bank, drawn as a
-    slope: anyone can walk up it for one more movement (going down is free). Two levels or more is a cliff,
+    slope: anyone can walk up it for one more movement (going down is free). Hills are drawn low, and higher
+    ground a shade lighter per level, so they don't hide the tiles, hedges and move range behind them. Two levels or more is a cliff,
     drawn as a sheer face of rock, that nobody climbs.
     Random maps raise hills on rough ground, off the roads, buildings and both sides' starts. Some hills are
     escarpments, sloping up on most sides with one side a cliff. A hilltop can be an objective ("Hill 104").

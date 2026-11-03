@@ -168,7 +168,7 @@ var _building_props := {}
 var _open_building := -1
 ## When the mouse wheel last changed the cursor's floor (see FLOOR_STEP_DELAY).
 var _last_floor_step := -10.0
-## Height each unit is drawn at: the floor it stands on, in levels (ground elevation plus floor).
+## Height each unit is drawn at: the floor it stands on, as drawn (TerrainPainter.floor_lift).
 var _display_height := {}
 ## While events play back, map changes (crushed or blasted cover) are held back until the moment they happen.
 var _hold_layout := false
@@ -305,7 +305,7 @@ func _quit_to_menu() -> void:
 
 func _add_display_state(u: Unit) -> void:
 	_display_pos[u.id] = _center(u.pos)
-	_display_height[u.id] = battle.map.floor_height(u.pos, u.level)
+	_display_height[u.id] = TerrainPainter.floor_lift(battle.map, u.pos, u.level)
 	_display_hp[u.id] = u.hp
 	_display_suppression[u.id] = u.suppression
 	_facing[u.id] = Vector2(u.facing).normalized()
@@ -778,11 +778,11 @@ func _pick_tile(at: Vector2) -> Vector2i:
 	var map := battle.map
 	if not map.has_height() or not _proj.isometric:
 		return _proj.tile_at(at)
-	var h := float(TacticalMap.MAX_ELEVATION + TacticalMap.MAX_STOREYS) * TerrainPainter.LEVEL_HEIGHT
+	var h := TerrainPainter.max_lift()
 	while h > 0.0:
 		var g := _proj.unproject(at + Vector2(0, h * ViewProjection.HEIGHT_PX))
 		var p := Vector2i(g.floor())
-		if map.in_bounds(p) and map.floor_height(p, mini(_cursor_level, map.top_level(p))) * TerrainPainter.LEVEL_HEIGHT >= h - 0.001:
+		if map.in_bounds(p) and TerrainPainter.floor_lift(map, p, mini(_cursor_level, map.top_level(p))) >= h - 0.001:
 			return p
 		h -= 0.1
 	return _proj.tile_at(at)
@@ -806,7 +806,7 @@ func _level_name(p: Vector2i, level: int) -> String:
 
 ## How high the surface on show at tile p is drawn.
 func _surface_lift(p: Vector2i) -> float:
-	return battle.map.floor_height(p, _shown_level(p)) * TerrainPainter.LEVEL_HEIGHT
+	return TerrainPainter.floor_lift(battle.map, p, _shown_level(p))
 
 
 ## The floor a move to tile p goes to: in the open building exactly the cursor's floor (reachable or not);
@@ -833,7 +833,7 @@ func _tile_lift(p: Vector2i, level := -1) -> float:
 		return 0.0
 	if level < 0:
 		level = _dest_level(p) if mode == Mode.MOVE and _reach.has(p) else _shown_level(p)
-	return battle.map.floor_height(p, level) * TerrainPainter.LEVEL_HEIGHT
+	return TerrainPainter.floor_lift(battle.map, p, level)
 
 
 ## A tile's outline polygon, lifted to its floor on show.
@@ -859,13 +859,13 @@ func _lift_at(g: Vector2) -> float:
 	var p := Vector2i(g.floor())
 	var u := battle.unit_at(p)
 	if u != null and _display_height.has(u.id):
-		return _display_height[u.id] * TerrainPainter.LEVEL_HEIGHT
+		return _display_height[u.id]
 	return _surface_lift(p) if battle.map.in_bounds(p) else 0.0
 
 
 ## A unit's drawing height.
 func _unit_lift(u: Unit) -> float:
-	return _display_height.get(u.id, 0.0) * TerrainPainter.LEVEL_HEIGHT
+	return _display_height.get(u.id, 0.0)
 
 
 ## A point `height` above a unit, on screen.
@@ -1255,7 +1255,7 @@ func _play_event(e: Dictionary) -> void:
 			_last_source = {"at": _center(e["center"]), "blast": true}
 			_hold_layout = false
 			_effects.append({"kind": "explosion", "at": _center(e["center"]), "radius": e["radius"] + 0.5, "age": 0.0, "life": 1.4,
-					"lift": battle.map.floor_height(e["center"], e.get("level", 0)) * TerrainPainter.LEVEL_HEIGHT})
+					"lift": TerrainPainter.floor_lift(battle.map, e["center"], e.get("level", 0))})
 			_log_line("Explosion: %d pieces of cover destroyed." % e["destroyed"])
 			await _wait(0.6)
 		"smoke":
@@ -1473,7 +1473,7 @@ func _play_tunnel(e: Dictionary) -> void:
 	if not own:
 		_move_visibility[u.id] = _viewer_sees(to)
 	_display_pos[u.id] = _center(to)
-	_display_height[u.id] = battle.map.floor_height(to)
+	_display_height[u.id] = TerrainPainter.floor_lift(battle.map, to)
 	if own or _viewer_sees(to):
 		if controllers[u.team] != null and _follows(u.team):
 			_focus(_center(to))
@@ -1520,7 +1520,7 @@ func _play_move(e: Dictionary) -> void:
 			_facing[u.id] = Vector2(path[i] - path[i - 1]).normalized()
 		if watched:
 			_move_visibility[u.id] = _viewer_sees(path[i])
-		var height := battle.map.floor_height(path[i], levels[i] if i < levels.size() else 0)
+		var height := TerrainPainter.floor_lift(battle.map, path[i], levels[i] if i < levels.size() else 0)
 		var duration := 0.3 if u.vehicle else (0.28 if path[i] == path[i - 1] else 0.16)
 		await _tween_unit(u.id, _center(path[i]), duration, height)
 		if u.vehicle:
@@ -1540,7 +1540,7 @@ func _jump_move(u: Unit, e: Dictionary) -> void:
 		_move_visibility[u.id] = _viewer_sees(path[-1])
 	_display_pos[u.id] = _center(path[-1])
 	var levels: Array = e.get("levels", [])
-	_display_height[u.id] = battle.map.floor_height(path[-1], levels[-1] if not levels.is_empty() else 0)
+	_display_height[u.id] = TerrainPainter.floor_lift(battle.map, path[-1], levels[-1] if not levels.is_empty() else 0)
 	if u.vehicle:
 		for tile: Vector2i in path:
 			_hide_crushed(tile)
@@ -1612,7 +1612,7 @@ func _play_throw(e: Dictionary) -> void:
 		_facing[u.id] = (landing - _display_pos[u.id]).normalized()
 	_revealed[u.id] = true
 	_effects.append({"kind": "shell", "from": _display_pos[u.id], "to": landing, "age": 0.0, "life": 0.5,
-			"lift": _unit_lift(u), "to_lift": battle.map.floor_height(e["center"], e.get("level", 0)) * TerrainPainter.LEVEL_HEIGHT})
+			"lift": _unit_lift(u), "to_lift": TerrainPainter.floor_lift(battle.map, e["center"], e.get("level", 0))})
 	await _wait(0.5)
 	if e["center"] != e["target"]:
 		var off := Vector2(e["center"]).distance_to(Vector2(e["target"]))
@@ -2666,7 +2666,7 @@ func _see_through_buildings() -> Dictionary:
 		# Inside a building below its roof (and not the one cut open at the cursor): it hides the soldier.
 		if own != -1 and own != _open_building and level < map.top_level(p):
 			_see_through[own] = true
-		var sf := _proj.project(_center(p), map.floor_height(p, level) * TerrainPainter.LEVEL_HEIGHT)
+		var sf := _proj.project(_center(p), TerrainPainter.floor_lift(map, p, level))
 		var depth := _proj.depth(_center(p))
 		for b: Vector2i in _building_of:
 			var building: int = _building_of[b]
@@ -2674,10 +2674,10 @@ func _see_through_buildings() -> Dictionary:
 				continue
 			if _proj.depth(_center(b)) <= depth + 0.5:
 				continue
-			var base := _proj.project(_center(b), map.get_elevation(b) * TerrainPainter.LEVEL_HEIGHT)
+			var base := _proj.project(_center(b), TerrainPainter.floor_lift(map, b))
 			if absf(sf.x - base.x) > ViewProjection.TILE_W * 0.5:
 				continue
-			var top := _proj.project(_center(b), map.floor_height(b, map.top_level(b)) * TerrainPainter.LEVEL_HEIGHT)
+			var top := _proj.project(_center(b), TerrainPainter.floor_lift(map, b, map.top_level(b)))
 			if sf.y >= top.y - ViewProjection.TILE_H * 0.5 and sf.y <= base.y + ViewProjection.TILE_H * 0.5:
 				_see_through[building] = true
 	return _see_through
@@ -2982,7 +2982,7 @@ func _draw_cursor_height(c: CanvasItem) -> void:
 		return
 	var center := _center(hover)
 	var top := _proj.project(center, _tile_lift(hover, level))
-	var foot := _proj.project(center, battle.map.floor_height(hover, 0) * TerrainPainter.LEVEL_HEIGHT)
+	var foot := _proj.project(center, TerrainPainter.floor_lift(battle.map, hover, 0))
 	var dash := 6.0
 	var length := top.distance_to(foot)
 	var t := 0.0

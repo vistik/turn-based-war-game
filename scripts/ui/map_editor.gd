@@ -328,7 +328,7 @@ func _paint_unit(c: CanvasItem, i: int) -> void:
 	var u := Unit.create(i, "", entry["role"], entry["team"], entry["pos"], entry["rank"], _s.theatre_id)
 	u.facing = entry["facing"]
 	var g := Vector2(u.pos) + Vector2(0.5, 0.5)
-	_proj.lift = _s.map.get_elevation(u.pos) * TerrainPainter.LEVEL_HEIGHT
+	_proj.lift = TerrainPainter.floor_lift(_s.map, u.pos)
 	var pose := {"facing": Vector2(u.facing).normalized(), "walk": 0.0, "phase": 0.0, "crouch": false, "pinned": false,
 			"deployed": false, "wounded": false, "death": 0.0, "flash": 0.0, "breath": i * 1.7, "time": 0.0}
 	var radius := 0.6 if u.vehicle else 0.4
@@ -505,11 +505,11 @@ func _pick_point(at: Vector2) -> Vector2:
 	var map := _s.map
 	if not map.has_height() or not _proj.isometric:
 		return _proj.unproject(at)
-	var h := float(TacticalMap.MAX_ELEVATION + TacticalMap.MAX_STOREYS) * TerrainPainter.LEVEL_HEIGHT
+	var h := TerrainPainter.max_lift()
 	while h > 0.0:
 		var g := _proj.unproject(at + Vector2(0, h * ViewProjection.HEIGHT_PX))
 		var p := Vector2i(g.floor())
-		if map.in_bounds(p) and map.floor_height(p, map.top_level(p)) * TerrainPainter.LEVEL_HEIGHT >= h - 0.001:
+		if map.in_bounds(p) and TerrainPainter.floor_lift(map, p, map.top_level(p)) >= h - 0.001:
 			return g
 		h -= 0.1
 	return _proj.unproject(at)
@@ -517,7 +517,7 @@ func _pick_point(at: Vector2) -> Vector2:
 
 ## How high tile p's top surface (ground or roof) is drawn.
 func _lift(p: Vector2i) -> float:
-	return _s.map.floor_height(p, _s.map.top_level(p)) * TerrainPainter.LEVEL_HEIGHT if _s.map.in_bounds(p) else 0.0
+	return _s.TerrainPainter.floor_lift(map, p, _s.map.top_level(p)) if _s.map.in_bounds(p) else 0.0
 
 
 func _show_hover_status() -> void:

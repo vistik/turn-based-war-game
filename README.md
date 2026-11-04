@@ -87,7 +87,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   upstairs worse the further they fall.
 - Climbing in or out through a glazed window smashes it: "CRASH", and from then on it's an empty frame with
   shards in the corners (still half cover). Mud-brick and bamboo windows have no glass to break.
-- Buildings look like their war: Normandy's grey limestone with green shutters and slate roofs, Vietnam's
+- Buildings look like their war: Normandy's red brick (mortar courses, staggered joints) with green shutters and slate roofs, Vietnam's
   ochre colonial stucco with blue-green shutters and red tile roofs (and bamboo huts), Iraq's rendered
   concrete with iron window grilles and pale flat roofs (and mud-brick compounds). Walls standing in rubble
   or by a crater are drawn shot up, broken off at uneven heights; bamboo huts are burnt to charred stumps.

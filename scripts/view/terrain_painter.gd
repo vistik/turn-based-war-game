@@ -35,6 +35,12 @@ const SANDBAG := Color("a99b6d")
 const HAY := Color("c7a95a")
 const WOOD := Color("7b5b37")
 const MASONRY := Color("c6bca7")
+## Normandy's red brick, and the pale lime mortar between the courses.
+const BRICK := Color("a3563c")
+const MORTAR := Color("d8ccb4")
+## Height of a course of bricks, and a brick's length in courses.
+const BRICK_COURSE := 0.1
+const BRICK_LENGTH := 2.4
 const STONE_WALL := Color("9b9183")
 ## A hedge's sides, its sunlit top and the dark line along the top's edges.
 const HEDGE := [Color("4f7442"), Color("679350"), Color("1b2a15")]
@@ -660,7 +666,7 @@ static func building_style() -> Dictionary:
 			return {"wall": Color("d3b46e"), "plinth": Color("8f877a"), "trim": Color("ece2c8"), "shutter": Color("4d7d72"), "roof": Color("9a5134"), "grille": false}
 		"modern":
 			return {"wall": Color("cbbc9c"), "plinth": Color("a29479"), "trim": Color("ddd2b8"), "shutter": Color("3b3d3f"), "roof": ROOF_ARID, "grille": true}
-	return {"wall": MASONRY, "plinth": Color("9d968a"), "trim": Color("e2dccd"), "shutter": Color("5b6b3f"), "roof": Color("676b74"), "grille": false}
+	return {"wall": BRICK, "plinth": Color("7a746b"), "trim": Color("e2dccd"), "shutter": Color("5b6b3f"), "roof": Color("676b74"), "grille": false}
 
 
 ## Set while drawing a building's upper storeys, which have no plinth.
@@ -681,11 +687,7 @@ static func _draw_masonry(c: Object, proj: ViewProjection, key: Vector3i, from: 
 					Color((style["plinth"] as Color).darkened(tint + 0.15), alpha))
 		match theatre:
 			"normandy":
-				# Courses of stone.
-				for h in [0.35, 0.7]:
-					var t: float = (h - base) / span
-					if t > 0.05 and t < 0.95:
-						c.draw_line(q[0].lerp(q[3], t), q[1].lerp(q[2], t), Color(color.darkened(0.18), alpha), 1.0)
+				_draw_brickwork(c, q, base, top, tint, alpha)
 			"modern":
 				# Rain streaks down the render.
 				for u in [0.3, 0.72]:
@@ -695,6 +697,34 @@ static func _draw_masonry(c: Object, proj: ViewProjection, key: Vector3i, from: 
 				var t: float = (WALL_HEIGHT - 0.08 - base) / span
 				if t > 0.05 and t < 0.95:
 					c.draw_line(q[0].lerp(q[3], t), q[1].lerp(q[2], t), Color((style["trim"] as Color).darkened(tint), alpha), 2.0)
+
+
+## Brick courses on a wall face (quad from its foot to its top, base..top high): mortar lines between the
+## courses and joints staggered half a brick from one course to the next. Bricks are sized from the face's
+## height on screen, so they look the same at any zoom; zoomed far out only the courses are drawn.
+static func _draw_brickwork(c: Object, q: PackedVector2Array, base: float, top: float, tint: float, alpha: float) -> void:
+	var span := maxf(0.01, top - base)
+	var course_px := (q[3] - q[0]).length() / span * BRICK_COURSE
+	if course_px < 2.0:
+		return
+	var mortar := Color(MORTAR.darkened(tint), alpha * 0.6)
+	var joints := course_px >= 3.5
+	var bricks := maxi(1, roundi((q[1] - q[0]).length() / (course_px * BRICK_LENGTH)))
+	var at := func(u: float, t: float) -> Vector2: return q[0].lerp(q[1], u).lerp(q[3].lerp(q[2], u), t)
+	var row := ceili(base / BRICK_COURSE - 0.001)
+	while row * BRICK_COURSE < top - 0.001:
+		var h := row * BRICK_COURSE
+		var t := (h - base) / span
+		var t_next := minf(1.0, (h + BRICK_COURSE - base) / span)
+		if t > 0.01:
+			c.draw_line(at.call(0.0, t), at.call(1.0, t), mortar, 1.0)
+		if joints:
+			var offset := 0.5 if row % 2 == 1 else 0.0
+			for k in bricks + 1:
+				var u := (k + offset) / bricks
+				if u > 0.02 and u < 0.98:
+					c.draw_line(at.call(u, maxf(t, 0.0)), at.call(u, t_next), mortar, 1.0)
+		row += 1
 
 
 ## A masonry window: wall to the sill, piers either side, a lintel, and the opening between them, glazed

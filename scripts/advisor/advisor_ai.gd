@@ -23,6 +23,10 @@ func _init(p_battle: Battle, p_team: int) -> void:
 		sum += Vector2(battle.map.width - 1 - u.pos.x, u.pos.y)
 		count += 1
 	_objective = sum / maxi(1, count) if count > 0 else Vector2(battle.map.width, battle.map.height) * 0.5
+	# The advisor has no game plan of its own: the player has that.
+	_read_the_ground()
+	plans.clear()
+	set_strategy("broad_front")
 
 
 ## The AI's suggestion for its team's next move, or for one unit when `only` is given.

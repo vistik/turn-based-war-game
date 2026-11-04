@@ -227,6 +227,16 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 **AI**
 - A utility AI that plays fair: it only knows what its side can see. It weighs cover facing the enemy,
   objectives, stances, tank armour, friendly-fire risk and the score.
+- **Game plans**: each AI side picks a plan for the whole battle, so no two games against it play alike:
+  broad front, take two neighbouring objectives and dig in on them, a left or right hook rolling up the
+  objectives from that flank, a punch through the centre (keeping together), a pincer on both flanks, an
+  armoured spearhead (infantry following behind the tanks), wait near home and counterattack, an all-out push,
+  or bleeding the enemy from cover at long range. Plans only come up where they fit (tanks, enough objectives,
+  the side of a mission). It changes plan when it stops making sense: the spearhead without tanks, the ambush
+  when its time is up or it falls behind, and anything turns into an all-out push when far behind late on.
+  Its plan is shown in the log when the battle ends (and at the start when watching AI vs AI).
+  In a skirmish, "Choose AI plans" sets the plan for each side the AI plays, or leaves it random (the
+  default); a plan that doesn't suit the battle falls back to random.
 - **Suggest a move** (H): the same AI advises you, showing the move and why, and you make it yourself.
 - **Agent link**: an opt-in MCP server on your own computer lets an agent like Claude read your side's view,
   suggest moves on screen and, only if you allow it, make them. Never in online games.

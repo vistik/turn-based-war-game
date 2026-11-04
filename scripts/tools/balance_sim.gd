@@ -167,8 +167,8 @@ class Batch:
 
 
 ## The battle for one game. source is {"scenario": scenario data (Scenario.to_data())} or
-## {"map": "village" or "random", "size": N, "theatre": id (optional), "mission": a mission setup (optional, see Mission)}.
-## "swapped" exchanges the sides' starting positions (and so which side attacks).
+## {"map": "village" or "random", "size": N, "theatre": id (optional)}.
+## "swapped" exchanges the sides' starting positions.
 ## Safe on worker threads: every battle gets its own map and units.
 static func build(source: Dictionary, seed: int, variant := "normal") -> Battle:
 	var scenario: Scenario
@@ -176,8 +176,6 @@ static func build(source: Dictionary, seed: int, variant := "normal") -> Battle:
 		scenario = Scenario.from_data(source["scenario"])
 	else:
 		var setup := {"theatre": source.get("theatre", Theatres.DEFAULT), "map": source.get("map", "village"), "size": source.get("size", 0), "seed": seed}
-		if source.has("mission"):
-			setup["mission"] = source["mission"]
 		var built: Battle = GameSession.build_skirmish(setup)[0]
 		if variant == "normal":
 			return built
@@ -213,7 +211,7 @@ static func summarize(results: Array) -> Dictionary:
 	var held := [0.0, 0.0, 0.0]
 	var kills := {}
 	var losses := {}
-	# First-mover (the Allies, or a mission's attacker) and west-start results.
+	# First-mover (the Allies) and west-start results.
 	var west_wins := 0
 	var first_wins := 0
 	var decided := 0
@@ -307,7 +305,7 @@ static func format_summary(s: Dictionary) -> String:
 			", unfinished %d" % s["unfinished"] if s["unfinished"] > 0 else ""])
 	lines.append("Win rate: %s %s (95%% CI %s), %s %s (95%% CI %s), draws %s." % [
 			a, pct.call(s["win_rate"][0]), ci.call(s["win_ci"][0]), g, pct.call(s["win_rate"][1]), ci.call(s["win_ci"][1]), pct.call(s["draw_rate"])])
-	lines.append("First mover (the %s, or a mission's attacker): took %s of decided games (95%% CI %s). 50%% = no edge." % [
+	lines.append("First mover (the %s): took %s of decided games (95%% CI %s). 50%% = no edge." % [
 			a, pct.call(s["first_mover_share"]), ci.call(s["first_mover_ci"])])
 	if s["swapped"] and s["swap_identical"]:
 		lines.append("Start side: every swapped game played out exactly like the original. This map and the forces are mirror images, so the start side makes no difference; only the first move does.")
@@ -315,9 +313,7 @@ static func format_summary(s: Dictionary) -> String:
 		lines.append("Start side: the west start won %d of %d decided games, %s (95%% CI %s)." % [
 				s["west_wins"], s["decided"], pct.call(float(s["west_wins"]) / maxf(1.0, s["decided"])), ci.call(s["west_ci"])])
 	var reasons := PackedStringArray()
-	var names := {"points": "reached points", "rounds": "most points at round limit", "eliminated": "elimination", "draw": "draw", "unfinished": "unfinished",
-			"taken": "objective taken", "held": "held out", "extracted": "VIP extracted", "vip_killed": "VIP killed", "escaped": "VIP escaped",
-			"survived": "VIP survived", "demolished": "targets blown", "saved": "targets saved", "time": "ran out the clock"}
+	var names := {"points": "reached points", "rounds": "most points at round limit", "eliminated": "elimination", "draw": "draw", "unfinished": "unfinished"}
 	for key: String in names:
 		if s["reasons"].has(key):
 			reasons.append("%s %d" % [names[key], s["reasons"][key]])

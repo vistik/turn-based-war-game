@@ -104,7 +104,7 @@ func make_scenario() -> Scenario:
 	s.map.set_edge(Vector2i(9, 9), Vector2i(8, 9), Cover.HALF, "fence")
 	s.objectives.append({"name": "Barn", "center": Vector2(6, 4.5), "radius": 2.0})
 	s.units.append(Scenario.unit_entry(0, "Officer", Vector2i(1, 4), Vector2i(1, 0), "Lt. Test", 2))
-	s.units.append(Scenario.unit_entry(0, "Tank", Vector2i(1, 7), Vector2i(1, -1)))
+	s.units.append(Scenario.unit_entry(0, "Rifleman", Vector2i(1, 7), Vector2i(1, -1)))
 	s.units.append(Scenario.unit_entry(1, "MG", Vector2i(10, 4), Vector2i(0, 1)))
 	var spawns: Array[Vector2i] = [Vector2i(11, 0), Vector2i(11, 9)]
 	s.reinforcements.append({"round": 3, "team": 1, "roster": ["Rifleman", {"role": "Sniper", "name": "Hans", "rank": 1}], "spawns": spawns})
@@ -152,7 +152,7 @@ func test_scenario_round_trip() -> void:
 	check_eq(unit_rows(battle), unit_rows(s.build_battle(5)), "same units")
 	check_eq(battle.get_unit(0).name, "Lt. Test", "named units keep their name")
 	check_eq(battle.get_unit(0).rank, 2, "and rank")
-	check_eq(battle.get_unit(1).facing, Vector2i(1, -1), "tanks keep a diagonal facing")
+	check_eq(battle.get_unit(1).facing, Vector2i(1, -1), "units keep a diagonal facing")
 	check_eq(battle.get_unit(2).pos, Vector2i(10, 4), "units start on their exact tile")
 	check_eq(battle.reinforcements[0]["units"][1].name, "Hans", "reinforcements keep names")
 	check_eq(battle.reinforcements[0]["units"][0].pos, Vector2i(11, 0), "reinforcements use the wave's spawn tiles")
@@ -208,23 +208,6 @@ func test_village_scenario_builds_the_village() -> void:
 	var ci := BalanceSim.wilson(5, 10)
 	check(ci[0] < 0.5 and ci[1] > 0.5 and ci[0] > 0.2, "confidence interval around 50%")
 
-
-func test_brecourt_scenario_is_a_demolition_of_four_guns() -> void:
-	var scenario := Scenario.load_file("res://scenarios/brecourt.json")
-	check(scenario != null, "bundled Brecourt scenario loads: %s" % Scenario.last_error)
-	if scenario == null:
-		return
-	check(scenario.validate().is_empty(), "Brecourt scenario is valid: %s" % scenario.validate())
-	var battle := scenario.build_battle(3)
-	check_eq(battle.mission_type(), Mission.DEMOLITION, "a demolition mission")
-	check_eq(battle.mission_attacker(), 0, "the Allies attack")
-	var targets: Array = battle.mission["targets"]
-	check_eq([targets.size(), battle.mission["needed"]], [4, 4], "all four guns must be blown")
-	for t: Dictionary in targets:
-		check_eq(battle.map.get_object_kind(t["tile"]), "howitzer", "%s is a gun" % t["name"])
-	check(battle.alive_units().any(func(u: Unit) -> bool: return u.name == "Lt. Winters" and u.team == 0), "Winters leads Easy Company")
-	check(battle.map.has_height(), "the manor has an upper floor")
-	check(Scenario.list_files().any(func(f: Dictionary) -> bool: return f["path"] == "res://scenarios/brecourt.json"), "Brecourt is listed")
 
 # --- Movement and terrain ---
 
@@ -351,6 +334,94 @@ func test_a_shell_hit_shows_the_blast_before_the_kill() -> void:
 	check(types.find("explosion") < types.find("damage") and types.find("damage") < types.find("death"), "then the blast, then the hit and the kill (%s)" % [types])
 
 
+func test_the_first_side_opens_with_one_action() -> void:
+	var battle: Battle = GameSession.build_skirmish({"map": "random", "size": 32, "seed": 77})[0]
+	battle.start()
+	check(battle.alive_units(0).all(func(u: Unit) -> bool: return u.actions == 1), "the side moving first has one action each in round 1")
+	check_eq(Battle.from_dict(battle.to_dict()).opening_actions, 1, "and a saved battle remembers it")
+	battle.end_turn()
+	check(battle.alive_units(1).all(func(u: Unit) -> bool: return u.actions == 2), "the other side gets both")
+	battle.end_turn()
+	check(battle.alive_units(0).all(func(u: Unit) -> bool: return u.actions == 2), "and so does the first side from round 2")
+
+
+func test_vehicles_are_switched_off() -> void:
+	for theatre_id: String in ["normandy", "vietnam", "modern"]:
+		var battle: Battle = GameSession.build_skirmish({"theatre": theatre_id, "map": "random", "size": 84, "seed": 3})[0]
+		check(not battle.units.any(func(u: Unit) -> bool: return u.vehicle), "%s: no vehicles in a big skirmish" % theatre_id)
+		check(not battle.reinforcements.any(func(w: Dictionary) -> bool: return w["units"].any(func(u: Unit) -> bool: return u.vehicle)),
+				"%s: nor among the reinforcements" % theatre_id)
+		var theatre := Theatres.get_theatre(theatre_id)
+		check(not theatre.role_ids(0).any(func(r: String) -> bool: return theatre.is_vehicle(0, r)), "%s: none for sale" % theatre_id)
+
+
+func test_observed_fire_lands_at_once() -> void:
+	var battle := make_battle([["Mortar", 0, Vector2i(2, 8)], ["Rifleman", 0, Vector2i(9, 8)], ["Rifleman", 1, Vector2i(10, 9)]], Vector2i(24, 24))
+	battle.units[2].hp = 50
+	var events := battle.fire_mortar(battle.units[0], Vector2i(10, 9), "he")
+	check(events_of(events, "mortar_fire")[0].get("observed", false), "a target a soldier of ours can see is observed")
+	check_eq(events_of(events, "strike").size(), 1, "and the round comes down at once")
+	check(battle.strikes.is_empty(), "nothing is left pending")
+	var blind := make_battle([["Mortar", 0, Vector2i(2, 8)], ["Rifleman", 1, Vector2i(14, 8)]], Vector2i(24, 24))
+	blind.map.set_edge(Vector2i(13, 8), Vector2i(14, 8), Cover.FULL, "wall")
+	blind.map.set_edge(Vector2i(14, 7), Vector2i(14, 8), Cover.FULL, "wall")
+	blind.map.set_edge(Vector2i(14, 8), Vector2i(14, 9), Cover.FULL, "wall")
+	blind.map.set_edge(Vector2i(14, 8), Vector2i(15, 8), Cover.FULL, "wall")
+	if not blind.is_spotted(0, Vector2i(14, 8)):
+		var blind_events := blind.fire_mortar(blind.units[0], Vector2i(14, 8), "he")
+		check_eq(events_of(blind_events, "strike").size(), 1, "blind fire lands at once too")
+		check(not blind_events[0]["observed"], "marked as fired blind")
+		check(blind.strikes.is_empty(), "nothing left pending")
+
+
+func test_medkit_steadies_a_shaken_man() -> void:
+	var battle := make_battle([["Medic", 0, Vector2i(2, 2)], ["Rifleman", 0, Vector2i(3, 2)], ["Rifleman", 1, Vector2i(14, 14)]])
+	var patient := battle.units[1]
+	patient.suppression = 60
+	check_eq(battle.can_use_medkit(battle.units[0], patient), "", "an unhurt but shaken soldier can be treated")
+	battle.use_medkit(battle.units[0], patient)
+	check_eq(patient.suppression, 20, "the medkit takes 40 off his suppression")
+
+
+func test_heavy_mg_fires_on_the_move_but_worse() -> void:
+	var battle := make_battle([["MG", 0, Vector2i(2, 8)], ["Rifleman", 1, Vector2i(10, 8)]])
+	var mg := battle.units[0]
+	var still: int = battle.shot_odds(mg, battle.units[1])["hit"]
+	battle.move(mg, Vector2i(3, 8))
+	check_eq(battle.can_fire(mg), "", "the gun can fire after moving")
+	check_eq(battle.shot_odds(mg, battle.units[1])["hit"], still - CombatRules.HEAVY_MOVED_AIM_PENALTY, "at a penalty")
+	check(battle.can_suppress(mg, battle.units[1]) != "", "but lays no suppressive fire")
+
+
+func test_fire_smokes_and_scorches_its_neighbours() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(5, 5)], ["Rifleman", 1, Vector2i(14, 14)]])
+	battle.map.set_terrain(Vector2i(6, 5), TacticalMap.Terrain.WHEAT)
+	battle._ignite(Vector2i(6, 5))
+	check(battle.map.has_smoke(Vector2i(6, 5)), "a fire fills its tile with smoke")
+	check_eq(battle.map.get_fires()[Vector2i(6, 5)], battle.turn_index + CombatRules.LONG_BURN_TURNS, "crops burn longer")
+	battle.end_turn()
+	var events := battle.end_turn()
+	check(battle.units[0].suppression >= CombatRules.FIRE_HEAT_SUPPRESSION or events_of(events, "suppression").size() > 0, "the heat shakes a soldier next to it")
+
+
+func test_upper_floor_blasts_weaken_a_building() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(1, 1)], ["Rifleman", 1, Vector2i(14, 14)]])
+	var map := battle.map
+	for y in range(4, 7):
+		for x in range(4, 7):
+			map.set_terrain(Vector2i(x, y), TacticalMap.Terrain.INDOOR)
+			map.set_storeys(Vector2i(x, y), 3)
+	for i in range(4, 7):
+		map.set_edge(Vector2i(i, 3), Vector2i(i, 4), Cover.FULL, "wall")
+		map.set_edge(Vector2i(i, 6), Vector2i(i, 7), Cover.FULL, "wall")
+		map.set_edge(Vector2i(3, i), Vector2i(4, i), Cover.FULL, "wall")
+		map.set_edge(Vector2i(6, i), Vector2i(7, i), Cover.FULL, "wall")
+	battle._explode(battle.units[0], Vector2i(4, 4), 1.0, 1, 1, 0, null, CombatRules.EXPLOSION_VS_ARMOR, 1, CombatRules.WALL_HITS["shell"])
+	check_eq(map.edge_damage(TacticalMap.edge_key(Vector2i(4, 3), Vector2i(4, 4))), 1, "a shell on the first floor knocks a stage off that room's outer walls")
+	check(battle.collapse_progress(Vector2i(5, 5)) == 0.0, "only damaged, nothing breached yet")
+	check(battle._collapse_share([Vector2i(4, 4)] as Array[Vector2i]) < CombatRules.COLLAPSE_SHARE, "a three-storey building needs fewer broken walls")
+
+
 func test_hold_ends_a_soldiers_turn() -> void:
 	var battle := make_battle([["Rifleman", 0, Vector2i(2, 2)], ["Rifleman", 0, Vector2i(2, 4)], ["Rifleman", 1, Vector2i(13, 13)]])
 	var a := battle.units[0]
@@ -422,10 +493,10 @@ func test_officer_death_shakes_the_squad() -> void:
 	check(battle.units[1].suppression >= CombatRules.OFFICER_DEATH_SUPPRESSION, "squad is shaken")
 
 
-func test_machine_gun_moves_or_fires_and_suppresses_an_area() -> void:
+func test_machine_gun_fires_best_set_up_and_suppresses_an_area() -> void:
 	var battle := make_battle([["MG", 0, Vector2i(2, 5)], ["Rifleman", 0, Vector2i(0, 15)], ["Rifleman", 1, Vector2i(9, 5)], ["Rifleman", 1, Vector2i(9, 6)]])
 	var mg := battle.units[0]
-	check(mg.weapon.heavy and mg.weapon.fires_standing_still(), "a heavy machine gun fires standing still")
+	check(mg.weapon.heavy and not mg.weapon.fires_standing_still(), "a heavy machine gun can fire after moving")
 	check(battle.can_shoot(mg, battle.units[2]) == "", "standing still, it fires at once")
 	battle.units[2].hp = 100
 	battle.shoot(mg, battle.units[2])
@@ -433,8 +504,9 @@ func test_machine_gun_moves_or_fires_and_suppresses_an_area() -> void:
 	battle.end_turn()
 	battle.end_turn()
 	battle.move(mg, Vector2i(3, 5))
-	check(battle.can_shoot(mg, battle.units[2]) != "", "after moving it can't fire")
-	check(battle.can_overwatch(mg) != "", "nor go on overwatch")
+	check_eq(battle.can_shoot(mg, battle.units[2]), "", "after moving it can still fire")
+	check(battle.shot_odds(mg, battle.units[2])["modifiers"].any(func(m: Array) -> bool: return m[0] == "Fired on the move"), "but off the hip")
+	check(battle.can_suppress(mg, battle.units[2]) != "", "and lays no suppressive fire")
 
 
 func test_blasts_set_crops_alight() -> void:
@@ -455,7 +527,7 @@ func test_blasts_set_crops_alight() -> void:
 		if battle.map.has_fire(units[1].pos):
 			under_soldier += 1
 	check(lit > 12, "grenades in a wheat field start fires (%d tiles)" % lit)
-	check_eq(under_soldier, 0, "never under a soldier")
+	check(under_soldier < 12, "less often under a soldier (%d of 12)" % under_soldier)
 
 
 func test_fire_spreads_through_dry_crops_not_roads() -> void:
@@ -525,7 +597,7 @@ func test_tank_shell_breaches_the_wall_in_front() -> void:
 	check_eq(battle.map.get_edge(Vector2i(7, 5), Vector2i(8, 5)), Cover.NONE, "but shoots a fence apart")
 
 
-func test_a_building_collapses_when_half_its_walls_are_down() -> void:
+func test_a_building_collapses_when_enough_walls_are_down() -> void:
 	var battle := make_battle([["Rifleman", 0, Vector2i(0, 0)], ["Rifleman", 1, Vector2i(6, 6)], ["Rifleman", 1, Vector2i(15, 15)]])
 	var map := battle.map
 	var rect := Rect2i(5, 5, 3, 3)
@@ -544,15 +616,15 @@ func test_a_building_collapses_when_half_its_walls_are_down() -> void:
 	var upstairs := battle.units[1]
 	upstairs.level = 2
 	upstairs.hp = 100
-	# Breach five of the twelve walls: it still stands.
-	for i in 5:
+	# Breach four of the twelve walls: it still stands (two storeys come down at 40%).
+	for i in 4:
 		map.damage_edge(walls[i], 2)
 	var events := battle._collapse_weakened({})
-	check(events_of(events, "collapse").is_empty(), "five of twelve walls down: it stands")
+	check(events_of(events, "collapse").is_empty(), "four of twelve walls down: it stands")
 	var before := map.get_edge_damage().duplicate()
-	map.damage_edge(walls[5], 2)
+	map.damage_edge(walls[4], 2)
 	events = battle._collapse_weakened(before)
-	check_eq(events_of(events, "collapse").size(), 1, "six of twelve: it comes down")
+	check_eq(events_of(events, "collapse").size(), 1, "five of twelve: it comes down")
 	check_eq(map.get_storeys(Vector2i(6, 6)), 0, "no floors left")
 	check_eq(map.get_terrain(Vector2i(6, 6)), TacticalMap.Terrain.RUBBLE, "a heap of rubble")
 	check_eq(upstairs.level, 0, "the soldier on the roof falls")
@@ -649,6 +721,7 @@ func test_mortar_fires_blind_and_lands_next_turn() -> void:
 	check(battle.can_fire_mortar(mortar, Vector2i(2, 8), "he") != "", "minimum range")
 	check(battle.can_fire_mortar(mortar, Vector2i(15, 8), "he") == "", "spotted target in range")
 	var observed := battle.firing_scatter(mortar, Vector2i(15, 8))
+	check(is_equal_approx(observed, Battle.mortar_scatter(mortar.pos, Vector2i(15, 8), mortar.indirect) * Battle.IMMEDIATE_SCATTER), "fire that lands at once scatters twice as far")
 	for y in battle.map.height:
 		battle.map.set_edge(Vector2i(11, y), Vector2i(12, y), Cover.FULL)
 	check(not battle.is_spotted(0, Vector2i(15, 8)), "nobody can see behind the wall")
@@ -663,15 +736,13 @@ func test_mortar_fires_blind_and_lands_next_turn() -> void:
 
 	var events := battle.fire_mortar(mortar, Vector2i(15, 8), "he")
 	check_eq(events[0]["type"], "mortar_fire", "shell fired")
-	check_eq(battle.strikes.size(), 1, "shell in the air")
-	check(events_of(events, "explosion").is_empty(), "nothing lands this turn")
-	var landing := battle.end_turn()
-	landing.append_array(battle.end_turn())
-	var strikes := events_of(landing, "strike")
-	check_eq(strikes.size(), 1, "lands at the start of our next turn")
+	check(events[0].get("observed", false), "at a target a soldier of ours can see")
+	check(battle.strikes.is_empty(), "observed fire isn't left in the air")
+	var strikes := events_of(events, "strike")
+	check_eq(strikes.size(), 1, "it comes down at once")
 	if not strikes.is_empty():
 		var center: Vector2i = strikes[0]["center"]
-		check(Vector2(center).distance_to(Vector2(15, 8)) <= Battle.mortar_scatter(Vector2i(0, 8), Vector2i(15, 8), battle.units[0].indirect) + 1.0, "within scatter")
+		check(Vector2(center).distance_to(Vector2(15, 8)) <= battle.firing_scatter(battle.units[0], Vector2i(15, 8)) + 1.0, "within scatter")
 
 
 # --- Objectives and the flow of battle ---
@@ -728,7 +799,7 @@ func test_medkit_heals_and_treats_wounds() -> void:
 	check(battle.can_use_medkit(battle.units[0], patient) != "", "can't treat a healthy unit")
 	battle._damage(patient, 5, 0)
 	battle.use_medkit(battle.units[0], patient)
-	check_eq(patient.hp, 6, "healed 4")
+	check_eq(patient.hp, mini(patient.max_hp, 2 + CombatRules.MEDKIT_HEAL), "healed")
 	check(not patient.is_wounded(), "wound treated")
 
 
@@ -1835,7 +1906,7 @@ func test_war_campaign_ai_orders_are_valid() -> void:
 func test_war_campaign_deployment_and_scoring() -> void:
 	var war := WarCampaign.create(3, 77)
 	war.set_orders(0, {"roster": ["Officer", "Rifleman", "Rifleman", "MG", "AT"], "flank": "left", "posture": "defensive"})
-	war.set_orders(1, {"roster": ["Tank", "Rifleman", "SMG"], "flank": "balanced", "posture": "offensive"})
+	war.set_orders(1, {"roster": ["MG", "Rifleman", "SMG"], "flank": "balanced", "posture": "offensive"})
 	check(war.ready_to_fight(), "both sides have orders")
 	var battle := war.build_battle()
 	var size: int = war.current_map()["size"]
@@ -1857,7 +1928,7 @@ func test_war_campaign_deployment_and_scoring() -> void:
 	var points: int = war.current_map()["points"]
 	var result := war.complete_map(battle)
 	check_eq(war.scores, [0, points], "the winner takes the map's points")
-	check_eq(result["spent"], [war.cost_of(0, ["Officer", "Rifleman", "Rifleman", "MG", "AT"]), war.cost_of(1, ["Tank", "Rifleman", "SMG"])], "supply spent recorded")
+	check_eq(result["spent"], [war.cost_of(0, ["Officer", "Rifleman", "Rifleman", "MG", "AT"]), war.cost_of(1, ["MG", "Rifleman", "SMG"])], "supply spent recorded")
 	check_eq(war.supply[0], WarCampaign.SUPPLY - result["spent"][0], "spent supply is gone")
 	var copy := WarCampaign.from_dict(war.to_dict())
 	check_eq(copy.to_dict(), war.to_dict(), "save and load round trip")

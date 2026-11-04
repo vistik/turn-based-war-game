@@ -36,8 +36,7 @@ const COMMAND_HELP := "Commands: {\"cmd\": \"move\", \"unit\": id, \"tile\": [x,
 		+ "{\"cmd\": \"overwatch\"|\"reload\"|\"rally\", \"unit\": id} | {\"cmd\": \"grenade\"|\"smoke\", \"unit\": id, \"tile\": [x, y]} | " \
 		+ "{\"cmd\": \"mortar\", \"unit\": id, \"tile\": [x, y], \"kind\": \"he\"|\"napalm\"} | {\"cmd\": \"tunnel\"|\"trap\"|\"detonate\", \"unit\": id, \"tile\": [x, y]} | {\"cmd\": \"medkit\", \"unit\": id, \"target\": ally id} | " \
 		+ "{\"cmd\": \"suppress\", \"unit\": machine gunner id, \"target\": enemy id} | {\"cmd\": \"stance\", \"unit\": id, \"stance\": 0 stand, 2 prone} | " \
-		+ "{\"cmd\": \"shoot_object\"|\"clear_mine\", \"unit\": id, \"tile\": [x, y]} | " \
-		+ "{\"cmd\": \"plant\"|\"defuse\", \"unit\": id, \"tile\": demolition target [x, y]} | {\"cmd\": \"end_turn\"}"
+		+ "{\"cmd\": \"shoot_object\"|\"clear_mine\", \"unit\": id, \"tile\": [x, y]} | {\"cmd\": \"end_turn\"}"
 
 var battle: Battle
 var host: Object
@@ -82,17 +81,13 @@ const RULES := "Rules in brief: 2 actions per turn; a move within the unit's mob
 		+ "Objectives: one changes hands when only one side has soldiers inside its radius, and stays held after they leave. At the end of every round each held objective scores 1 point for its holder, " \
 		+ "even while the other side stands in it too, so to stop the enemy scoring you must take it (be the only side inside), not just contest it. " \
 		+ "Grenades and smoke need a clear line to the tile within range and can't be thrown lying down. " \
-		+ "The mortar needs both actions (it can't fire after moving), a target 5-22 tiles away (it fires blind too: a tile nobody on your side can see scatters 1.5x as far), and its round lands at the start of your NEXT turn, with some scatter; enemy strikes show in get_state as incoming_mortar_strikes, so move out of their radius. " \
+		+ "The mortar needs both actions (it can't fire after moving), a target 4-22 tiles away. Every round lands at once, with some scatter; fire at a tile nobody on your side can see (a forward observer must see it himself) scatters 1.5x as far. " \
 		+ "A medkit treats an adjacent ally or the unit carrying it. Snipers and heavy machine guns move or fire in a turn, not both. Only machine gunners lay down suppressive fire. Tanks turn on the spot with a move to their own tile and a facing. " \
 		+ "Enemies out of sight may be on overwatch: moving across open ground in front of unscouted positions draws fire. Small arms can't hurt tanks; tanks take more damage from the side and rear. " \
 		+ "Vietnam: the Viet Cong move between their tunnel entrances (tunnel: both actions, from one of your entrances to another) and sappers lay punji traps next to them (trap); " \
 		+ "an enemy tunnel entrance you have found can be blown in from next to it with clear_mine. The radio operator's artillery (mortar command, he or napalm) needs no setting up but he must see the target himself. " \
 		+ "There the Americans score for objectives and the Viet Cong for every American killed. " \
 		+ "Iraq 2004: insurgent bomb makers plant IEDs (trap) and set them off when they can see them (detonate); the Coalition's EOD tech spots them far more often, and its JTAC calls air strikes (mortar command) on what he sees. Coalition score for objectives, insurgents for kills. " \
-		+ "Missions (get_state's mission, if there is one) replace the points: the attacker moves first and has to do something before the round limit, or the defender wins. " \
-		+ "Last stand: take the one objective and still hold it alone at the start of your next turn. Extraction: reach your hiding VIP (stand next to him), then walk him into the extraction zone; the enemy wins by killing him. " \
-		+ "Demolition: plant charges (plant, 1 action, from next to a target); a charge goes off at the start of your next turn unless a defender pulls it first (defuse, 1 action, from next to it). " \
-		+ "Assassination: kill the enemy VIP; his side wins by keeping him alive to the end or getting him into the exit zone once it opens. " \
 		+ "You only know what your side can see."
 
 
@@ -115,7 +110,7 @@ func tool_list() -> Array:
 	var command_arg := {
 		"type": "object", "description": COMMAND_HELP,
 		"properties": {
-			"cmd": {"type": "string", "enum": ["move", "shoot", "suppress", "stance", "shoot_object", "clear_mine", "overwatch", "reload", "hold", "rally", "grenade", "smoke", "mortar", "medkit", "tunnel", "trap", "detonate", "plant", "defuse", "end_turn"]},
+			"cmd": {"type": "string", "enum": ["move", "shoot", "suppress", "stance", "shoot_object", "clear_mine", "overwatch", "reload", "hold", "rally", "grenade", "smoke", "mortar", "medkit", "tunnel", "trap", "detonate", "end_turn"]},
 			"unit": {"type": "integer"}, "target": {"type": "integer"}, "tile": tile_arg, "kind": {"type": "string", "enum": ["he", "napalm"]},
 			"stance": {"type": "integer", "enum": [0, 2], "description": "0 stand, 2 prone"},
 			"facing": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2, "description": "move, tanks only: the heading to end on, e.g. [1, 0] or [1, -1]"},
@@ -250,38 +245,9 @@ func get_state(args := {}) -> Dictionary:
 		"incoming_mortar_strikes": strikes, "threats": _threats(side),
 		"agent_may_act": (AdvisorSettings.agent_may_act or (host != null and host.agent_plays())) and not _online(),
 	}
-	if not battle.mission.is_empty():
-		state["mission"] = mission_state(side)
 	if args.get("map", false) or args.get("full_map", false) or args.get("area") is Array:
 		state["map"] = _map_view(args, side, glyphs, remembered)
 	return state
-
-
-## The mission as `side` knows it: the type, its role and goal, and where the zone, targets and VIP are
-## (the enemy VIP only when it's in sight or known).
-func mission_state(side: int) -> Dictionary:
-	var mission := battle.mission
-	var data := {
-		"type": battle.mission_type(), "name": Mission.title(battle.mission_type()),
-		"you_are": "attacker" if side == battle.mission_attacker() else "defender",
-		"goal": Mission.goal_text(battle, side), "status": Mission.status_text(battle, side),
-	}
-	if mission.has("zone"):
-		var zone: Dictionary = mission["zone"]
-		data["zone"] = {"name": zone["name"], "center": [snappedf(zone["center"].x, 0.1), snappedf(zone["center"].y, 0.1)], "radius": zone["radius"],
-				"opens_round": int(mission.get("opens", 1))}
-	if mission.has("targets"):
-		data["targets"] = mission["targets"].map(func(t: Dictionary) -> Dictionary: return {"name": t["name"], "tile": _tile(t["tile"]), "state": t["state"]})
-		data["needed"] = mission["needed"]
-	var vip := battle.vip()
-	if vip != null:
-		var info := {"id": vip.id, "side": battle.team_name(vip.team), "alive": vip.is_alive()}
-		if vip.team == side or battle.team_sees(side, vip):
-			info["pos"] = _tile(vip.pos)
-		if battle.mission_type() == Mission.EXTRACT:
-			info["found"] = mission.get("found", false)
-		data["vip"] = info
-	return data
 
 
 ## For each of the side's units that an enemy in sight can see: who, their hit chance and our cover against them.
@@ -847,8 +813,6 @@ func _turn_summary() -> Dictionary:
 		"current_side": battle.team_name(battle.current_team), "round": battle.round_number,
 		"score": {"you": battle.victory_points[side], "enemy": battle.victory_points[1 - side], "to_win": battle.vp_to_win},
 	}
-	if not battle.mission.is_empty():
-		summary["mission"] = Mission.status_text(battle, side)
 	if battle.winner != -1:
 		summary["game_over"] = true
 		summary["winner"] = "draw" if battle.winner == Battle.DRAW else ("you" if battle.winner == side else "the enemy")
@@ -961,20 +925,13 @@ func _event_line(e: Dictionary, side: int) -> String:
 				return "Mines spotted at %s." % ", ".join(e["tiles"].map(func(t: Vector2i) -> String: return str(_tile(t))))
 		"objective":
 			return "%s took the %s." % [battle.team_name(e["owner"]), battle.objectives[e["index"]]["name"]]
-		"vip_found":
-			if mine:
-				return "%s reached the VIP %s; get him to the %s." % [battle.team_name(side), _who(u), Mission.zone_name(battle)]
-		"charge":
-			var target := battle.target_at(e["tile"])
-			return {"armed": "A charge was set on the %s; it goes off at the start of %s' next turn.", "defused": "The charge on the %s was pulled.",
-					"blown": "The %s was blown up."}[e["state"]] % ([target["name"], battle.team_name(battle.mission_attacker())] if e["state"] == "armed" else [target["name"]])
 		"reinforcements":
 			return "%s reinforcements arrived." % battle.team_name(e["team"])
 		"turn":
 			return "Round %d: %s's turn." % [e["round"], battle.team_name(e["team"])]
 		"game_over":
 			var winner: int = e["winner"]
-			var how := Mission.outcome_text(battle, e.get("reason", ""))
+			var how := Battle.outcome_text(e.get("reason", ""))
 			return "The battle is over: %s." % ("a draw" if winner == Battle.DRAW else ("you won %s" % how if winner == side else "you lost: the enemy won %s" % how))
 	return ""
 
@@ -1040,7 +997,7 @@ func validate(command: Dictionary) -> String:
 		return "No such unit on your side"
 	var tile: Vector2i = command.get("tile", Vector2i(-1, -1))
 	var target := battle.get_unit(command.get("target", -1))
-	if cmd in ["move", "grenade", "smoke", "mortar", "shoot_object", "clear_mine", "tunnel", "trap", "detonate", "plant", "defuse"] and not command.has("tile"):
+	if cmd in ["move", "grenade", "smoke", "mortar", "shoot_object", "clear_mine", "tunnel", "trap", "detonate"] and not command.has("tile"):
 		return "%s needs a tile" % cmd
 	match cmd:
 		"move":
@@ -1077,10 +1034,6 @@ func validate(command: Dictionary) -> String:
 			return battle.can_lay_trap(u, tile)
 		"detonate":
 			return battle.can_detonate(u, tile)
-		"plant":
-			return battle.can_plant(u, tile)
-		"defuse":
-			return battle.can_defuse(u, tile)
 	return "Unknown command: %s" % cmd
 
 

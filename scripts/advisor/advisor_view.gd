@@ -479,11 +479,11 @@ func _draw() -> void:
 			draw_polyline(TerrainPainter.ground_circle(proj, at, radius), color, 3.0)
 			label = command["cmd"].to_upper()
 			label_at = at
-		"shoot_object", "clear_mine", "plant", "defuse":
+		"shoot_object", "clear_mine":
 			var at: Vector2 = view._center(command["tile"])
 			draw_line(proj.project(from, 0.6), proj.project(at, 0.4), Color(color, 0.8), 2.5)
 			draw_polyline(TerrainPainter.ground_circle(proj, at, 0.5), color, 3.0)
-			label = {"shoot_object": "BLOW IT UP", "clear_mine": "CLEAR MINE", "plant": "PLANT CHARGE", "defuse": "PULL CHARGE"}[command["cmd"]]
+			label = {"shoot_object": "BLOW IT UP", "clear_mine": "CLEAR MINE"}[command["cmd"]]
 			label_at = at
 		_:
 			label = command["cmd"].replace("_", " ").to_upper()

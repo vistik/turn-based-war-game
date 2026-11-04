@@ -13,8 +13,8 @@ var clip_size: int
 var suppression: int
 ## Aim modifier indexed by distance in tiles; the last entry applies to anything further.
 var range_mods: PackedInt32Array
-## Heavy machine guns fire only from where the gunner stands (he can move or fire in a turn, not both), and
-## suppress everyone around the target.
+## Heavy machine guns fire worse after moving (CombatRules.HEAVY_MOVED_AIM_PENALTY), lay suppressive fire only
+## from where they set up, and suppress everyone around the target.
 var heavy := false
 ## Can damage tanks. Everything else bounces off their armour.
 var anti_tank := false
@@ -46,11 +46,12 @@ func range_modifier(distance: float) -> int:
 
 ## A weapon from its data (see the theatres): {"name", "kind", "damage": [min, max], "crit", "crit_damage", "clip",
 ## "suppression", "range": [modifier per tile...], and optionally "heavy", "anti_tank", "blast"}.
-## Sniper rifles and heavy machine guns fire only from where the soldier stands: he can move or fire in a turn,
-## not both.
+## Sniper rifles fire only from where the soldier stands: he can move or fire in a turn, not both. (A heavy
+## machine gun can fire after moving, at CombatRules.HEAVY_MOVED_AIM_PENALTY, but lays suppressive fire only
+## from where it set up.)
 ## A sniper also needs both actions to fire, and his clip is one round: every shot takes a reload on a turn of its own.
 func fires_standing_still() -> bool:
-	return kind == "sniper" or heavy
+	return kind == "sniper"
 
 
 static func from_spec(spec: Dictionary) -> Weapon:

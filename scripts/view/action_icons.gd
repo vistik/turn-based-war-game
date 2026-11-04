@@ -5,7 +5,7 @@ extends RefCounted
 
 
 ## One look for every icon: drawn in ink only, filling the same box (about -0.85..0.85), with one stroke
-## weight (`w`) for every line, and solid shapes for objects (grenade, magazine, mine, charge).
+## weight (`w`) for every line, and solid shapes for objects (grenade, magazine, mine).
 static func draw(c: CanvasItem, at: Vector2, action: String, s: float, ink: Color) -> void:
 	var p := func(x: float, y: float) -> Vector2: return at + Vector2(x, y) * s
 	var w := maxf(1.5, s * 0.14)
@@ -102,12 +102,6 @@ static func draw(c: CanvasItem, at: Vector2, action: String, s: float, ink: Colo
 			for i in 4:
 				var dir := Vector2.from_angle(i * TAU / 4 + 0.4)
 				c.draw_line(p.call(0.62, -0.62) + dir * s * 0.1, p.call(0.62, -0.62) + dir * s * 0.26, ink, w * 0.8)
-		"charge":
-			# A demolition charge: three sticks bound together, a fuse curling off with a spark.
-			for x: float in [-0.48, 0.0, 0.48]:
-				c.draw_rect(Rect2(p.call(x - 0.19, -0.15), Vector2(0.38, 1.0) * s), ink)
-			c.draw_polyline(PackedVector2Array([p.call(0.0, -0.15), p.call(0.15, -0.55), p.call(0.5, -0.68)]), ink, w)
-			c.draw_circle(p.call(0.66, -0.72), w * 1.1, ink)
 		"hold":
 			# Hold: a hand raised, palm out.
 			c.draw_rect(Rect2(p.call(-0.45, -0.1), Vector2(0.9, 0.8) * s), ink)

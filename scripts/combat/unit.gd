@@ -27,7 +27,7 @@ const STANCE_SIGHT := {Stance.STAND: 0.0, Stance.PRONE: 2.0}
 const MIN_CRAWL := 1.0
 ## Fields written to save files only when they differ from these defaults (newer abilities, so that units
 ## without them save, and checksum, as they always have).
-const OPTIONAL_FIELDS := {"traps": 0, "hiding": false, "level": 0, "moved": false}
+const OPTIONAL_FIELDS := {"traps": 0, "level": 0, "moved": false}
 ## Fields written to save files.
 const SAVED_FIELDS := [
 	"id", "name", "role", "team", "pos", "max_hp", "hp", "armor", "aim", "defense", "mobility", "sight", "ammo",
@@ -76,15 +76,12 @@ var record_id := -1
 var stance := Stance.STAND
 ## Fired since the start of its own last turn. The muzzle flash gives away a soldier hidden in the wheat.
 var fired := false
-## Moved since the start of its own turn. Snipers and machine guns can't fire after moving (Weapon.fires_standing_still).
+## Moved since the start of its own turn. Snipers can't fire after moving (Weapon.fires_standing_still); heavy machine guns fire worse and can't lay suppressive fire.
 var moved := false
 ## Caught by suppressive fire: keeps its head down and doesn't recover suppression at the start of its next turn.
 var under_fire := false
 ## Punji traps left to lay (Vietnam sappers).
 var traps := 0
-## Lying low (an Extraction VIP until his side reaches him): can't act, and can't be seen from further than
-## Mission.HIDING_RANGE.
-var hiding := false
 ## Not saved: rebuilt from the theatre, team and role when a unit is created or loaded.
 ## The theatre id, and the role's definition (see Theatre.role).
 var theatre := Theatres.DEFAULT

@@ -2,7 +2,7 @@
 	"format": "normandy-1944-scenario",
 	"version": 1,
 	"title": "Normandy village",
-	"briefing": "A crossroads village in the bocage, and no two sides of it alike. The Allies come from the west, Germany from the east. The church stands nearer the Germans, the farm nearer the Allies, the crossroads between. Hold them: one point per objective each round, first to 12 wins. A tank and a rifleman reinforce each side in round 4.",
+	"briefing": "A crossroads village in the bocage, and no two sides of it alike. The Allies come from the west, Germany from the east. The church stands nearer the Germans, the farm nearer the Allies, the crossroads between. Hold them: one point per objective each round, first to 12 wins. An SMG and a rifleman reinforce each side in round 4.",
 	"vp_to_win": 12,
 	"max_rounds": 20,
 	"map": {
@@ -484,13 +484,13 @@
 		{
 			"round": 4,
 			"team": "Allies",
-			"roster": ["Tank","Rifleman"],
+			"roster": ["SMG","Rifleman"],
 			"spawns": [[0,22],[0,10]]
 		},
 		{
 			"round": 4,
 			"team": "Germany",
-			"roster": ["Tank","Rifleman"],
+			"roster": ["SMG","Rifleman"],
 			"spawns": [[47,24],[47,6]]
 		}
 	]

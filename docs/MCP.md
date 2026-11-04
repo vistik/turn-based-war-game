@@ -120,8 +120,7 @@ Tiles are `[x, y]` (x east, y south). Commands use the engine's format (`Battle.
 `{"cmd": "stance", "unit": 3, "stance": 0 | 2}` (stand / prone),
 `{"cmd": "grenade" | "smoke", "unit": 3, "tile": [x, y]}`, `{"cmd": "mortar", "unit": 7, "tile": [x, y], "kind": "he" | "napalm"}`,
 `{"cmd": "medkit", "unit": 3, "target": 4}`, `{"cmd": "move", "unit": 9, "tile": [12, 30], "facing": [1, -1]}` (tanks: the heading to end on;
-the tank's own tile with a facing turns it on the spot),
-`{"cmd": "plant" | "defuse", "unit": 3, "tile": [x, y]}` (a Demolition target next to the unit), `{"cmd": "end_turn"}`.
+the tank's own tile with a facing turns it on the spot), `{"cmd": "end_turn"}`.
 
 On maps with height a move may name the floor to end on: `{"cmd": "move", "unit": 3, "tile": [12, 30], "level": 2}`
 (0 the ground or ground floor, a building's storey count its roof; left out, the cheapest floor). Units then
@@ -131,7 +130,7 @@ the height rules.
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `get_state` | `map`, `area` `[x, y, w, h]`, `full_map` (all optional) | Round, whose turn, score, objectives (holder), your units (HP, ammo, actions, mobility, suppression, status, kit, cover), enemies in sight (who, where, their cover: what the screen shows, never HP, suppression, status, ammo or kit), enemies last seen, marked mortar strikes, threats (which enemies in sight can see each of your units, their hit chance and your cover), and in a mission `mission`: type, whether you attack or defend, your goal, its status, the zone (and the round it opens), targets and their state, and the VIP (his position only if he is yours, in sight or known). The ASCII map (tiles, cover objects, wall and hedge edges, units) only comes with `map` (around the action), `area` or `full_map`, since it's long |
+| `get_state` | `map`, `area` `[x, y, w, h]`, `full_map` (all optional) | Round, whose turn, score, objectives (holder), your units (HP, ammo, actions, mobility, suppression, status, kit, cover), enemies in sight (who, where, their cover: what the screen shows, never HP, suppression, status, ammo or kit), enemies last seen, marked mortar strikes, and threats (which enemies in sight can see each of your units, their hit chance and your cover). The ASCII map (tiles, cover objects, wall and hedge edges, units) only comes with `map` (around the action), `area` or `full_map`, since it's long |
 | `get_unit_options` | `unit`; optional `objective`, `covered_from`, `shoot_target`, `limit`, `all_tiles` | Allowed actions (and why others aren't), shot odds with modifiers, expected damage and kill chance per enemy in sight, and the best spots in reach: actions the move uses, cover against the enemies in sight, objective, and the shots still possible from there after a 1-action move. The filters list only tiles in an objective, in cover from an enemy, or with a shot at a target (best odds first). `all_tiles` lists every reachable tile as `[x, y, cost, actions]` |
 | `preview` | `unit`, `tile`; optional `level` | Reachable? cost, actions the move uses (not actions left), path; cover per side; for each enemy in sight: your cover, whether they see you (flanked), their hit chance, your shot from there; the AI's danger estimate. Changes nothing |
 | `suggest_move` | `unit`, `show` (both optional) | The built-in AI's command and reasons; `show` also puts it on screen |

@@ -23,8 +23,6 @@ const SELECTION_COLOR := Color("ffd34d")
 ## The mortar button's tag for each kind of round.
 const KIND_TAGS := {"he": "HE", "smoke": "SMK", "napalm": "NPM"}
 const MOVE_COLOR := Color("4aa3ff")
-## Demolition targets' rings by state.
-const MISSION_TARGET_COLORS := {"intact": Color("e8e2cf"), "armed": Color("ff6a3d"), "destroyed": Color(0.4, 0.4, 0.4, 0.6)}
 const DASH_COLOR := Color("f5c542")
 ## Stretches of a planned move a known enemy would see.
 const SPOTTED_COLOR := Color("ff6a3d")
@@ -37,14 +35,14 @@ const SLOT_KEYS := {KEY_1: 1, KEY_2: 2, KEY_3: 3, KEY_4: 4, KEY_5: 5, KEY_6: 6, 
 const FIXED_SLOTS := {"shoot": 1, "overwatch": 2, "reload": 3, "prone": 4}
 ## The action bar, in order: [action, name]. Each gets an icon (ActionIcons) of the same name. After the four
 ## everyone has come the role's own (numbered 5 on in this order, among those the soldier has), then the ones
-## that only show up now and then (a demolition target, a tunnel entrance, a mine next to him), last so that
+## that only show up now and then (a tunnel entrance, a mine next to him), last so that
 ## they never shift the others' keys.
 const ACTION_BUTTONS := [
 	["shoot", "Shoot: a steady shot (+15 aim) with both actions left"], ["overwatch", "Overwatch"], ["reload", "Reload"],
 	["prone", "Go prone"],
 	["suppress", "Suppressive fire"], ["grenade", "Grenade"], ["smoke", "Smoke grenade"], ["rally", "Rally"],
 	["medkit", "Medkit"], ["mortar", "Mortar"], ["trap", "Lay a trap"], ["detonate", "Set off an IED"],
-	["charge", "Plant a demolition charge, or pull one"], ["tunnel", "Through the tunnels: up at another entrance (both actions)"],
+	["tunnel", "Through the tunnels: up at another entrance (both actions)"],
 	["clear_mine", "Clear a mine, or blow in a tunnel"],
 	["hold", "Hold: done with this soldier for the turn"], ["next", "Next soldier"], ["end", "End turn"],
 ]
@@ -281,7 +279,6 @@ func _ready() -> void:
 	_focus_on_team(_view_team() if _view_team() != -1 else battle.current_team)
 	_refresh()
 	if not battle.started:
-		_log_mission_briefing()
 		# Watching AI vs AI: say what each side means to do.
 		if _view_team() == -1 and controllers[0] is TacticalAI and controllers[1] is TacticalAI:
 			_log_plans()
@@ -689,14 +686,6 @@ func _on_action(action: String) -> void:
 				err = "No IED of ours in sight"
 			if err == "":
 				_set_mode(Mode.DETONATE)
-		"charge":
-			var tiles := battle.charge_tiles(selected)
-			err = battle.can_act(selected)
-			if err == "" and tiles.is_empty():
-				err = "No target next to this soldier" if selected.team == battle.mission_attacker() else "No armed charge next to this soldier"
-			if err == "":
-				var cmd := "plant" if battle.can_plant(selected, tiles[0]) == "" else "defuse"
-				_command({"cmd": cmd, "unit": selected.id, "tile": tiles[0]})
 		"prone":
 			var stance := Unit.Stance.STAND if selected.stance == Unit.Stance.PRONE else Unit.Stance.PRONE
 			err = battle.can_change_stance(selected, stance)
@@ -1419,24 +1408,6 @@ func _play_event(e: Dictionary) -> void:
 				_float(_display_pos[u.id], "Treated", Color("6bff8a"))
 				_log_line("%s is patched up." % u.name)
 			await _wait(0.4)
-		"vip_found":
-			var vip := battle.get_unit(e["unit"])
-			_float(_display_pos[vip.id], "Found!", _team_color(vip.team))
-			_log_line("[color=%s]%s reach %s. Get him to the %s![/color]" % [_team_color(vip.team).to_html(false), battle.team_name(vip.team), vip.name, Mission.zone_name(battle)])
-			await _wait(0.4)
-		"charge":
-			var target := battle.target_at(e["tile"])
-			var team := battle.mission_attacker()
-			match e["state"]:
-				"armed":
-					_float(_center(e["tile"]), "Charge set", _team_color(team))
-					_log_line("[color=%s]A charge is set on the %s. It goes off at the start of %s' next turn.[/color]" % [_team_color(team).to_html(false), target["name"], battle.team_name(team)])
-				"defused":
-					_float(_center(e["tile"]), "Charge pulled", _team_color(1 - team))
-					_log_line("[color=%s]%s pull the charge off the %s.[/color]" % [_team_color(1 - team).to_html(false), battle.team_name(1 - team), target["name"]])
-				"blown":
-					_log_line("[color=%s]The %s goes up! (%d of %d)[/color]" % [_team_color(team).to_html(false), target["name"], battle.targets_destroyed(), battle.mission["needed"]])
-			await _wait(0.3)
 		"objective":
 			var objective: Dictionary = battle.objectives[e["index"]]
 			var owner: int = e["owner"]
@@ -1468,15 +1439,14 @@ func _play_event(e: Dictionary) -> void:
 				_show_banner("Turn: %s" % who, _team_color(team))
 		"game_over":
 			var winner: int = e["winner"]
-			var how := Mission.outcome_text(battle, e.get("reason", ""))
+			var how := Battle.outcome_text(e.get("reason", ""))
 			_log_plans()
 			if winner == Battle.DRAW:
 				_log_line("[b]The battle ends in a draw.[/b]")
 				_show_overlay("game_over", "A draw: %d to %d\n\nClick or press any key to continue" % battle.victory_points, NEUTRAL_COLOR)
 			else:
 				_log_line("[b]%s win %s![/b]" % [battle.team_name(winner), how])
-				# Points games show the score; missions aren't about points.
-				var score := "\n%d to %d" % [battle.victory_points[0], battle.victory_points[1]] if battle.mission.is_empty() else ""
+				var score := "\n%d to %d" % [battle.victory_points[0], battle.victory_points[1]]
 				_show_overlay("game_over", "%s win %s!%s\n\nClick or press any key to continue" % [battle.team_name(winner), how, score], _team_color(winner))
 
 
@@ -1789,10 +1759,11 @@ func _play_mortar_fire(e: Dictionary) -> void:
 	_effects.append({"kind": "muzzle", "at": _unit_point(u, 0.9), "age": 0.0, "life": 0.15})
 	_effects.append({"kind": "shell", "from": _display_pos[u.id], "to": target, "age": 0.0, "life": 0.8, "lift": _unit_lift(u), "to_lift": _lift_at(target)})
 	var round_name: String = Battle.KIND_NAMES.get(e["kind"], e["kind"])
+	var when := "Observed, it comes down close." if e.get("observed", false) else "Fired blind, it may land wide."
 	if u.indirect.get("spotter", "team") == "self":
-		_log_line("%s calls in %s. It lands at the start of their next turn." % [u.name, "napalm" if e["kind"] == "napalm" else ("smoke" if e["kind"] == "smoke" else ("an " if String(u.indirect["name"]).begins_with("a") else "") + u.indirect["name"])])
+		_log_line("%s calls in %s. %s" % [u.name, "napalm" if e["kind"] == "napalm" else ("smoke" if e["kind"] == "smoke" else ("an " if String(u.indirect["name"]).begins_with("a") else "") + u.indirect["name"]), when])
 	else:
-		_log_line("%s fires a %s round. It lands at the start of their next turn." % [u.name, round_name])
+		_log_line("%s fires a %s round. %s" % [u.name, round_name, when])
 	await _wait(0.8)
 
 
@@ -2008,9 +1979,6 @@ func _update_panel() -> void:
 	_score_label.text = "[color=%s]%s %d[/color]  vs  [color=%s]%s %d[/color]   (%d to win)\n%s" % [
 		_team_color(0).to_html(false), battle.team_name(0), battle.victory_points[0], _team_color(1).to_html(false), battle.team_name(1), battle.victory_points[1],
 		battle.vp_to_win, "   ".join(holders)]
-	if not battle.mission.is_empty():
-		var side := _view_team() if _view_team() != -1 else team
-		_score_label.text = "%s\n[color=%s]%s[/color]" % [Mission.status_text(battle, side), _team_color(side).to_html(false), Mission.goal_text(battle, side)]
 	if not _is_human_turn():
 		_unit_info.text = "[i]%s are taking their turn...[/i]" % battle.team_name(team)
 	elif selected != null:
@@ -2029,7 +1997,6 @@ func _update_panel() -> void:
 		"tunnel": s != null and s.has_trait("tunnels") and battle.map.tunnel_owner(s.pos) == s.team,
 		"trap": s != null and s.has_trait("traps"),
 		"detonate": s != null and s.has_trait("detonator"),
-		"charge": s != null and not s.vehicle and battle.mission_type() == Mission.DEMOLITION,
 	}
 	for action: String in visible:
 		_buttons[action].visible = visible[action]
@@ -2049,10 +2016,6 @@ func _update_panel() -> void:
 	var ied: bool = s != null and s.def.get("trap_kind", "punji") == "ied"
 	_buttons["trap"].set_look("trap", "Plant an IED next to the soldier (1 action)" if ied else "Lay a punji trap next to the soldier (1 action)", str(s.traps) if s != null else "")
 	_buttons["detonate"].disabled = s == null or battle.can_act(s) != "" or _detonatable(s).is_empty()
-	_buttons["charge"].disabled = s == null or battle.charge_tiles(s).is_empty()
-	var planting: bool = s != null and s.team == battle.mission_attacker()
-	_buttons["charge"].set_look("charge", "Plant a charge on the target next to the soldier (1 action); it goes off next turn" if planting
-			else "Pull the charge off the target next to the soldier (1 action)")
 	if s != null and not s.indirect.is_empty():
 		_buttons["mortar"].disabled = s.actions < Unit.ACTIONS_PER_TURN and s.indirect["still"]
 		var kind: String = _mortar_kind if mode == Mode.MORTAR else s.indirect["kinds"][0]
@@ -2162,9 +2125,10 @@ func _update_target_info() -> void:
 				var spotted := battle.is_spotted(selected.team, hover)
 				var needs: String = {"self": "Needs to see the target himself.", "team": "Needs a soldier who can see the target."}.get(spec["spotter"],
 						"Observed: a soldier sees the target." if spotted else "Unobserved: nobody sees the target, so it scatters %.1fx as far." % Battle.BLIND_SCATTER)
-				text = "[b]%s, %s[/b]  range %d-%d\nLands at the start of your next turn, up to %.1f tiles off target.\n%s" % [
+				var when := "Lands at once"
+				text = "[b]%s, %s[/b]  range %d-%d\n%s, up to %.1f tiles off target.\n%s" % [
 					String(spec["name"]).capitalize(), Battle.KIND_NAMES.get(_mortar_kind, _mortar_kind), spec["min"], spec["max"],
-					battle.firing_scatter(selected, hover), needs]
+					when, battle.firing_scatter(selected, hover), needs]
 				text += _error_line(battle.can_fire_mortar(selected, hover, _mortar_kind))
 			Mode.FACE:
 				text = "[b]%s[/b]\nArmour: front %d, side %d, rear %d.\nEvery 45° turned costs %.0f movement; backing up costs double." % [
@@ -2999,7 +2963,6 @@ func _paint_ground_overlays(c: CanvasItem) -> void:
 		var owner: int = objective["owner"]
 		var color: Color = _team_color(owner) if owner != -1 else NEUTRAL_COLOR
 		c.draw_polyline(_ground_circle(objective["center"], objective["radius"]), Color(color, 0.7), 2.5)
-	_draw_mission_ground(c)
 	for strike in battle.strikes:
 		var he: bool = strike["kind"] != "smoke"
 		var color := Color(1, 0.3, 0.2, 0.8) if he else Color(0.8, 0.85, 0.9, 0.8)
@@ -3396,32 +3359,8 @@ func _draw_selection_marker(c: CanvasItem, above: Vector2) -> void:
 	c.draw_polyline(outline, Color(0, 0, 0, 0.8), 1.5)
 
 
-## The mission on the ground: the extraction or exit zone, demolition targets (pulsing when armed), and a
-## ring under the VIP.
-func _draw_mission_ground(c: CanvasItem) -> void:
-	var mission := battle.mission
-	if mission.has("zone"):
-		var zone: Dictionary = mission["zone"]
-		var side := battle.mission_attacker() if battle.mission_type() == Mission.EXTRACT else battle.mission_defender()
-		var open := battle.round_number >= int(mission.get("opens", 1))
-		var color := Color(_team_color(side), 0.8 if open else 0.4)
-		c.draw_colored_polygon(TerrainPainter.ground_circle(_proj, zone["center"], zone["radius"], false), Color(color, 0.1))
-		c.draw_polyline(TerrainPainter.ground_circle(_proj, zone["center"], zone["radius"]), color, 2.5)
-	for t: Dictionary in mission.get("targets", []):
-		var color: Color = MISSION_TARGET_COLORS[t["state"]]
-		var radius := 0.85
-		if t["state"] == "armed":
-			radius = Mission.CHARGE_RADIUS
-			color = Color(color, 0.6 + 0.4 * sin(_time * 8.0))
-		c.draw_polyline(TerrainPainter.ground_circle(_proj, _center(t["tile"]), radius), color, 2.5)
-	var vip := battle.vip()
-	if vip != null and vip.is_alive() and _display_pos.has(vip.id) and _is_drawn(vip):
-		c.draw_polyline(TerrainPainter.ground_circle(_proj, _display_pos[vip.id], 0.6), Color("ffd34d"), 2.5)
-
-
 ## Flags, unit tags, HP and suppression bars, drawn above everything so walls never hide them.
 func _draw_markers() -> void:
-	_draw_mission_markers()
 	for objective in battle.objectives:
 		var owner: int = objective["owner"]
 		var color: Color = _team_color(owner) if owner != -1 else NEUTRAL_COLOR
@@ -3609,41 +3548,9 @@ func _tile_outline(p: Vector2i) -> PackedVector2Array:
 	return poly
 
 
-## Labels over the mission's places: the zone (and when it opens), each target and its state, the VIP.
-func _draw_mission_markers() -> void:
-	var mission := battle.mission
-	var labels := []
-	if mission.has("zone"):
-		var zone: Dictionary = mission["zone"]
-		var opens := int(mission.get("opens", 1))
-		var text: String = zone["name"].to_upper() + ("" if battle.round_number >= opens else " (OPENS ROUND %d)" % opens)
-		# Up at the zone's far edge, clear of the soldiers standing in it.
-		labels.append([zone["center"] - Vector2(zone["radius"], zone["radius"]) * 0.7, text, NEUTRAL_COLOR])
-	for t: Dictionary in mission.get("targets", []):
-		var state := {"intact": "", "armed": " - ARMED", "destroyed": " - DESTROYED"}[t["state"]] as String
-		labels.append([_center(t["tile"]), t["name"].to_upper() + state, MISSION_TARGET_COLORS[t["state"]]])
-	var vip := battle.vip()
-	if vip != null and vip.is_alive() and _display_pos.has(vip.id) and _is_drawn(vip):
-		labels.append([_display_pos[vip.id], "VIP" + (" (HIDING)" if vip.hiding else ""), Color("ffd34d")])
-	for label: Array in labels:
-		var at := _proj.project(label[0], 1.9) + Vector2(-80, 0)
-		draw_string_outline(_font, at, label[1], HORIZONTAL_ALIGNMENT_CENTER, 160, 12, 4, Color(0, 0, 0, 0.8))
-		draw_string(_font, at, label[1], HORIZONTAL_ALIGNMENT_CENTER, 160, 12, label[2])
-
-
-## A line per side on what the mission asks of it, at the start of a mission battle.
 ## Each AI side's game plan (see TacticalAI.STRATEGIES), and any it switched to.
 func _log_plans() -> void:
 	for team in Battle.TEAM_COUNT:
 		if controllers[team] is TacticalAI:
 			var side := battle.team_name(team)
 			_log_line("[color=%s]%s plan: %s.[/color]" % [_team_color(team).to_html(false), side + ("'" if side.ends_with("s") else "'s"), controllers[team].plan_summary()])
-
-
-func _log_mission_briefing() -> void:
-	if battle.mission.is_empty():
-		return
-	_log_line("[b]%s[/b]" % Mission.title(battle.mission_type()))
-	for team in Battle.TEAM_COUNT:
-		if _view_team() == -1 or _view_team() == team:
-			_log_line("[color=%s]%s: %s.[/color]" % [_team_color(team).to_html(false), battle.team_name(team), Mission.goal_text(battle, team)])

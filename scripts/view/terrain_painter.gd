@@ -128,7 +128,6 @@ const BANK_EARTH := [Color("6f5b40"), Color("5f4e37")]
 const BANK_TROPIC := [Color("8a4a30"), Color("74402b")]
 const BANK_ARID := [Color("a08a66"), Color("8c785a")]
 const SLAB := Color("8b8172")
-const ROOF := Color("8e8a80")
 const ROOF_ARID := Color("b8a67f")
 const STEP := Color("9a8f7d")
 const PARAPET_HEIGHT := 0.22
@@ -612,8 +611,149 @@ static func _draw_crate(c: Object, proj: ViewProjection, rect: Rect2, height: fl
 ## Draws a wall, hedge or fence on the ground (on top of the higher of the two tiles either side).
 static func draw_edge(c: Object, proj: ViewProjection, map: TacticalMap, key: Vector3i, alpha: float, dark: bool) -> void:
 	proj.lift = edge_elevation(map, key) * GROUND_STEP
-	draw_edge_as(c, proj, map.edge_kind(key), key, alpha, dark)
+	var damage := map.edge_damage(key)
+	draw_edge_as(c, proj, map.edge_kind(key), key, alpha, dark, is_ruined(map, key) or damage >= 2)
+	if damage == 1:
+		_draw_damage_marks(c, proj, key, map.edge_kind(key), alpha)
 	proj.lift = 0.0
+
+
+## A damaged wall: shell holes knocked in it and a chunk out of its top.
+static func _draw_damage_marks(c: Object, proj: ViewProjection, key: Vector3i, kind: String, alpha: float) -> void:
+	var top := HEDGE_HEIGHT if kind == "hedge" else (WALL_HEIGHT if TacticalMap.FULL_EDGE_KINDS.has(kind) else SILL_HEIGHT)
+	var frame := _edge_frame(key)
+	var p := Vector2i(key.x * 2 + key.z, key.y)
+	var hole := Color(0.08, 0.07, 0.06, alpha * 0.85)
+	for i in 2:
+		var u := 0.2 + noise(p, 120 + i) * 0.6
+		var h := top * (0.35 + noise(p, 125 + i) * 0.35)
+		var r := 0.07 + noise(p, 130 + i) * 0.05
+		var at: Vector2 = frame[0] + frame[1] * u
+		var points := PackedVector2Array()
+		for k in 7:
+			var t := TAU * k / 7.0
+			var wobble := 0.7 + noise(p, 140 + i * 7 + k) * 0.6
+			points.append(proj.project(at + frame[1] * cos(t) * r * wobble, h + sin(t) * r * 1.4 * wobble))
+		c.draw_colored_polygon(points, hole)
+	# A bite out of the top.
+	var u0 := 0.15 + noise(p, 150) * 0.5
+	var notch := PackedVector2Array([
+		proj.project(frame[0] + frame[1] * u0, top + 0.01), proj.project(frame[0] + frame[1] * (u0 + 0.25), top + 0.01),
+		proj.project(frame[0] + frame[1] * (u0 + 0.16), top - 0.22), proj.project(frame[0] + frame[1] * (u0 + 0.06), top - 0.16)])
+	c.draw_colored_polygon(notch, Color(0.08, 0.07, 0.06, alpha * 0.6))
+
+
+## A wall standing in rubble or by a crater is drawn shot up: broken off at uneven heights, scorched.
+static func is_ruined(map: TacticalMap, key: Vector3i) -> bool:
+	for p: Vector2i in TacticalMap.edge_tiles(key):
+		if map.in_bounds(p) and map.get_terrain(p) in [TacticalMap.Terrain.RUBBLE, TacticalMap.Terrain.CRATER]:
+			return true
+	return false
+
+
+## How the theatre's masonry buildings look: Normandy's grey limestone with green shutters and slate roofs,
+## Vietnam's French colonial ochre stucco with blue-green louvred shutters and red tile roofs, Iraq's
+## rendered concrete with iron window grilles and pale flat roofs.
+static func building_style() -> Dictionary:
+	match theatre:
+		"vietnam":
+			return {"wall": Color("d3b46e"), "plinth": Color("8f877a"), "trim": Color("ece2c8"), "shutter": Color("4d7d72"), "roof": Color("9a5134"), "grille": false}
+		"modern":
+			return {"wall": Color("cbbc9c"), "plinth": Color("a29479"), "trim": Color("ddd2b8"), "shutter": Color("3b3d3f"), "roof": ROOF_ARID, "grille": true}
+	return {"wall": MASONRY, "plinth": Color("9d968a"), "trim": Color("e2dccd"), "shutter": Color("5b6b3f"), "roof": Color("676b74"), "grille": false}
+
+
+## Set while drawing a building's upper storeys, which have no plinth.
+static var _upstairs := false
+
+
+## A stretch of masonry wall along an edge (from..to of its length, base..top high), in the theatre's style.
+static func _draw_masonry(c: Object, proj: ViewProjection, key: Vector3i, from: float, to: float, base: float, top: float, tint: float, alpha: float) -> void:
+	var style := building_style()
+	var color: Color = (style["wall"] as Color).darkened(tint)
+	var faces := prism(c, proj, _edge_rect(key, from, to, WALL_HALF_THICKNESS), base, top, color, alpha)
+	var span := maxf(0.01, top - base)
+	for q: Array in faces:
+		# A darker plinth along the foot of the wall (not round the upper storeys).
+		if base < 0.01 and not _upstairs:
+			var t := minf(1.0, 0.1 / span)
+			c.draw_colored_polygon(PackedVector2Array([q[0], q[1], q[1].lerp(q[2], t), q[0].lerp(q[3], t)]),
+					Color((style["plinth"] as Color).darkened(tint + 0.15), alpha))
+		match theatre:
+			"normandy":
+				# Courses of stone.
+				for h in [0.35, 0.7]:
+					var t: float = (h - base) / span
+					if t > 0.05 and t < 0.95:
+						c.draw_line(q[0].lerp(q[3], t), q[1].lerp(q[2], t), Color(color.darkened(0.18), alpha), 1.0)
+			"modern":
+				# Rain streaks down the render.
+				for u in [0.3, 0.72]:
+					c.draw_line((q[3] as Vector2).lerp(q[2], u), (q[0] as Vector2).lerp(q[1], u).lerp((q[3] as Vector2).lerp(q[2], u), 0.55), Color(color.darkened(0.1), alpha * 0.6), 1.0)
+			"vietnam":
+				# A pale cornice band near the top of the storey.
+				var t: float = (WALL_HEIGHT - 0.08 - base) / span
+				if t > 0.05 and t < 0.95:
+					c.draw_line(q[0].lerp(q[3], t), q[1].lerp(q[2], t), Color((style["trim"] as Color).darkened(tint), alpha), 2.0)
+
+
+## A masonry window: wall to the sill, piers either side, a lintel, and the opening between them, glazed
+## and shuttered (an iron grille in Iraq), or smashed: dark, with shards left in the frame and a shutter gone.
+static func _draw_window(c: Object, proj: ViewProjection, key: Vector3i, tint: float, alpha: float, smashed: bool) -> void:
+	var style := building_style()
+	_draw_masonry(c, proj, key, 0.0, 1.0, 0.0, SILL_HEIGHT, tint, alpha)
+	var frame := _edge_frame(key)
+	var at := func(u: float, h: float) -> Vector2: return proj.project(frame[0] + frame[1] * u, h)
+	var opening := PackedVector2Array([at.call(0.1, SILL_HEIGHT), at.call(0.9, SILL_HEIGHT), at.call(0.9, LINTEL_BASE), at.call(0.1, LINTEL_BASE)])
+	if smashed:
+		c.draw_colored_polygon(opening, Color(0.09, 0.08, 0.07, alpha * 0.85))
+		# Shards left in the corners of the frame.
+		var shard := Color(GLASS.lightened(0.3), alpha * 0.8)
+		c.draw_colored_polygon(PackedVector2Array([at.call(0.1, SILL_HEIGHT), at.call(0.3, SILL_HEIGHT), at.call(0.1, SILL_HEIGHT + 0.16)]), shard)
+		c.draw_colored_polygon(PackedVector2Array([at.call(0.9, LINTEL_BASE), at.call(0.62, LINTEL_BASE), at.call(0.9, LINTEL_BASE - 0.2)]), shard)
+		c.draw_colored_polygon(PackedVector2Array([at.call(0.9, SILL_HEIGHT), at.call(0.78, SILL_HEIGHT), at.call(0.9, SILL_HEIGHT + 0.09)]), shard)
+	else:
+		c.draw_colored_polygon(opening, Color(GLASS, GLASS.a * alpha))
+	var shutter: Color = (style["shutter"] as Color).darkened(tint)
+	if style["grille"]:
+		if not smashed:
+			for u in [0.26, 0.42, 0.58, 0.74]:
+				c.draw_line(at.call(u, SILL_HEIGHT), at.call(u, LINTEL_BASE), Color(shutter, alpha), 1.5)
+		else:
+			# The grille bent out of the way.
+			c.draw_line(at.call(0.26, SILL_HEIGHT), at.call(0.34, LINTEL_BASE), Color(shutter, alpha), 1.5)
+			c.draw_line(at.call(0.74, SILL_HEIGHT), at.call(0.6, LINTEL_BASE - 0.12), Color(shutter, alpha), 1.5)
+	else:
+		if not smashed:
+			# Glazing bars.
+			var trim := Color((style["trim"] as Color).darkened(tint), alpha)
+			c.draw_line(at.call(0.5, SILL_HEIGHT), at.call(0.5, LINTEL_BASE), trim, 1.5)
+			c.draw_line(at.call(0.1, (SILL_HEIGHT + LINTEL_BASE) * 0.5), at.call(0.9, (SILL_HEIGHT + LINTEL_BASE) * 0.5), trim, 1.0)
+			c.draw_colored_polygon(PackedVector2Array([at.call(0.1, SILL_HEIGHT), at.call(0.22, SILL_HEIGHT), at.call(0.22, LINTEL_BASE), at.call(0.1, LINTEL_BASE)]), Color(shutter, alpha))
+		else:
+			# One shutter hanging off its hinge.
+			c.draw_colored_polygon(PackedVector2Array([at.call(0.1, SILL_HEIGHT - 0.06), at.call(0.22, SILL_HEIGHT + 0.02), at.call(0.22, LINTEL_BASE - 0.1), at.call(0.1, LINTEL_BASE)]), Color(shutter.darkened(0.15), alpha))
+		c.draw_colored_polygon(PackedVector2Array([at.call(0.78, SILL_HEIGHT), at.call(0.9, SILL_HEIGHT), at.call(0.9, LINTEL_BASE), at.call(0.78, LINTEL_BASE)]), Color(shutter, alpha))
+	_draw_masonry(c, proj, key, 0.0, 0.1, SILL_HEIGHT, WALL_HEIGHT, tint, alpha)
+	_draw_masonry(c, proj, key, 0.9, 1.0, SILL_HEIGHT, WALL_HEIGHT, tint, alpha)
+	_draw_masonry(c, proj, key, 0.0, 1.0, LINTEL_BASE, WALL_HEIGHT, tint, alpha)
+
+
+## A shot-up wall of any kind: its pieces broken off at uneven heights (some down to a stump), scorch marks
+## at the foot. `piece` draws one stretch: piece.call(from, to, top).
+static func _draw_broken(c: Object, proj: ViewProjection, key: Vector3i, alpha: float, piece: Callable) -> void:
+	var p := Vector2i(key.x * 2 + key.z, key.y)
+	var pieces := 4
+	for i in pieces:
+		var from := float(i) / pieces
+		var to := float(i + 1) / pieces
+		var top := lerpf(0.18, WALL_HEIGHT, noise(p, 90 + i))
+		if noise(p, 95 + i) < 0.3:
+			top = 0.12
+		piece.call(from, to, top)
+	var frame := _edge_frame(key)
+	var mid: Vector2 = frame[0] + frame[1] * (0.3 + noise(p, 99) * 0.4)
+	c.draw_colored_polygon(blob_poly_projected(proj, mid, 0.3, p), Color(0.08, 0.07, 0.06, alpha * 0.35))
 
 
 ## The ground height an edge stands on: the higher of its two tiles.
@@ -664,8 +804,23 @@ static func has_upper_walls(map: TacticalMap, key: Vector3i) -> bool:
 
 
 ## Draws an edge of the given kind (as draw_edge does for the map's own), at the projection's current lift.
-static func draw_edge_as(c: Object, proj: ViewProjection, kind: String, key: Vector3i, alpha: float, dark: bool) -> void:
+static func draw_edge_as(c: Object, proj: ViewProjection, kind: String, key: Vector3i, alpha: float, dark: bool, ruined := false) -> void:
 	var tint := 0.45 if dark else 0.0
+	if ruined:
+		match kind:
+			"wall", "window", "broken_window":
+				_draw_broken(c, proj, key, alpha, func(from: float, to: float, top: float) -> void:
+					_draw_masonry(c, proj, key, from, to, 0.0, top, tint, alpha))
+				return
+			"mud_wall", "mud_window":
+				_draw_broken(c, proj, key, alpha, func(from: float, to: float, top: float) -> void:
+					_draw_mud_wall(c, proj, key, from, to, 0.0, top, tint, alpha))
+				return
+			"bamboo_wall", "bamboo_window":
+				# Burnt out: charred stumps of bamboo.
+				_draw_broken(c, proj, key, alpha, func(from: float, to: float, top: float) -> void:
+					_draw_bamboo_wall(c, proj, key, from, to, 0.0, top * 0.8, tint + 0.35, alpha))
+				return
 	match kind:
 		"dyke" when _arid():
 			_draw_ditch(c, proj, key, tint, alpha)
@@ -679,24 +834,11 @@ static func draw_edge_as(c: Object, proj: ViewProjection, kind: String, key: Vec
 			_draw_mud_wall(c, proj, key, 0.0, 1.0, LINTEL_BASE - 0.04, WALL_HEIGHT, tint, alpha)
 			prism(c, proj, _edge_rect(key, 0.26, 0.74, MUD_HALF_THICKNESS + 0.01), LINTEL_BASE - 0.08, LINTEL_BASE - 0.03, WOOD.darkened(tint), alpha)
 		"wall":
-			var color := MASONRY.darkened(tint)
-			var faces := prism(c, proj, _edge_rect(key, 0.0, 1.0, WALL_HALF_THICKNESS), 0.0, WALL_HEIGHT, color, alpha)
-			for q: Array in faces:
-				c.draw_colored_polygon(PackedVector2Array([q[0], q[1], q[1].lerp(q[2], 0.08), q[0].lerp(q[3], 0.08)]), Color(color.darkened(0.45), alpha))
-				for t in [0.35, 0.7]:
-					c.draw_line(q[0].lerp(q[3], t), q[1].lerp(q[2], t), Color(color.darkened(0.18), alpha), 1.0)
+			_draw_masonry(c, proj, key, 0.0, 1.0, 0.0, WALL_HEIGHT, tint, alpha)
 		"window":
-			var color := MASONRY.darkened(tint)
-			prism(c, proj, _edge_rect(key, 0.0, 1.0, WALL_HALF_THICKNESS), 0.0, SILL_HEIGHT, color, alpha)
-			var frame := _edge_frame(key)
-			var a: Vector2 = frame[0] + frame[1] * 0.1
-			var b: Vector2 = frame[0] + frame[1] * 0.9
-			c.draw_colored_polygon(PackedVector2Array([
-				proj.project(a, SILL_HEIGHT), proj.project(b, SILL_HEIGHT), proj.project(b, LINTEL_BASE), proj.project(a, LINTEL_BASE),
-			]), Color(GLASS, GLASS.a * alpha))
-			prism(c, proj, _edge_rect(key, 0.0, 0.1, WALL_HALF_THICKNESS), 0.0, WALL_HEIGHT, color, alpha)
-			prism(c, proj, _edge_rect(key, 0.9, 1.0, WALL_HALF_THICKNESS), 0.0, WALL_HEIGHT, color, alpha)
-			prism(c, proj, _edge_rect(key, 0.0, 1.0, WALL_HALF_THICKNESS), LINTEL_BASE, WALL_HEIGHT, color, alpha)
+			_draw_window(c, proj, key, tint, alpha, false)
+		"broken_window":
+			_draw_window(c, proj, key, tint, alpha, true)
 		"hedge":
 			_draw_hedge(c, proj, key, tint, alpha)
 		"stone":
@@ -1522,7 +1664,7 @@ static func draw_upper_floors(c: Object, proj: ViewProjection, map: TacticalMap,
 		var roof := level == storeys
 		if stairs and not roof:
 			continue
-		var color := (ROOF_ARID if _arid() else ROOF) if roof else SLAB
+		var color: Color = building_style()["roof"] if roof else SLAB
 		color = color.lerp(color.lightened(0.08), noise(p, 70 + level)).darkened(tint)
 		prism(c, proj, footprint, h - 0.1, h, color, alpha)
 		if not roof:
@@ -1566,14 +1708,16 @@ static func draw_upper_walls(c: Object, proj: ViewProjection, map: TacticalMap, 
 	var wall_kind := "mud_wall" if kind.begins_with("mud") or (kind == "" and _arid()) else ("bamboo_wall" if kind.begins_with("bamboo") else "wall")
 	var window_kind := wall_kind.replace("wall", "window")
 	var upper := window_kind if kind.ends_with("window") else wall_kind
-	var color := (MUD_BRICK if wall_kind == "mud_wall" else MASONRY).darkened(tint)
+	var color: Color = (MUD_BRICK if wall_kind == "mud_wall" else (BAMBOO_WALL if wall_kind == "bamboo_wall" else building_style()["wall"])).darkened(tint)
 	var thickness := MUD_HALF_THICKNESS if wall_kind == "mud_wall" else WALL_HALF_THICKNESS
 	var shown := mini(storeys, cut + 1)
 	for k in shown:
 		var base := ground * GROUND_STEP + k * LEVEL_HEIGHT
 		if k > 0:
 			proj.lift = base
+			_upstairs = true
 			draw_edge_as(c, proj, upper, key, alpha, dark)
+			_upstairs = false
 		elif kind == "":
 			# The doorway's lintel.
 			prism(c, proj, _edge_rect(key, 0.0, 1.0, thickness), base + WALL_HEIGHT * 0.85, base + WALL_HEIGHT, color, alpha)

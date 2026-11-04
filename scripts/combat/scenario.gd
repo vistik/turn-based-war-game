@@ -48,7 +48,7 @@ const TERRAIN_CHARS := ".,:#=wotxj~g_"
 const OBJECT_COVER := {"rock": Cover.FULL, "tree": Cover.FULL, "crate": Cover.HALF, "sandbags": Cover.HALF, "hay": Cover.HALF, "pew": Cover.HALF, "wreck": Cover.FULL,
 		"fuel": Cover.HALF, "oil_tank": Cover.FULL, "palm": Cover.FULL, "bamboo": Cover.FULL, "rice_sacks": Cover.HALF,
 		"car": Cover.FULL, "hesco": Cover.FULL, "jersey": Cover.HALF, "howitzer": Cover.HALF}
-const EDGE_COVER := {"wall": Cover.FULL, "hedge": Cover.FULL, "window": Cover.HALF, "stone": Cover.HALF, "fence": Cover.HALF,
+const EDGE_COVER := {"wall": Cover.FULL, "hedge": Cover.FULL, "window": Cover.HALF, "broken_window": Cover.HALF, "stone": Cover.HALF, "fence": Cover.HALF,
 		"dyke": Cover.HALF, "bamboo_wall": Cover.FULL, "bamboo_window": Cover.HALF, "mud_wall": Cover.FULL, "mud_window": Cover.HALF}
 const FACINGS := {
 	"N": Vector2i(0, -1), "NE": Vector2i(1, -1), "E": Vector2i(1, 0), "SE": Vector2i(1, 1),

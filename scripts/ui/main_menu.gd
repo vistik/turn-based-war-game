@@ -6,14 +6,16 @@ const MUTED := UITheme.PAPER_DIM
 const BAD := Color("ff7a6a")
 const GOOD := Color("8fe08a")
 ## [label, size] of random maps; bigger ones bring bigger forces.
-const RANDOM_MAPS := [["Standard", 44], ["Large", 64], ["Huge", 84]]
+const RANDOM_MAPS := [["Small", 32], ["Standard", 44], ["Large", 64], ["Huge", 84]]
+## Side length of the quick test battle's map.
+const QUICK_TEST_SIZE := 32
 ## [label, flank, posture] for a skirmish side's deployment; "" flank keeps the map's usual spawns.
 const DEPLOYMENTS := [
-	["Usual spawns", "", ""],
+	["Spread out", "wide", "normal"], ["Grouped (usual spawns)", "", ""],
 	["Balanced, offensive", "balanced", "offensive"], ["Balanced, defensive", "balanced", "defensive"],
 	["Left flank, offensive", "left", "offensive"], ["Left flank, defensive", "left", "defensive"],
 	["Right flank, offensive", "right", "offensive"], ["Right flank, defensive", "right", "defensive"],
-	["Random", "random", "random"],
+	["In contact (mid-map)", "contact", "normal"], ["Random", "random", "random"],
 ]
 ## [label, team 0 is AI, team 1 is AI, side an agent plays over the agent link (-1: none)]
 const SKIRMISH_MODES := [["Play vs AI", false, true, -1], ["Hotseat", false, false, -1], ["Watch AI vs AI", true, true, -1],
@@ -49,7 +51,7 @@ static var _last_attacker := 0
 static var _last_vip_known := false
 ## The map, skirmish mode and online port picked last, kept while the game runs.
 static var _last_map := 0
-static var _last_size := 0
+static var _last_size := 1
 ## The seed of the random map on show in the preview: the one a skirmish or online game started now is played on.
 static var _map_seed := randi() % 1000000000 + 1
 static var _last_mode := 0
@@ -135,6 +137,7 @@ func _show_main() -> void:
 	_menu_button(box, "Two-player campaign", "Spend supply over 3 to 5 maps", _show_war_setup)
 	_menu_button(box, "Skirmish", "One battle against the AI, a friend or an agent", _show_skirmish)
 	_menu_button(box, "Online", "Play another computer directly", _show_online)
+	_menu_button(box, "Quick test battle", "Small random map, both sides already in contact", _start_quick_test)
 	_gap(box, 8)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
@@ -293,7 +296,11 @@ func _refresh_map_preview() -> void:
 		lines.append("Map #%d." % (_map_seed % 10000))
 	var names: Array = layout["objectives"].map(func(o: Dictionary) -> String: return o["name"])
 	lines.append("Objectives (yellow): %s." % ", ".join(names))
-	lines.append("%s start in blue on the west edge, %s in red on the east." % [theatre.team_name(0), theatre.team_name(1)])
+	if spec.is_empty():
+		lines.append("%s start in blue on the west edge, %s in red on the east." % [theatre.team_name(0), theatre.team_name(1)])
+	else:
+		var forces: Dictionary = theatre.village_forces() if spec[1] == "village" else theatre.skirmish_forces(layout["map"].width)
+		lines.append_array(_preview_deployments(layout, forces["rosters"], theatre))
 	_map_info.text = "\n".join(lines)
 	_map_preview.show_layout(layout, theatre.id)
 
@@ -386,17 +393,20 @@ func _show_skirmish() -> void:
 		for entry: Array in DEPLOYMENTS:
 			choice.add_item(entry[0])
 		choice.selected = _last_deployments[side]
-		choice.item_selected.connect(func(index: int) -> void: _last_deployments[side] = index)
+		choice.item_selected.connect(func(index: int) -> void:
+			_last_deployments[side] = index
+			_refresh_map_preview())
 		_field(deploy_box, _theatre().team_name(side), choice)
 		_deploy_choices.append(choice)
-	_text(deploy_box, "Balanced along your edge or massed on a flank (seen from your own edge); offensive deploys further forward, defensive further back behind sandbags. Scenarios place their own units.", MUTED, 13, true)
+	_text(deploy_box, "Spread out along the whole edge (the default), grouped at the usual spawns, balanced along your edge or massed on a flank (seen from your own edge); offensive deploys further forward, defensive further back behind sandbags; in contact puts both sides a few tiles apart mid-map. Scenarios place their own units.", MUTED, 13, true)
 	deploy_box.visible = deploy_toggle.button_pressed
 	deploy_toggle.toggled.connect(func(on: bool) -> void:
 		deploy_box.visible = on
 		if not on:
 			for side in 2:
 				_deploy_choices[side].selected = 0
-				_last_deployments[side] = 0)
+				_last_deployments[side] = 0
+			_refresh_map_preview())
 	_add_plan_choice(box, opponent)
 	_gap(box, 8)
 	var buttons := HBoxContainer.new()
@@ -551,6 +561,33 @@ func _add_plan_choice(box: VBoxContainer, opponent: OptionButton) -> void:
 	show_sides.call(opponent.selected)
 
 
+## Puts where each side's soldiers would start, by the deployments chosen, in the layout's spawns for the
+## minimap (sandbags and all), and says what each side does. A random deployment isn't known until the
+## battle starts, so it shows no one.
+func _preview_deployments(layout: Dictionary, rosters: Array, theatre: Theatre) -> PackedStringArray:
+	var deployments := []
+	for side in 2:
+		var entry: Array = DEPLOYMENTS[_last_deployments[side]]
+		deployments.append({} if entry[1] in ["", "random"] else {"flank": entry[1], "posture": entry[2]})
+	var placed := WarCampaign.deploy(layout, rosters, deployments)
+	var spawns := [[], []]
+	var lines := PackedStringArray()
+	for side in 2:
+		var entry: Array = DEPLOYMENTS[_last_deployments[side]]
+		var where := "blue, west" if side == 0 else "red, east"
+		if entry[1] == "random":
+			lines.append("%s (%s): a random deployment, settled when the battle starts." % [theatre.team_name(side), where])
+			continue
+		if deployments[side].is_empty():
+			spawns[side] = layout["spawns"][side].slice(0, rosters[side].size())
+		else:
+			for unit: Dictionary in placed[side]:
+				spawns[side].append(unit["pos"])
+		lines.append("%s (%s): %s, %d soldiers." % [theatre.team_name(side), where, (entry[0] as String).to_lower(), rosters[side].size()])
+	layout["spawns"] = spawns
+	return lines
+
+
 ## The two sides' deployments for GameSession.build_skirmish, with "Random" settled now so both online games
 ## build the same battle.
 func _chosen_deployments() -> Array:
@@ -561,6 +598,21 @@ func _chosen_deployments() -> Array:
 			entry = DEPLOYMENTS[randi_range(1, DEPLOYMENTS.size() - 2)]
 		result.append({} if entry[1] == "" else {"flank": entry[1], "posture": entry[2]})
 	return result
+
+
+## A small random map with both sides already face to face mid-map, against the AI: the fastest way to try
+## things out.
+func _start_quick_test() -> void:
+	var contact := {"flank": "contact", "posture": "normal"}
+	var setup := {"theatre": _theatre_id, "map": "random", "size": QUICK_TEST_SIZE, "seed": randi() % 1000000000 + 1,
+			"deployment": [contact, contact]}
+	var built := GameSession.build_skirmish(setup)
+	GameSession.campaign = null
+	GameSession.war = null
+	GameSession.start_battle(built[0], [false, true], "Quick test: " + built[1])
+	GameSession.agent_team = -1
+	GameSession.ai_plans = ["", ""]
+	get_tree().change_scene_to_file(GameSession.BATTLE_SCENE)
 
 
 func _start_skirmish(mode: int) -> void:

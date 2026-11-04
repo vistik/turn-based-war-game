@@ -115,7 +115,7 @@ func tool_list() -> Array:
 	var command_arg := {
 		"type": "object", "description": COMMAND_HELP,
 		"properties": {
-			"cmd": {"type": "string", "enum": ["move", "shoot", "suppress", "stance", "shoot_object", "clear_mine", "overwatch", "reload", "rally", "grenade", "smoke", "mortar", "medkit", "tunnel", "trap", "detonate", "plant", "defuse", "end_turn"]},
+			"cmd": {"type": "string", "enum": ["move", "shoot", "suppress", "stance", "shoot_object", "clear_mine", "overwatch", "reload", "hold", "rally", "grenade", "smoke", "mortar", "medkit", "tunnel", "trap", "detonate", "plant", "defuse", "end_turn"]},
 			"unit": {"type": "integer"}, "target": {"type": "integer"}, "tile": tile_arg, "kind": {"type": "string", "enum": ["he", "napalm"]},
 			"stance": {"type": "integer", "enum": [0, 2], "description": "0 stand, 2 prone"},
 			"facing": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2, "description": "move, tanks only: the heading to end on, e.g. [1, 0] or [1, -1]"},
@@ -555,6 +555,7 @@ func unit_options(id: int, all_tiles := false, filters := {}) -> Dictionary:
 	actions["shoot"] = battle.can_fire(u) if battle.can_fire(u) != "" else ("" if not targets.is_empty() else "No enemy in line of sight")
 	actions["overwatch"] = battle.can_overwatch(u)
 	actions["reload"] = battle.can_reload(u)
+	actions["hold"] = battle.can_hold(u)
 	actions["rally"] = battle.can_rally(u)
 	actions["grenade"] = battle.can_act(u) if u.grenades > 0 else "No grenades"
 	actions["smoke"] = battle.can_act(u) if u.smoke_grenades > 0 else "No smoke grenades"
@@ -940,6 +941,15 @@ func _event_line(e: Dictionary, side: int) -> String:
 				return "%s threw a %s; it landed at %s." % [_who(u), e["kind"], _tile(e["center"])]
 		"explosion":
 			return "Explosion at %s." % str(_tile(e["center"]))
+		"wall_hit":
+			return "A %s between %s and %s was hit (%s)." % [e["kind"], _tile(e["tiles"][0]), _tile(e["tiles"][1]), ["whole", "damaged", "breached, half cover", "gone"][mini(e["damage"], 3)]]
+		"collapse":
+			return "The building at %s collapsed into rubble." % str(_tile(e["center"]))
+		"window_broken":
+			if e.get("shot", false):
+				return "A stray round shattered the window between %s and %s." % [_tile(e["tiles"][0]), _tile(e["tiles"][1])]
+			if mine or visible:
+				return "%s smashed through the window between %s and %s." % [_who(u), _tile(e["tiles"][0]), _tile(e["tiles"][1])]
 		"strike":
 			return "A mortar round came down at %s." % str(_tile(e["center"]))
 		"mortar_fire":
@@ -1045,6 +1055,8 @@ func validate(command: Dictionary) -> String:
 			return battle.can_overwatch(u)
 		"reload":
 			return battle.can_reload(u)
+		"hold":
+			return battle.can_hold(u)
 		"rally":
 			return battle.can_rally(u)
 		"grenade":

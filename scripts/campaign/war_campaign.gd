@@ -254,8 +254,8 @@ static func deploy(layout: Dictionary, rosters: Array, deployments: Array) -> Ar
 	return placed
 
 
-## Start tiles for a side's units: a band along its own edge, shifted to the chosen flank, nearer the enemy
-## when offensive. Only tiles connected to the rest of the map are used.
+## Start tiles for a side's units: a band along its own edge ("wide": nearly corner to corner), shifted to the
+## chosen flank ("contact": next to the middle of the map, close to the enemy), nearer the enemy when offensive ("normal" and "defensive" stay 1-5 tiles in). Only tiles connected to the rest of the map are used.
 static func deployment_tiles(map: TacticalMap, side: int, orders: Dictionary, reachable: Dictionary, taken: Dictionary) -> Array[Vector2i]:
 	var count: int = orders["roster"].size()
 	var h := map.height
@@ -265,7 +265,15 @@ static func deployment_tiles(map: TacticalMap, side: int, orders: Dictionary, re
 	var band: Array[int] = [roundi(h * 0.12), roundi(h * 0.88)]
 	# Left is north for the Allies, who face east, and south for Germany, who face west.
 	var flank: String = orders["flank"]
-	if flank != "balanced":
+	if flank == "contact":
+		# Already face to face: a few tiles back from the middle of the map, each on its own half.
+		var mid := map.width / 2
+		depth = [mid - 6, mid - 2]
+		band = [roundi(h * 0.25), roundi(h * 0.75)]
+	elif flank == "wide":
+		# Spread out over the whole edge, corner to corner.
+		band = [roundi(h * 0.04), roundi(h * 0.96)]
+	elif flank != "balanced":
 		var north := (flank == "left") == (side == 0)
 		band = [roundi(h * 0.08), roundi(h * 0.45)]
 		if not north:

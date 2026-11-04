@@ -98,6 +98,7 @@ tell it the same.
   orders ran and which didn't.
 - `fast: true` on `execute_command` or `wait_for_turn` plays the moves out instantly instead of animating them,
   then puts the speed back.
+- `{"cmd": "hold", "unit": 3}` is the unit done for the turn (its remaining actions are spent).
 - `{"cmd": "end_turn"}` ends the turn; it also ends by itself once none of the side's units can act.
 
 The server's instructions spell out the rules agents tend to get wrong: an objective stays held after its soldiers

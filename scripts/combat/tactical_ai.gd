@@ -93,6 +93,61 @@ const CHARGE_DANGER := 45.0
 ## Worth of each level of height a soldier stands at (on top of what it does for his shots and cover).
 const HEIGHT_WEIGHT := 2.0
 
+## Game plans: each side picks one when the battle starts (from the battle's seed, so replays and saves play
+## out the same) and it shapes the whole game: where the side goes, which objectives it goes for and in what
+## order, how tight it keeps together and how bold it is. Keys a plan may set (anything left out is as usual):
+##   "weight": how often it is picked; "objectives": needs at least this many objectives (and no mission);
+##   "vehicle": needs a tank; "attacker" / "defender": false when not for that side of a mission;
+##   "lane": -1 (our left) or 1 (our right) to come in along that flank, "wings" to split the force and take both;
+##   "focus": which objectives to go for first: "pair" (two neighbours, then dig in on them), "left", "right",
+##            "centre", "wings" (each wing its own side) or "home" (the one nearest our start);
+##   "cohesion": keep close together; "escort": the infantry follow behind the tanks;
+##   "ambush": share of the battle spent waiting near home before the counterattack;
+##   "aggression" / "urgency": the least they ever are; "patience": how much slower impatience grows;
+##   scales on the usual weights: "danger", "open_ground", "kill", "objective_pull", "overwatch";
+##   "range": tiles further out than the role's usual range to fight from.
+const STRATEGIES := {
+	"broad_front": {"name": "Broad front", "text": "advance on a wide front and take what it can", "weight": 2.0},
+	"hold_two": {"name": "Take two and hold", "text": "take two neighbouring objectives, then dig in on them",
+			"weight": 2.0, "objectives": 2, "focus": "pair", "overwatch": 1.3},
+	"left_hook": {"name": "Left hook", "text": "swing wide around our left, rolling up the objectives from that side",
+			"lane": -1, "focus": "left"},
+	"right_hook": {"name": "Right hook", "text": "swing wide around our right, rolling up the objectives from that side",
+			"lane": 1, "focus": "right"},
+	"centre_punch": {"name": "Punch through the centre", "text": "drive together, straight through the middle",
+			"focus": "centre", "cohesion": true, "aggression": 0.3},
+	"pincer": {"name": "Pincer", "text": "split in two and come in on both flanks", "lane": "wings", "focus": "wings"},
+	"armoured_spearhead": {"name": "Armoured spearhead", "text": "the tanks lead, the infantry follow in their cover",
+			"weight": 2.0, "vehicle": true, "escort": true, "aggression": 0.3, "defender": false},
+	"ambush": {"name": "Wait and counterattack", "text": "sit tight near home and let the enemy come, then strike back",
+			"ambush": 0.4, "focus": "home", "overwatch": 1.6, "attacker": false, "defender": false},
+	"blitz": {"name": "All-out push", "text": "rush forward and accept the losses",
+			"aggression": 0.8, "urgency": 0.5, "danger": 0.7, "open_ground": 0.6, "overwatch": 0.5, "defender": false},
+	"attrition": {"name": "Bleed them", "text": "fight from good cover at long range and make every shot count",
+			"kill": 1.3, "objective_pull": 0.4, "range": 1.5, "danger": 1.2, "patience": 2.0, "attacker": false},
+}
+## Flank lanes run this share of half the map's width out from the centre line, and a soldier may stray this
+## far from his lane before it costs. Lanes fade out as he closes on his goal.
+const LANE_SHARE := 0.55
+const LANE_SLACK := 3.0
+const LANE_WEIGHT := 0.6
+const LANE_FADE := 8.0
+## Punching through the centre: score lost per tile further than COHESION_RADIUS from the rest.
+const COHESION_RADIUS := 4.0
+const COHESION_WEIGHT := 0.8
+## Armoured spearhead: infantry lose this per tile ahead of the nearest tank and per tile beyond
+## ESCORT_RADIUS from it; tanks don't get further than TANK_LEASH ahead of their infantry.
+const ESCORT_AHEAD_WEIGHT := 3.0
+const ESCORT_RADIUS := 5.0
+const ESCORT_CLOSE_WEIGHT := 1.0
+const TANK_LEASH := 7.0
+## Digging in on held objectives, and waiting near home before a counterattack (per tile too far out).
+const DIG_IN_PULL := 4.0
+const ANCHOR_PULL := 1.5
+## Behind by this much urgency with this share of the battle gone, any plan becomes an all-out push.
+const DESPERATE_URGENCY := 1.0
+const DESPERATE_SHARE := 0.6
+
 var battle: Battle
 var team: int
 ## Enemy id -> tile where we last saw them.
@@ -117,6 +172,23 @@ var _exit_cache := -1
 ## tile, else the ground).
 var _at_level := -1
 
+## The game plan (a key of STRATEGIES), and every plan played so far this battle, in order.
+var strategy := "broad_front"
+var plans: Array[String] = []
+## Where our side started, which way the enemy lies from there, and our left (perpendicular to that).
+var _home: Vector2
+var _forward := Vector2.RIGHT
+var _left := Vector2.UP
+## Unit id -> -1 (left wing) or 1 (right wing), from where they started.
+var _wings := {}
+## Indices of the two objectives a "pair" plan goes for, left one first.
+var _pair: Array[int] = []
+## A "Wait and counterattack" plan has struck back.
+var _sprung := false
+## Per-decide cache of each unit's goal under the plan: unit id -> Vector2 (Vector2.INF: none), and of
+## _plan_shape(): -1 - unit id -> Dictionary.
+var _plan_goals := {}
+
 
 func _init(p_battle: Battle, p_team: int) -> void:
 	battle = p_battle
@@ -128,11 +200,15 @@ func _init(p_battle: Battle, p_team: int) -> void:
 			sum += Vector2(u.pos)
 			count += 1
 	_objective = sum / maxi(1, count)
+	_read_the_ground()
+	set_strategy(_pick_strategy())
 
 
 ## The AI's memory, for save games.
 func to_dict() -> Dictionary:
-	return {"last_seen": _last_seen.duplicate(), "searching": _searching, "search_goal": _search_goal, "quiet_rounds": _quiet_rounds, "round": _round}
+	return {"last_seen": _last_seen.duplicate(), "searching": _searching, "search_goal": _search_goal, "quiet_rounds": _quiet_rounds, "round": _round,
+		"objective": _objective, "strategy": strategy, "plans": plans.duplicate(), "home": _home, "forward": _forward,
+		"wings": _wings.duplicate(), "pair": _pair.duplicate(), "sprung": _sprung}
 
 
 func load_dict(data: Dictionary) -> void:
@@ -143,6 +219,16 @@ func load_dict(data: Dictionary) -> void:
 	_search_goal = data["search_goal"]
 	_quiet_rounds = data["quiet_rounds"]
 	_round = data["round"]
+	if data.has("strategy"):
+		_objective = data["objective"]
+		_home = data["home"]
+		_forward = data["forward"]
+		_left = Vector2(_forward.y, -_forward.x)
+		_wings = data["wings"].duplicate()
+		_pair.assign(data["pair"])
+		_sprung = data["sprung"]
+		strategy = data["strategy"]
+		plans.assign(data["plans"])
 
 
 func act() -> Array:
@@ -162,17 +248,27 @@ func decide() -> Dictionary:
 		return {"cmd": "end_turn"}
 	_sight_cache.clear()
 	_exit_cache = -1
+	_plan_goals.clear()
 	_remember()
 	var seen := _seen_enemies()
-	if battle.round_number != _round:
+	var new_round := battle.round_number != _round
+	if new_round:
 		_round = battle.round_number
 		_quiet_rounds = _quiet_rounds + 1 if seen.is_empty() else 0
 	if not seen.is_empty():
 		_quiet_rounds = 0
-	_aggression = clampf(_quiet_rounds / PATIENCE_ROUNDS, 0.0, 1.0)
 	_urgency = clampf((battle.victory_points[1 - team] - battle.victory_points[team]) / URGENCY_POINTS, 0.0, 2.0)
 	if not battle.mission.is_empty():
 		_urgency = _mission_urgency()
+	if new_round:
+		_review_strategy()
+	var patience := _plan_float("patience", 1.0) * (3.0 if _digging_in() else 1.0)
+	_aggression = clampf(_quiet_rounds / (PATIENCE_ROUNDS * patience), 0.0, 1.0)
+	if _ambushing():
+		_aggression = 0.0
+	else:
+		_aggression = maxf(_aggression, _plan_float("aggression", 0.0))
+	_urgency = maxf(_urgency, _plan_float("urgency", 0.0))
 	if _searching and seen.is_empty() and _last_seen.is_empty():
 		_search_goal = _fog_center()
 	var best := {}
@@ -422,15 +518,16 @@ func _position_score(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 			facing_cover /= weights
 		score += facing_cover * FACING_COVER_WEIGHT
 		if best_cover == Cover.NONE:
-			score -= OPEN_GROUND_PENALTY * (1.0 if not seen.is_empty() else 0.5)
+			score -= OPEN_GROUND_PENALTY * (1.0 if not seen.is_empty() else 0.5) * _plan_float("open_ground", 1.0)
 		if map.has_height():
 			score += map.floor_height(tile, level) * HEIGHT_WEIGHT
 
 	var caution := 2.0 - float(u.hp) / u.max_hp
 	if u.id == battle.mission.get("vip", -1):
 		caution *= VIP_CAUTION
-	score -= _danger(u, tile, seen) * DANGER_WEIGHT * caution
+	score -= _danger(u, tile, seen) * DANGER_WEIGHT * caution * _plan_float("danger", 1.0)
 	score += _mission_score(u, tile)
+	score += _strategy_score(u, tile)
 
 	var point := Vector2(tile) + Vector2(0.5, 0.5)
 	var nearest_open := INF
@@ -440,11 +537,16 @@ func _position_score(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 			score += OBJECTIVE_HOLD if objective["owner"] == team else OBJECTIVE_TAKE * (1.0 + _urgency)
 		if objective["owner"] != team:
 			nearest_open = minf(nearest_open, distance)
+	# The plan says which objective (or spot) to make for first.
+	var plan_goal := _plan_goal(u)
+	if plan_goal != Vector2.INF:
+		nearest_open = point.distance_to(plan_goal)
 
 	if seen.is_empty():
 		var goal := _mission_goal(u)
 		if goal == Vector2.INF:
-			goal = _goal(tile)
+			goal = plan_goal if plan_goal != Vector2.INF else _goal(tile)
+		goal = _lane_goal(u, goal)
 		score -= Vector2(tile).distance_to(goal) * APPROACH_WEIGHT * (1.0 + 2.0 * _aggression)
 	else:
 		var nearest := INF
@@ -454,9 +556,9 @@ func _position_score(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 			# The VIP keeps as far from the enemy as he can.
 			score += minf(nearest, u.sight) * RANGE_WEIGHT
 		else:
-			score -= absf(nearest - float(u.def.get("range", 6.0)) * Weapon.RANGE_SCALE) * RANGE_WEIGHT
+			score -= absf(nearest - (float(u.def.get("range", 6.0)) + _plan_float("range", 0.0)) * Weapon.RANGE_SCALE) * RANGE_WEIGHT
 		if nearest_open < INF and not u.def.get("holds_back", false):
-			score -= nearest_open * OBJECTIVE_PULL * (1.0 + 2.0 * _urgency)
+			score -= nearest_open * OBJECTIVE_PULL * (1.0 + 2.0 * _urgency) * _plan_float("objective_pull", 1.0)
 
 	for ally in battle.alive_units(team):
 		if ally != u and Vector2(ally.pos).distance_to(Vector2(tile)) <= CombatRules.GRENADE_RADIUS:
@@ -534,7 +636,7 @@ func _followup_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
 
 func _shot_value(u: Unit, from: Vector2i, target: Unit, steady := false) -> float:
 	var outcome := _expected_damage(u, from, target, target.pos, steady, _level_of(u, from), target.level)
-	var value := (outcome[0] * 10.0 + outcome[1] * KILL_BONUS) * _target_weight(target) + (5.0 if target.overwatch else 0.0)
+	var value := (outcome[0] * 10.0 + outcome[1] * KILL_BONUS * _plan_float("kill", 1.0)) * _target_weight(target) + (5.0 if target.overwatch else 0.0)
 	if CombatRules.misses_stray(u.weapon):
 		value -= _stray_cost(u, from, target)
 	if target.vehicle:
@@ -606,11 +708,12 @@ func _suppression_gain(e: Unit, amount: int) -> float:
 
 
 func _overwatch_value(u: Unit, tile: Vector2i, seen: Array[Unit]) -> float:
+	var scale := _plan_float("overwatch", 1.0)
 	for e in seen:
 		if Vector2(tile).distance_to(Vector2(e.pos)) <= u.sight + 3.0:
-			return OVERWATCH_VALUE
+			return OVERWATCH_VALUE * scale
 	var value := OVERWATCH_VALUE * 0.5 if not _last_seen.is_empty() else 2.0
-	return value * (1.0 - _aggression)
+	return value * (1.0 - _aggression) * scale
 
 
 ## Tiles worth considering for grenades and shells: on and around every enemy we can see.
@@ -679,6 +782,329 @@ func _blast_value(tile: Vector2i, radius: float, damage_min: int, damage_max: in
 				if chain > 0.0:
 					hits += 1
 	return value if hits > 0 or not require_hit else 0.0
+
+
+# --- Game plan ---
+
+## Plays the given plan (a key of STRATEGIES) from now on.
+func set_strategy(key: String) -> void:
+	strategy = key
+	_sprung = false
+	_plan_goals.clear()
+	if plans.is_empty() or plans[-1] != key:
+		plans.append(key)
+
+
+## Plays a plan picked by the player instead of the one picked at random, if it suits this battle (else keeps
+## the random one). Returns whether it did. "" keeps the random one.
+func choose_strategy(key: String) -> bool:
+	if not STRATEGIES.has(key) or not _fits(key):
+		return false
+	plans.clear()
+	set_strategy(key)
+	return true
+
+
+## The plans played this battle, for the log: "Left hook (swing wide ...), then All-out push".
+func plan_summary() -> String:
+	var parts: Array[String] = []
+	for i in plans.size():
+		var plan: Dictionary = STRATEGIES[plans[i]]
+		parts.append("%s (%s)" % [plan["name"], plan["text"]] if i == 0 else String(plan["name"]))
+	return ", then ".join(parts)
+
+
+## A setting of the current plan, or the default when it doesn't set it.
+func _plan_value(key: String, default: Variant) -> Variant:
+	return STRATEGIES[strategy].get(key, default)
+
+
+func _plan_float(key: String, default: float) -> float:
+	return float(STRATEGIES[strategy].get(key, default))
+
+
+## Where we start, which way the enemy is, the two wings, and the pair of objectives a "pair" plan would take.
+func _read_the_ground() -> void:
+	var mine := battle.units.filter(func(u: Unit) -> bool: return u.team == team)
+	var sum := Vector2.ZERO
+	for u: Unit in mine:
+		sum += Vector2(u.pos)
+	_home = sum / mine.size() if not mine.is_empty() else Vector2(battle.map.width, battle.map.height) * 0.5
+	var toward := _objective - _home
+	if toward.length() < 1.0:
+		toward = Vector2.RIGHT if team == 0 else Vector2.LEFT
+	_forward = toward.normalized()
+	_left = Vector2(_forward.y, -_forward.x)
+	mine.sort_custom(func(a: Unit, b: Unit) -> bool: return _lat(Vector2(a.pos)) < _lat(Vector2(b.pos)) or (_lat(Vector2(a.pos)) == _lat(Vector2(b.pos)) and a.id < b.id))
+	for i in mine.size():
+		_wings[mine[i].id] = -1 if i < mine.size() / 2.0 else 1
+	var order := _objectives_by_lat()
+	if order.size() >= 2:
+		var first := _plan_rng("pair").randi_range(0, order.size() - 2)
+		_pair.assign([order[first], order[first + 1]])
+
+
+## A random number generator for the AI's own choices, seeded from the battle, so it picks the same every time
+## (replays, saves, online) without touching the battle's dice.
+func _plan_rng(what: String) -> RandomNumberGenerator:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash([battle.rng.seed, team, what])
+	return rng
+
+
+func _pick_strategy() -> String:
+	var options: Array = STRATEGIES.keys().filter(_fits)
+	var total := 0.0
+	for key: String in options:
+		total += float(STRATEGIES[key].get("weight", 1.0))
+	var roll := _plan_rng("plan").randf() * total
+	for key: String in options:
+		roll -= float(STRATEGIES[key].get("weight", 1.0))
+		if roll < 0.0:
+			return key
+	return "broad_front"
+
+
+## Whether a plan suits this battle: enough objectives, a tank for a tank plan, and our side of a mission.
+func _fits(key: String) -> bool:
+	var plan: Dictionary = STRATEGIES[key]
+	if plan.has("objectives") and (not battle.mission.is_empty() or battle.objectives.size() < plan["objectives"]):
+		return false
+	if plan.get("vehicle", false) and not _has_tank():
+		return false
+	if not battle.mission.is_empty():
+		var attacking := team == battle.mission_attacker()
+		if not plan.get("attacker" if attacking else "defender", true):
+			return false
+		# Waiting and digging in are for points games; a mission defender guards what the mission says.
+		if not attacking and (plan.has("lane") or plan.get("cohesion", false)):
+			return false
+	return true
+
+
+func _has_tank() -> bool:
+	return battle.alive_units(team).any(func(u: Unit) -> bool: return u.vehicle)
+
+
+## Once a round: a plan that no longer makes sense gives way. Tanks gone, the spearhead becomes a broad
+## front; the ambush springs when its time is up or we fall behind; and far behind late on, anything
+## becomes an all-out push.
+func _review_strategy() -> void:
+	var share := float(battle.round_number) / maxi(1, battle.max_rounds)
+	if STRATEGIES[strategy].get("vehicle", false) and not _has_tank():
+		set_strategy("broad_front")
+	if STRATEGIES[strategy].has("ambush") and not _sprung:
+		var behind: bool = battle.victory_points[1 - team] > battle.victory_points[team]
+		if share >= float(STRATEGIES[strategy]["ambush"]) or behind or _enemy_holds_home():
+			_sprung = true
+			_plan_goals.clear()
+	if strategy != "blitz" and battle.mission.is_empty() and _urgency >= DESPERATE_URGENCY and share >= DESPERATE_SHARE:
+		set_strategy("blitz")
+
+
+func _ambushing() -> bool:
+	return STRATEGIES[strategy].has("ambush") and not _sprung
+
+
+## A "pair" plan holds both its objectives and stays on them (unless falling behind on points).
+func _digging_in() -> bool:
+	if _plan_value("focus", "") != "pair" or _pair.is_empty() or _urgency >= DESPERATE_URGENCY:
+		return false
+	return _pair.all(func(i: int) -> bool: return battle.objectives[i]["owner"] == team)
+
+
+## The enemy has taken the objective nearest our start.
+func _enemy_holds_home() -> bool:
+	var home := _home_objective()
+	return home != -1 and battle.objectives[home]["owner"] == 1 - team
+
+
+## How far along our left (negative) or right (positive) of the map's centre line a point is.
+func _lat(p: Vector2) -> float:
+	return -(p - Vector2(battle.map.width, battle.map.height) * 0.5).dot(_left)
+
+
+## Half the map's width, seen from our side.
+func _half_width() -> float:
+	return (absf(_left.x) * battle.map.width + absf(_left.y) * battle.map.height) * 0.5
+
+
+## -1 for the left wing, 1 for the right.
+func _wing(u: Unit) -> int:
+	return _wings.get(u.id, -1 if _lat(Vector2(u.pos)) < 0.0 else 1)
+
+
+func _objectives_by_lat() -> Array[int]:
+	var order: Array[int] = []
+	for i in battle.objectives.size():
+		order.append(i)
+	order.sort_custom(func(a: int, b: int) -> bool: return _lat(battle.objectives[a]["center"]) < _lat(battle.objectives[b]["center"]))
+	return order
+
+
+func _home_objective() -> int:
+	var best := -1
+	for i in battle.objectives.size():
+		if best == -1 or _home.distance_to(battle.objectives[i]["center"]) < _home.distance_to(battle.objectives[best]["center"]):
+			best = i
+	return best
+
+
+## The objectives a unit should go for, first one first; empty to go for the nearest open one as usual.
+func _focus_order(u: Unit) -> Array[int]:
+	var none: Array[int] = []
+	if battle.objectives.is_empty() or not battle.mission.is_empty():
+		return none
+	if _urgency >= DESPERATE_URGENCY and _plan_value("focus", "") != "home":
+		return none
+	var order := _objectives_by_lat()
+	match _plan_value("focus", ""):
+		"pair":
+			if _pair.is_empty():
+				return none
+			# Each wing takes the objective on its side of the pair.
+			var pair: Array[int] = [_pair[0], _pair[1]]
+			if _wing(u) > 0:
+				pair.reverse()
+			return pair
+		"left":
+			return order
+		"right":
+			order.reverse()
+			return order
+		"centre":
+			order.sort_custom(func(a: int, b: int) -> bool: return absf(_lat(battle.objectives[a]["center"])) < absf(_lat(battle.objectives[b]["center"])))
+			return order
+		"wings":
+			if _wing(u) > 0:
+				order.reverse()
+			return order
+		"home":
+			if _ambushing():
+				none.append(_home_objective())
+			return none
+	return none
+
+
+## Where the plan sends a unit (an objective, or where to wait), or Vector2.INF to go the usual way.
+func _plan_goal(u: Unit) -> Vector2:
+	if _plan_goals.has(u.id):
+		return _plan_goals[u.id]
+	var goal := Vector2.INF
+	var order := _focus_order(u)
+	if _digging_in():
+		goal = battle.objectives[order[0]]["center"]
+	else:
+		for i in order:
+			if battle.objectives[i]["owner"] != team or _ambushing():
+				goal = battle.objectives[i]["center"]
+				break
+	if goal == Vector2.INF and _ambushing():
+		# Nothing to hold: wait a few tiles out from where we started.
+		goal = _clamp_to_map(_home + _forward * 4.0)
+	_plan_goals[u.id] = goal
+	return goal
+
+
+## The lane a unit keeps to (as a _lat() value), or INF when it goes where it likes: support weapons that hold
+## back, the VIP, and every unit once the plan has no lanes.
+func _lane(u: Unit) -> float:
+	var lane: Variant = _plan_value("lane", null)
+	if lane == null or u.def.get("holds_back", false) or u.id == battle.mission.get("vip", -1):
+		return INF
+	var side := float(_wing(u)) if lane is String else float(lane)
+	return side * LANE_SHARE * _half_width()
+
+
+## How much a unit still keeps to its lane on the way to a goal: fully while far off, not at all once there.
+func _lane_fade(u: Unit, goal: Vector2) -> float:
+	return clampf(((goal - Vector2(u.pos)).dot(_forward) - 3.0) / LANE_FADE, 0.0, 1.0)
+
+
+## A goal moved sideways into the unit's lane, so it comes in along the flank and turns in at the end.
+func _lane_goal(u: Unit, goal: Vector2) -> Vector2:
+	var lane := _lane(u)
+	if lane == INF or goal == Vector2.INF:
+		return goal
+	var fade := _lane_fade(u, goal)
+	return _clamp_to_map(goal - _left * (lane - _lat(goal)) * fade)
+
+
+func _clamp_to_map(p: Vector2) -> Vector2:
+	return p.clamp(Vector2.ZERO, Vector2(battle.map.width - 1, battle.map.height - 1))
+
+
+## What the plan adds to standing on a tile: keeping to a lane, close together, behind the tanks, on the
+## objectives we dug in on, or near home while waiting.
+func _strategy_score(u: Unit, tile: Vector2i) -> float:
+	var score := 0.0
+	var p := Vector2(tile)
+	var shape := _plan_shape(u)
+	if shape["fade"] > 0.0:
+		score -= maxf(0.0, absf(_lat(p) - shape["lane"]) - LANE_SLACK) * LANE_WEIGHT * shape["fade"]
+	if shape["together"] != Vector2.INF:
+		score -= maxf(0.0, p.distance_to(shape["together"]) - COHESION_RADIUS) * COHESION_WEIGHT
+	if _plan_value("escort", false):
+		score += _escort_score(u, p)
+	if _digging_in() or _ambushing():
+		var goal := _plan_goal(u)
+		if goal != Vector2.INF:
+			var reach := 1.0
+			for objective in battle.objectives:
+				if objective["center"] == goal:
+					reach += float(objective["radius"])
+			var outside := maxf(0.0, (p + Vector2(0.5, 0.5)).distance_to(goal) - reach - (3.0 if _ambushing() else 0.0))
+			score -= outside * (DIG_IN_PULL if _digging_in() else ANCHOR_PULL)
+	return score
+
+
+## What _strategy_score() needs about a unit, worked out once per decide: the lane (as a _lat() value) and how
+## much it still counts, and where the rest of the side is (Vector2.INF when the plan doesn't keep together).
+func _plan_shape(u: Unit) -> Dictionary:
+	var key := -1 - u.id
+	if _plan_goals.has(key):
+		return _plan_goals[key]
+	var shape := {"lane": 0.0, "fade": 0.0, "together": Vector2.INF}
+	var lane := _lane(u)
+	if lane != INF:
+		var goal := _mission_goal(u)
+		if goal == Vector2.INF:
+			goal = _plan_goal(u) if _plan_goal(u) != Vector2.INF else _goal(u.pos)
+		shape["fade"] = _lane_fade(u, goal)
+		shape["lane"] = lerpf(_lat(goal), lane, shape["fade"])
+	if _plan_value("cohesion", false):
+		var sum := Vector2.ZERO
+		var count := 0
+		for ally in battle.alive_units(team):
+			if ally != u:
+				sum += Vector2(ally.pos)
+				count += 1
+		if count > 0:
+			shape["together"] = sum / count
+	_plan_goals[key] = shape
+	return shape
+
+
+## Armoured spearhead: infantry stay close behind the nearest tank; tanks don't run off from their infantry.
+func _escort_score(u: Unit, p: Vector2) -> float:
+	if u.vehicle:
+		var sum := Vector2.ZERO
+		var count := 0
+		for ally in battle.alive_units(team):
+			if not ally.vehicle:
+				sum += Vector2(ally.pos)
+				count += 1
+		if count == 0:
+			return 0.0
+		return -maxf(0.0, (p - sum / count).dot(_forward) - TANK_LEASH) * ESCORT_CLOSE_WEIGHT
+	var lead: Unit = null
+	for ally in battle.alive_units(team):
+		if ally.vehicle and (lead == null or p.distance_to(Vector2(ally.pos)) < p.distance_to(Vector2(lead.pos))):
+			lead = ally
+	if lead == null:
+		return 0.0
+	var ahead := (p - Vector2(lead.pos)).dot(_forward)
+	return -maxf(0.0, ahead + 1.0) * ESCORT_AHEAD_WEIGHT - maxf(0.0, p.distance_to(Vector2(lead.pos)) - ESCORT_RADIUS) * ESCORT_CLOSE_WEIGHT
 
 
 # --- Missions ---

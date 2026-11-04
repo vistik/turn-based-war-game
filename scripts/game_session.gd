@@ -17,6 +17,9 @@ static var ai_teams := [false, true]
 ## The side an outside agent plays through the agent link (MCP), or -1. Set after start_battle().
 static var agent_team := -1
 static var ai_states := [{}, {}]
+## Per team: the game plan picked for the AI on the skirmish menu (a key of TacticalAI.STRATEGIES), or "" to
+## let it pick. Only read when a battle starts.
+static var ai_plans := ["", ""]
 static var battle_title := ""
 ## The running campaign, or null in skirmish.
 static var campaign: Campaign
@@ -41,6 +44,7 @@ static func start_battle(p_battle: Battle, p_ai_teams: Array, title: String) -> 
 	ai_teams = p_ai_teams.duplicate()
 	agent_team = -1
 	ai_states = [{}, {}]
+	ai_plans = ["", ""]
 	battle_title = title
 	recording = null
 	watching = null

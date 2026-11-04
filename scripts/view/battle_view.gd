@@ -260,6 +260,8 @@ func _ready() -> void:
 		if GameSession.ai_teams[team]:
 			var ai := TacticalAI.new(battle, team)
 			ai.load_dict(GameSession.ai_states[team])
+			if not battle.started:
+				ai.choose_strategy(GameSession.ai_plans[team])
 			controllers[team] = ai
 	_online = Net.active
 	if _online:
@@ -280,6 +282,9 @@ func _ready() -> void:
 	_refresh()
 	if not battle.started:
 		_log_mission_briefing()
+		# Watching AI vs AI: say what each side means to do.
+		if _view_team() == -1 and controllers[0] is TacticalAI and controllers[1] is TacticalAI:
+			_log_plans()
 		_run(battle.start())
 	elif controllers[0] == null and controllers[1] == null and GameSession.agent_team == -1:
 		_show_overlay("handover", "%s's turn\n\nClick or press any key" % battle.team_name(battle.current_team), _team_color(battle.current_team))
@@ -1420,6 +1425,7 @@ func _play_event(e: Dictionary) -> void:
 		"game_over":
 			var winner: int = e["winner"]
 			var how := Mission.outcome_text(battle, e.get("reason", ""))
+			_log_plans()
 			if winner == Battle.DRAW:
 				_log_line("[b]The battle ends in a draw.[/b]")
 				_show_overlay("game_over", "A draw: %d to %d\n\nClick or press any key to continue" % battle.victory_points, NEUTRAL_COLOR)
@@ -3542,6 +3548,14 @@ func _draw_mission_markers() -> void:
 
 
 ## A line per side on what the mission asks of it, at the start of a mission battle.
+## Each AI side's game plan (see TacticalAI.STRATEGIES), and any it switched to.
+func _log_plans() -> void:
+	for team in Battle.TEAM_COUNT:
+		if controllers[team] is TacticalAI:
+			var side := battle.team_name(team)
+			_log_line("[color=%s]%s plan: %s.[/color]" % [_team_color(team).to_html(false), side + ("'" if side.ends_with("s") else "'s"), controllers[team].plan_summary()])
+
+
 func _log_mission_briefing() -> void:
 	if battle.mission.is_empty():
 		return

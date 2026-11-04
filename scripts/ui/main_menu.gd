@@ -53,6 +53,8 @@ static var _last_size := 0
 ## The seed of the random map on show in the preview: the one a skirmish or online game started now is played on.
 static var _map_seed := randi() % 1000000000 + 1
 static var _last_mode := 0
+## Per side, the AI's game plan picked (a key of TacticalAI.STRATEGIES, "" for random), kept while the game runs.
+static var _last_plans := ["", ""]
 static var _last_port := Net.DEFAULT_PORT
 ## The orders being written on the two-player campaign's orders page.
 var _order_side := 0
@@ -395,6 +397,7 @@ func _show_skirmish() -> void:
 			for side in 2:
 				_deploy_choices[side].selected = 0
 				_last_deployments[side] = 0)
+	_add_plan_choice(box, opponent)
 	_gap(box, 8)
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 10)
@@ -494,6 +497,60 @@ func _skirmish_setup() -> Dictionary:
 	return setup
 
 
+## The AI's game plan for each side it plays (TacticalAI.STRATEGIES), folded away like the deployments: random
+## unless picked. Only the sides the AI plays in the chosen mode are shown.
+func _add_plan_choice(box: VBoxContainer, opponent: OptionButton) -> void:
+	var toggle := CheckButton.new()
+	toggle.text = "Choose AI plans"
+	toggle.button_pressed = _last_plans != ["", ""]
+	box.add_child(toggle)
+	var plan_box := VBoxContainer.new()
+	plan_box.add_theme_constant_override("separation", 6)
+	box.add_child(plan_box)
+	var keys: Array = TacticalAI.STRATEGIES.keys()
+	var choices: Array[OptionButton] = []
+	var rows: Array[Control] = []
+	for side in 2:
+		var choice := OptionButton.new()
+		choice.add_item("Random")
+		choice.set_item_tooltip(0, "A plan that suits the battle, picked at random")
+		for key: String in keys:
+			choice.add_item(TacticalAI.STRATEGIES[key]["name"])
+			choice.set_item_tooltip(choice.item_count - 1, TacticalAI.STRATEGIES[key]["text"])
+		choice.selected = keys.find(_last_plans[side]) + 1
+		choice.item_selected.connect(func(index: int) -> void: _last_plans[side] = "" if index == 0 else keys[index - 1])
+		_field(plan_box, _theatre().team_name(side), choice)
+		rows.append(choice.get_parent())
+		choices.append(choice)
+	var hint := _text(plan_box, "", MUTED, 13, true)
+	var describe := func() -> void:
+		var lines: Array[String] = []
+		for side in 2:
+			if _last_plans[side] != "" and rows[side].visible:
+				lines.append("%s: %s." % [_theatre().team_name(side), TacticalAI.STRATEGIES[_last_plans[side]]["text"]])
+		lines.append("A plan that doesn't suit the battle (a tank plan without tanks, say) falls back to random.")
+		hint.text = "\n".join(lines)
+	var show_sides := func(mode: int) -> void:
+		var any := false
+		for side in 2:
+			rows[side].visible = SKIRMISH_MODES[mode][1 + side]
+			any = any or rows[side].visible
+		toggle.visible = any
+		plan_box.visible = any and toggle.button_pressed
+		describe.call()
+	for choice in choices:
+		choice.item_selected.connect(func(_index: int) -> void: describe.call())
+	opponent.item_selected.connect(show_sides)
+	toggle.toggled.connect(func(on: bool) -> void:
+		plan_box.visible = on
+		if not on:
+			for side in 2:
+				choices[side].selected = 0
+				_last_plans[side] = ""
+		describe.call())
+	show_sides.call(opponent.selected)
+
+
 ## The two sides' deployments for GameSession.build_skirmish, with "Random" settled now so both online games
 ## build the same battle.
 func _chosen_deployments() -> Array:
@@ -512,6 +569,7 @@ func _start_skirmish(mode: int) -> void:
 	GameSession.war = null
 	GameSession.start_battle(built[0], [SKIRMISH_MODES[mode][1], SKIRMISH_MODES[mode][2]], built[1])
 	GameSession.agent_team = SKIRMISH_MODES[mode][3]
+	GameSession.ai_plans = _last_plans.duplicate()
 	get_tree().change_scene_to_file(GameSession.BATTLE_SCENE)
 
 

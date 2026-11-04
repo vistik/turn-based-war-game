@@ -653,6 +653,92 @@ func test_ai_battle_finishes() -> void:
 	check(battle.winner != -1, "AI vs AI on the Normandy map reaches a result (steps %d, round %d)" % [steps, battle.round_number])
 
 
+func test_ai_picks_a_game_plan() -> void:
+	var picked := {}
+	for seed in range(1, 25):
+		var battle: Battle = GameSession.build_skirmish({"map": "village", "seed": seed})[0]
+		var ai := TacticalAI.new(battle, 0)
+		picked[ai.strategy] = true
+		check_eq(TacticalAI.new(battle, 0).strategy, ai.strategy, "seed %d: the same plan every time" % seed)
+		check(TacticalAI.STRATEGIES.has(ai.strategy), "a known plan")
+		check(not ai.plan_summary().is_empty(), "with a description for the log")
+	check(picked.size() >= 5, "plans vary from battle to battle (%s)" % [picked.keys()])
+	var tankless := make_battle([["Rifleman", 0, Vector2i(2, 2)], ["Rifleman", 1, Vector2i(13, 13)]])
+	for seed in range(1, 40):
+		tankless.rng.seed = seed
+		check(TacticalAI.new(tankless, 0).strategy not in ["armoured_spearhead", "hold_two"], "no tank plan without tanks, no pair without objectives")
+
+
+func test_ai_plan_chosen_on_the_menu() -> void:
+	var battle: Battle = GameSession.build_skirmish({"map": "village", "seed": 3})[0]
+	var ai := TacticalAI.new(battle, 1)
+	check(ai.choose_strategy("pincer"), "a plan that suits the battle is taken")
+	check_eq(ai.plans, ["pincer"] as Array[String], "and replaces the random one")
+	var tankless := make_battle([["Rifleman", 0, Vector2i(2, 2)], ["Rifleman", 1, Vector2i(13, 13)]])
+	var other := TacticalAI.new(tankless, 0)
+	var picked := other.strategy
+	check(not other.choose_strategy("armoured_spearhead"), "a tank plan without tanks is refused")
+	check(not other.choose_strategy(""), "random keeps the pick")
+	check_eq(other.strategy, picked, "so the random plan stays")
+
+
+func test_ai_flank_plans_go_round_their_flank() -> void:
+	# The Allies start on the west, so their left is north (low y).
+	var mean_y := {}
+	for plan in ["left_hook", "right_hook"]:
+		var battle: Battle = GameSession.build_skirmish({"map": "village", "seed": 3})[0]
+		var ai := TacticalAI.new(battle, 0)
+		ai.set_strategy(plan)
+		battle.start()
+		while battle.round_number < 4 and battle.winner == -1:
+			if battle.current_team == 0:
+				ai.act()
+			else:
+				battle.execute({"cmd": "end_turn"})
+		var sum := 0.0
+		var units := battle.alive_units(0)
+		for u in units:
+			sum += u.pos.y
+		mean_y[plan] = sum / units.size()
+		check_eq(ai.plans[-1], plan, "%s is still the plan" % plan)
+	check(mean_y["left_hook"] + 4.0 < mean_y["right_hook"], "a left hook ends up north of a right hook (%s)" % [mean_y])
+
+
+func test_ai_plans_adapt() -> void:
+	var battle: Battle = GameSession.build_skirmish({"map": "village", "seed": 3})[0]
+	battle.start()
+	var ai := TacticalAI.new(battle, 0)
+	ai.set_strategy("hold_two")
+	check(not ai._digging_in(), "nothing to dig in on yet")
+	for i: int in ai._pair:
+		battle.objectives[i]["owner"] = 0
+	check(ai._digging_in(), "digs in once both objectives are held")
+	var wings := {}
+	for u in battle.alive_units(0):
+		wings[ai._plan_goal(u)] = true
+	check_eq(wings.size(), 2, "and each wing stays on its own one")
+
+	ai.set_strategy("ambush")
+	check(ai._ambushing(), "waits at first")
+	battle.victory_points[1] = 1
+	ai._review_strategy()
+	check(not ai._ambushing(), "and strikes back once behind")
+
+	var tanks := make_battle([["Tank", 0, Vector2i(2, 2)], ["Rifleman", 0, Vector2i(2, 4)], ["Rifleman", 1, Vector2i(13, 13)]])
+	var tank_ai := TacticalAI.new(tanks, 0)
+	tank_ai.plans.clear()
+	tank_ai.set_strategy("armoured_spearhead")
+	tanks.units[0].hp = 0
+	tank_ai._review_strategy()
+	check_eq(tank_ai.strategy, "broad_front", "the spearhead gives way when the tanks are gone")
+	check_eq(tank_ai.plans, ["armoured_spearhead", "broad_front"] as Array[String], "and the log shows both plans")
+
+	var copy := TacticalAI.new(tanks, 0)
+	copy.load_dict(tank_ai.to_dict())
+	check_eq(copy.strategy, tank_ai.strategy, "the plan is saved")
+	check_eq(copy.plan_summary(), tank_ai.plan_summary(), "with its history")
+
+
 # --- Tanks ---
 
 func test_small_arms_bounce_off_tanks() -> void:

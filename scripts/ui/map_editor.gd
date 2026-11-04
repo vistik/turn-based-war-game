@@ -517,7 +517,7 @@ func _pick_point(at: Vector2) -> Vector2:
 
 ## How high tile p's top surface (ground or roof) is drawn.
 func _lift(p: Vector2i) -> float:
-	return _s.TerrainPainter.floor_lift(map, p, _s.map.top_level(p)) if _s.map.in_bounds(p) else 0.0
+	return TerrainPainter.floor_lift(_s.map, p, _s.map.top_level(p)) if _s.map.in_bounds(p) else 0.0
 
 
 func _show_hover_status() -> void:
@@ -1071,10 +1071,12 @@ func _build_ui() -> void:
 	box.add_child(theatre_row)
 	_text(theatre_row, "New maps in", MUTED, 13)
 	_theatre_choice = OptionButton.new()
-	for theatre in Theatres.all():
+	for theatre in Theatres.playable():
 		_theatre_choice.add_item(theatre.title)
 	_theatre_choice.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	theatre_row.add_child(_theatre_choice)
+	# Nothing to choose while only one theatre is playable.
+	theatre_row.visible = Theatres.PLAYABLE.size() > 1
 	var new_row := HBoxContainer.new()
 	box.add_child(new_row)
 	_size_choice = OptionButton.new()
@@ -1113,7 +1115,7 @@ func _sync_panel() -> void:
 	_briefing_edit.text = _s.briefing
 	_file_edit.text = edited_path.get_file().get_basename() if edited_path.begins_with(Scenario.USER_DIR) else _slug(_s.title)
 	_syncing = false
-	_theatre_choice.select(maxi(0, Theatres.IDS.find(_s.theatre_id)))
+	_theatre_choice.select(maxi(0, Theatres.PLAYABLE.find(_s.theatre_id)))
 	_refresh_file_list()
 	_sync_waves()
 	_set_tool(_tool)
@@ -1345,7 +1347,7 @@ func _load_builtin(kind: String) -> void:
 	_checkpoint()
 	var seed := randi() % 10000 + 1
 	var size: int = NEW_SIZES[_size_choice.selected]
-	var theatre_id: String = Theatres.IDS[_theatre_choice.selected]
+	var theatre_id: String = Theatres.PLAYABLE[_theatre_choice.selected]
 	if kind == "village" and Theatres.get_theatre(theatre_id).village_layout().is_empty():
 		_flash("%s has no hand-made map" % Theatres.get_theatre(theatre_id).title)
 		return
@@ -1362,7 +1364,7 @@ func _load_builtin(kind: String) -> void:
 func _new_map() -> void:
 	_checkpoint()
 	var size: int = NEW_SIZES[_size_choice.selected]
-	var scenario := Scenario.create(size, size, Theatres.IDS[_theatre_choice.selected])
+	var scenario := Scenario.create(size, size, Theatres.PLAYABLE[_theatre_choice.selected])
 	scenario.title = "New %dx%d scenario" % [size, size]
 	_open(scenario, "")
 

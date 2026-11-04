@@ -9,6 +9,8 @@ const GOOD := Color("8fe08a")
 const RANDOM_MAPS := [["Small", 32], ["Standard", 44], ["Large", 64], ["Huge", 84]]
 ## Side length of the quick test battle's map.
 const QUICK_TEST_SIZE := 32
+## Side length of the map Play starts on (the "Standard" random map).
+const PLAY_SIZE := 44
 ## [label, flank, posture] for a skirmish side's deployment; "" flank keeps the map's usual spawns.
 const DEPLOYMENTS := [
 	["Spread out", "wide", "normal"], ["Grouped (usual spawns)", "", ""],
@@ -106,50 +108,72 @@ func _ready() -> void:
 
 # --- Main menu ---
 
-## The first page: what's saved to carry on with, then one button per way to play. Each opens its own page
-## with that mode's options.
+## The first page, built around one decision: Play. One click (or Enter) starts a battle against the AI on a
+## fresh map with sensible defaults; nothing to choose first. Saved games sit right under it, the other ways to
+## play in a quiet grid below, and the odds and ends in a footer.
 func _show_main() -> void:
+	if not Theatres.PLAYABLE.has(_theatre_id):
+		_theatre_id = Theatres.DEFAULT
 	Music.menu_theatre = _theatre_id
 	UITheme.use_theatre(_theatre_id)
-	var box := _new_page(480)
+	var box := _new_page(500)
+	box.add_theme_constant_override("separation", 10)
 	var theatre := _theatre()
-	_title(box, theatre.title, 48)
-	_text(box, theatre.tagline, MUTED, 16, true)
-	# Which war: every page below starts its games in the theatre picked here.
-	var theatres := HBoxContainer.new()
-	theatres.add_theme_constant_override("separation", 6)
-	box.add_child(theatres)
-	for other in Theatres.all():
-		var pick := _button(theatres, other.title, func() -> void:
-			_theatre_id = other.id
-			_last_map = 0
-			_show_main())
-		pick.toggle_mode = true
-		pick.button_pressed = other.id == _theatre_id
-		pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_gap(box, 12)
-	var saves := _saved_games()
-	for entry: Array in saves:
-		_button(box, entry[0], entry[1], true)
-	if not saves.is_empty():
-		_gap(box, 8)
-	_menu_button(box, "Campaign", "%d missions with one squad" % theatre.campaign_missions().size(), _show_campaign_menu)
-	_menu_button(box, "Two-player campaign", "Spend supply over 3 to 5 maps", _show_war_setup)
-	_menu_button(box, "Skirmish", "One battle against the AI, a friend or an agent", _show_skirmish)
-	_menu_button(box, "Online", "Play another computer directly", _show_online)
-	_menu_button(box, "Quick test battle", "Small random map, both sides already in contact", _start_quick_test)
-	_gap(box, 8)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-	box.add_child(row)
-	for spec: Array in [["Replays", _show_replays], ["Map editor", func() -> void: get_tree().change_scene_to_file("res://scenes/editor.tscn")],
+	_gap(box, 6)
+	var title := _title(box, theatre.title, 52)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var tagline := _text(box, theatre.tagline, MUTED, 16, true)
+	tagline.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	# Which war, only once there is more than one to pick: every page below starts its games in it.
+	var theatres := Theatres.playable()
+	if theatres.size() > 1:
+		var picker := HBoxContainer.new()
+		picker.add_theme_constant_override("separation", 6)
+		box.add_child(picker)
+		for other in theatres:
+			var pick := _button(picker, other.title, func() -> void:
+				_theatre_id = other.id
+				_last_map = 0
+				_show_main())
+			pick.toggle_mode = true
+			pick.button_pressed = other.id == _theatre_id
+			pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_gap(box, 14)
+
+	var play := _menu_button(box, "Play", "Battle the AI on a fresh %s map" % theatre.title.get_slice(" ", 0), _start_play, true)
+	play.call_deferred("grab_focus")
+	# Saved games: compact rows, so they never outweigh Play.
+	for entry: Array in _saved_games():
+		var resume := _button(box, entry[0], entry[1])
+		resume.custom_minimum_size = Vector2(0, 32)
+		resume.add_theme_font_size_override("font_size", 14)
+	_gap(box, 14)
+
+	var modes := GridContainer.new()
+	modes.columns = 2
+	modes.add_theme_constant_override("h_separation", 10)
+	modes.add_theme_constant_override("v_separation", 10)
+	box.add_child(modes)
+	for spec: Array in [
+			["Campaign", "%d missions, one squad" % theatre.campaign_missions().size(), _show_campaign_menu],
+			["Skirmish", "Your map, mission and rules", _show_skirmish],
+			["Two players", "Hotseat campaign over 3 to 5 maps", _show_war_setup],
+			["Online", "Play a friend on another computer", _show_online]]:
+		_menu_button(modes, spec[0], spec[1], spec[2]).size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_gap(box, 10)
+
+	var footer := HBoxContainer.new()
+	footer.alignment = BoxContainer.ALIGNMENT_CENTER
+	footer.add_theme_constant_override("separation", 4)
+	box.add_child(footer)
+	for spec: Array in [["Quick test", _start_quick_test], ["Replays", _show_replays],
+			["Map editor", func() -> void: get_tree().change_scene_to_file("res://scenes/editor.tscn")],
 			["Settings", _show_settings], ["Quit", get_tree().quit]]:
-		_button(row, spec[0], spec[1]).size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var music_label := func() -> String: return "Music: %s" % ("on" if GameSettings.music_volume > 0 else "off")
-	var music: Button
-	music = _button(box, music_label.call(), func() -> void:
-		GameSettings.toggle_music()
-		music.text = music_label.call())
+		var link := _button(footer, spec[0], spec[1])
+		link.flat = true
+		link.custom_minimum_size = Vector2(0, 32)
+		link.add_theme_font_size_override("font_size", 14)
+		link.add_theme_color_override("font_color", MUTED)
 
 
 ## [label, action] for each saved game that can be continued.
@@ -174,20 +198,23 @@ func _saved_games() -> Array:
 	return result
 
 
-## A large menu button with a one-line description under its name.
-func _menu_button(parent: Control, text: String, hint: String, action: Callable) -> void:
-	var button := _button(parent, "", action)
-	button.custom_minimum_size = Vector2(0, 58)
+## A large menu button with a one-line description under its name; the primary one is taller and khaki.
+func _menu_button(parent: Control, text: String, hint: String, action: Callable, primary := false) -> Button:
+	var button := _button(parent, "", action, primary)
+	button.custom_minimum_size = Vector2(0, 84 if primary else 62)
 	var labels := VBoxContainer.new()
 	labels.set_anchors_preset(Control.PRESET_FULL_RECT)
 	labels.alignment = BoxContainer.ALIGNMENT_CENTER
-	labels.add_theme_constant_override("separation", -2)
+	labels.add_theme_constant_override("separation", 0 if primary else -2)
 	labels.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	button.add_child(labels)
-	for line: Array in [[text, UITheme.PAPER, 20], [hint, MUTED, 13]]:
+	var lines := [[text, UITheme.TEXT_DARK, 30], [hint, Color(UITheme.TEXT_DARK, 0.7), 14]] if primary \
+			else [[text, UITheme.PAPER, 20], [hint, MUTED, 13]]
+	for line: Array in lines:
 		var label := _text(labels, line[0], line[1], line[2])
 		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return button
 
 
 func _show_campaign_menu() -> void:
@@ -445,7 +472,7 @@ func _show_online() -> void:
 		_button(box, "Continue: host the saved game", _host_resume, true)
 
 	_section(box, "Host a new game")
-	_text(box, "You play the %s on the map you pick (%s; switch on the first page)." % [_theatre().team_name(0), _theatre().title], MUTED, 14, true)
+	_text(box, "You play the %s on the map you pick." % _theatre().team_name(0), MUTED, 14, true)
 	_add_map_choice(box)
 	_add_mission_choice(box)
 	_button(box, "Host game", _host, online_save.is_empty())
@@ -602,14 +629,24 @@ func _chosen_deployments() -> Array:
 
 ## A small random map with both sides already face to face mid-map, against the AI: the fastest way to try
 ## things out.
+## Play, the one-click game: you against the AI on a fresh standard-size random map of any kind, a fight for
+## the objectives, both sides spread out, the AI on a random game plan.
+func _start_play() -> void:
+	_start_vs_ai({"theatre": _theatre_id, "map": "random", "size": PLAY_SIZE, "seed": randi() % 1000000000 + 1}, "")
+
+
 func _start_quick_test() -> void:
 	var contact := {"flank": "contact", "posture": "normal"}
-	var setup := {"theatre": _theatre_id, "map": "random", "size": QUICK_TEST_SIZE, "seed": randi() % 1000000000 + 1,
-			"deployment": [contact, contact]}
+	_start_vs_ai({"theatre": _theatre_id, "map": "random", "size": QUICK_TEST_SIZE, "seed": randi() % 1000000000 + 1,
+			"deployment": [contact, contact]}, "Quick test: ")
+
+
+## Starts a skirmish (GameSession.build_skirmish setup) with the player as team 0 against the AI.
+func _start_vs_ai(setup: Dictionary, title_prefix: String) -> void:
 	var built := GameSession.build_skirmish(setup)
 	GameSession.campaign = null
 	GameSession.war = null
-	GameSession.start_battle(built[0], [false, true], "Quick test: " + built[1])
+	GameSession.start_battle(built[0], [false, true], title_prefix + built[1])
 	GameSession.agent_team = -1
 	GameSession.ai_plans = ["", ""]
 	get_tree().change_scene_to_file(GameSession.BATTLE_SCENE)
@@ -1353,13 +1390,14 @@ func _new_page(width: float) -> VBoxContainer:
 	return box
 
 
-func _title(parent: Control, text: String, size: int) -> void:
+func _title(parent: Control, text: String, size: int) -> Label:
 	var label := Label.new()
 	label.text = text
 	label.uppercase = true
 	label.theme_type_variation = "HeaderLarge"
 	label.add_theme_font_size_override("font_size", size)
 	parent.add_child(label)
+	return label
 
 
 func _section(parent: Control, text: String) -> void:

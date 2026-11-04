@@ -1914,7 +1914,7 @@ func _refresh() -> void:
 	_update_peek_targets()
 	_gun_view.clear()
 	if can_act or (selected != null and not busy and selected.team == view):
-		for p: Vector2i in battle.visible_from(selected.pos, selected.current_sight(), selected.level):
+		for p: Vector2i in battle.visible_from(selected.pos, selected.current_sight(), selected.level, Battle.eye_stance(selected)):
 			if p == selected.pos:
 				_gun_view[p] = 0
 			else:
@@ -3493,7 +3493,7 @@ func _draw_markers() -> void:
 	var dest_level := _dest_level(hover)
 	var lift := _tile_lift(hover, dest_level)
 	for d: Vector2i in TacticalMap.DIRS4:
-		var c := battle.map.cover_toward(hover, d, dest_level)
+		var c := battle.map.cover_toward(hover, d, dest_level, selected.stance == Unit.Stance.PRONE and not selected.vehicle)
 		if c != Cover.NONE:
 			_draw_shield(_proj.project(center + Vector2(d) * 0.36, 0.5 + lift), c == Cover.FULL)
 	var notes := PackedStringArray()

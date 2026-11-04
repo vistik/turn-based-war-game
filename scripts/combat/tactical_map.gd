@@ -63,6 +63,8 @@ const CRUSHABLE_EDGES := ["fence", "stone", "hedge", "dyke", "bamboo_wall", "bam
 const FULL_EDGE_KINDS := ["wall", "hedge", "bamboo_wall", "mud_wall"]
 ## Light edges a machine gun can shoot to pieces; it only chips stone, brick and mud walls.
 const FLIMSY_EDGES := ["fence", "hedge", "bamboo_wall", "bamboo_window", "window", "broken_window"]
+## Hedges are only leaves and twigs: every hit on one knocks this many times the stages off (see damage_edge).
+const HEDGE_DAMAGE_FACTOR := 2
 
 # --- Height ---
 ## Heights are in levels: one level is a storey, about three metres. Ground rises in whole levels (hills,
@@ -79,7 +81,8 @@ const STANCE_EYE := {0: 0.55, 2: 0.12}
 const OBJECT_HEIGHT := {"tree": 2.5, "palm": 2.5, "poplar": 3.0, "bamboo": 2.0, "oil_tank": 1.3}
 const FULL_OBJECT_HEIGHT := 1.0
 const WALL_HEIGHT := 1.0
-const HEDGE_HEIGHT := 1.3
+## Shoulder high: a standing soldier (STANCE_EYE) sees and shoots over a hedge, one lying down doesn't.
+const HEDGE_HEIGHT := 0.45
 const SMOKE_HEIGHT := 2.0
 ## Jungle canopy: sight below it counts the jungle tiles it passes (JUNGLE_SIGHT_TILES); above it, not.
 const CANOPY_HEIGHT := 2.0
@@ -382,11 +385,14 @@ func get_edge_damage() -> Dictionary:
 
 ## Knocks an edge `stages` steps toward gone, no further than `cap` (a machine gun only chips stone). A full
 ## wall or hedge is breached at 2 (down to half cover, its kind kept) and gone at 3; a window, low wall or
-## fence is gone at 2. A hit window loses its glass. Returns whether anything changed.
+## fence is gone at 2. A hit window loses its glass. A hedge takes HEDGE_DAMAGE_FACTOR times the stages.
+## Returns whether anything changed.
 func damage_edge(key: Vector3i, stages: int, cap := 3) -> bool:
 	if not _edges.has(key) or stages <= 0:
 		return false
 	var kind := edge_kind(key)
+	if kind == "hedge":
+		stages *= HEDGE_DAMAGE_FACTOR
 	var before: int = _edge_damage.get(key, 0)
 	var damage := mini(before + stages, maxi(cap, before))
 	if damage == before:
@@ -695,7 +701,9 @@ func is_jungle(p: Vector2i) -> bool:
 ## A trench is full cover on every side except where it runs on into more trench.
 ## Upstairs, only the building's walls and windows count (an open doorway below is wall up there); on a
 ## roof, the parapet is half cover and a taller building alongside full cover.
-func cover_toward(p: Vector2i, dir: Vector2i, level := 0) -> int:
+## A whole hedge is full cover to someone lying behind it (`prone`) but only half to someone standing, who
+## sees over it.
+func cover_toward(p: Vector2i, dir: Vector2i, level := 0, prone := false) -> int:
 	var q := p + dir
 	if level > 0:
 		if is_roof(p, level):
@@ -709,7 +717,10 @@ func cover_toward(p: Vector2i, dir: Vector2i, level := 0) -> int:
 		if wall == Cover.NONE and not (get_storeys(q) > level and get_elevation(q) == get_elevation(p)):
 			return Cover.FULL
 		return wall
-	var cover := maxi(get_edge(p, q), get_object(q))
+	var edge := get_edge(p, q)
+	if edge == Cover.FULL and not prone and get_edge_kind(p, q) == "hedge":
+		edge = Cover.HALF
+	var cover := maxi(edge, get_object(q))
 	if _vehicles.has(q):
 		cover = maxi(cover, Cover.HALF)
 	if get_terrain(p) == Terrain.CRATER:
@@ -723,7 +734,7 @@ func cover_toward(p: Vector2i, dir: Vector2i, level := 0) -> int:
 
 func has_cover(p: Vector2i, level := 0) -> bool:
 	for d: Vector2i in DIRS4:
-		if cover_toward(p, d, level) != Cover.NONE:
+		if cover_toward(p, d, level, true) != Cover.NONE:
 			return true
 	return false
 
@@ -731,15 +742,15 @@ func has_cover(p: Vector2i, level := 0) -> bool:
 ## Best cover protecting a unit on target from an attacker on attacker_pos.
 ## A side's cover counts when the attacker is in front of it, within roughly 63° of straight on.
 ## Shooting down from a level or more above, low cover no longer hides the target; from two levels above,
-## full cover only half does.
-func cover_against(target: Vector2i, attacker_pos: Vector2i, target_level := 0, attacker_level := 0) -> int:
+## full cover only half does. `prone`: the target lies down (see cover_toward).
+func cover_against(target: Vector2i, attacker_pos: Vector2i, target_level := 0, attacker_level := 0, prone := false) -> int:
 	var offset := attacker_pos - target
 	var best := Cover.NONE
 	for d: Vector2i in DIRS4:
 		var along := offset.x * d.x + offset.y * d.y
 		var across := absi(offset.x * d.y - offset.y * d.x)
 		if along > 0 and along * 2 >= across:
-			best = maxi(best, cover_toward(target, d, target_level))
+			best = maxi(best, cover_toward(target, d, target_level, prone))
 	if _tall and best != Cover.NONE:
 		var drop := floor_height(attacker_pos, attacker_level) - floor_height(target, target_level)
 		if drop >= 2.0:

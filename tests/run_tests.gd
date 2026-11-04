@@ -248,10 +248,33 @@ func test_walls_hedges_and_low_walls() -> void:
 	check_eq(map.step_cost(Vector2i(0, 0), Vector2i(1, 0)), INF, "walls block")
 	map.set_edge(Vector2i(0, 0), Vector2i(1, 0), Cover.FULL, "hedge")
 	check_eq(map.step_cost(Vector2i(0, 0), Vector2i(1, 0)), 1.0 + TacticalMap.HEDGE_COST, "pushing through a hedge")
-	check(not LineOfSight.has_line(map, Vector2i(0, 0), Vector2i(5, 0)), "hedges block sight")
+	check(LineOfSight.has_line(map, Vector2i(0, 0), Vector2i(5, 0)), "standing, you see over a hedge")
+	var low := TacticalMap.STANCE_EYE[Unit.Stance.PRONE]
+	check(not LineOfSight.has_line(map, Vector2i(0, 0), Vector2i(5, 0), 0, 0, low, low), "lying down, you don't")
 	check_eq(map.step_cost(Vector2i(0, 1), Vector2i(1, 0)), INF, "no cutting corners")
 	map.set_object(Vector2i(5, 5), Cover.HALF)
 	check_eq(map.step_cost(Vector2i(4, 4), Vector2i(5, 5)), INF, "can't stand on a crate")
+
+
+func test_hedges_hide_the_prone_not_the_standing() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(2, 5)], ["Rifleman", 1, Vector2i(8, 5)]])
+	var map := battle.map
+	for y in range(2, 9):
+		map.set_edge(Vector2i(7, y), Vector2i(8, y), Cover.FULL, "hedge")
+	var us := battle.units[0]
+	var them := battle.units[1]
+	check_eq(map.cover_against(them.pos, us.pos), Cover.HALF, "standing behind a hedge is half cover")
+	check_eq(map.cover_against(them.pos, us.pos, 0, 0, true), Cover.FULL, "lying behind it, full cover")
+	check(battle.can_see(us, them), "a soldier standing behind a hedge is seen")
+	check(battle.can_see(them, us), "and sees over it")
+	check_eq(battle.shot_odds(us, them)["cover"], Cover.HALF, "and is shot at through half cover")
+	them.stance = Unit.Stance.PRONE
+	check(not battle.can_see(us, them), "lying down behind it he is hidden")
+	check(not battle.can_see(them, us), "and sees nothing past it")
+	check(not battle.team_visible_tiles(1).has(Vector2i(4, 5)), "his view stops at the hedge")
+	check_eq(battle.shot_odds(us, them)["cover"], Cover.FULL, "full cover lying down")
+	map.damage_edge(TacticalMap.edge_key(Vector2i(7, 5), Vector2i(8, 5)), 1)
+	check_eq(map.cover_against(them.pos, us.pos, 0, 0, true), Cover.HALF, "one hit breaches a hedge: half cover either way")
 
 
 func test_crater_gives_cover_everywhere() -> void:
@@ -501,6 +524,36 @@ func test_walls_come_down_in_stages() -> void:
 	check_eq(map.get_edge_kind(Vector2i(1, 1), Vector2i(2, 1)), "broken_window", "a hit window loses its glass")
 	var copy := TacticalMap.from_dict(map.to_dict())
 	check_eq(copy.edge_damage(chipped), 1, "damage is saved")
+
+
+func test_hedges_are_shot_apart_quickly() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(2, 5)], ["Rifleman", 1, Vector2i(8, 5)]])
+	var map := battle.map
+	var key := TacticalMap.edge_key(Vector2i(7, 5), Vector2i(8, 5))
+	var rifle := battle.units[0]
+	var them := battle.units[1]
+	map.set_edge(Vector2i(7, 5), Vector2i(8, 5), Cover.FULL, "hedge")
+	check_eq(events_of(battle._hit_cover(rifle, them), "wall_hit").size(), 1, "a rifle shot tears into a hedge")
+	check_eq(map.edge_damage(key), 1, "a stage at a time")
+	battle._hit_cover(rifle, them)
+	check_eq(map.get_edge(Vector2i(7, 5), Vector2i(8, 5)), Cover.HALF, "two shots breach it")
+	battle._hit_cover(rifle, them)
+	check_eq(map.get_edge(Vector2i(7, 5), Vector2i(8, 5)), Cover.NONE, "three and it's gone")
+	map.set_edge(Vector2i(7, 5), Vector2i(8, 5), Cover.FULL, "wall")
+	check(battle._hit_cover(rifle, them).is_empty(), "rifles leave walls standing")
+	var mg := Unit.create(9, "MG", "MG", 0, Vector2i(2, 5))
+	map.set_edge(Vector2i(7, 5), Vector2i(8, 5), Cover.FULL, "hedge")
+	battle._hit_cover(mg, them)
+	check_eq(map.get_edge(Vector2i(7, 5), Vector2i(8, 5)), Cover.HALF, "a machine gun burst breaches a hedge")
+	battle._hit_cover(mg, them)
+	check_eq(map.get_edge(Vector2i(7, 5), Vector2i(8, 5)), Cover.NONE, "and the next clears it")
+	var tank := Unit.create(10, "Tank", "Tank", 0, Vector2i(2, 5))
+	map.set_edge(Vector2i(7, 5), Vector2i(8, 5), Cover.FULL, "hedge")
+	battle._hit_cover(tank, them)
+	check_eq(map.get_edge(Vector2i(7, 5), Vector2i(8, 5)), Cover.NONE, "a shell blows it away")
+	map.set_edge(Vector2i(7, 5), Vector2i(8, 5), Cover.FULL, "hedge")
+	map.blast_cover(Vector2i(9, 5), 1.5, 2, 1)
+	check_eq(map.get_edge(Vector2i(7, 5), Vector2i(8, 5)), Cover.HALF, "a blast nearby breaches it")
 
 
 func test_tank_shell_breaches_the_wall_in_front() -> void:

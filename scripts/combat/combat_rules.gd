@@ -279,7 +279,8 @@ static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction :=
 		modifiers.append(["High ground", HIGH_GROUND_AIM])
 		hit += HIGH_GROUND_AIM
 
-	var cover := Cover.NONE if reaction else map.cover_against(target.pos, shooter.pos, target.level, shooter.level)
+	var cover := Cover.NONE if reaction else map.cover_against(target.pos, shooter.pos, target.level, shooter.level,
+			not target.vehicle and target.stance == Unit.Stance.PRONE)
 	if cover != Cover.NONE:
 		var defense: int = COVER_DEFENSE[cover]
 		modifiers.append(["%s cover" % Cover.NAMES[cover], -defense])

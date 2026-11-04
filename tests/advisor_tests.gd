@@ -159,8 +159,8 @@ func test_unit_options_and_preview() -> void:
 	check(not options["moves"]["best_spots"].is_empty(), "lists cover spots")
 	var preview: Dictionary = tools.preview(0, [4, 4])["result"]
 	check(preview["reachable"], "the hedge is in reach")
-	check_eq(preview["cover"].get("E"), "full", "full cover east")
-	check_eq(preview["enemies_in_sight"][0]["your_cover"], "full", "covered against the enemy")
+	check_eq(preview["cover"].get("E"), "half", "half cover east, standing behind a hedge")
+	check_eq(preview["enemies_in_sight"][0]["your_cover"], "half", "covered against the enemy")
 	check_eq(battle.get_unit(0).pos, Vector2i(2, 2), "preview puts the unit back")
 	check(tools.unit_options(1).has("error"), "no options for enemy units")
 

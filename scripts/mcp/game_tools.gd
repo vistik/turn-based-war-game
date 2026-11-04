@@ -297,7 +297,7 @@ func _threats(side: int) -> Array:
 			if u.vehicle:
 				entry["armour_facing_them"] = CombatRules.armor_side(u, e.pos)
 			else:
-				entry["your_cover"] = Cover.NAMES[battle.map.cover_against(u.pos, e.pos, u.level, e.level)].to_lower()
+				entry["your_cover"] = Cover.NAMES[battle.map.cover_against(u.pos, e.pos, u.level, e.level, u.stance == Unit.Stance.PRONE)].to_lower()
 			by.append(entry)
 		if not by.is_empty():
 			result.append({"unit": u.id, "name": u.name, "seen_by": by})

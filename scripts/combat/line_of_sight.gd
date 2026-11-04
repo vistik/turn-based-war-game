@@ -1,6 +1,7 @@
 class_name LineOfSight
 extends RefCounted
-## Grid line of sight. Full cover and smoke block sight, half cover does not, and so does a thick stretch of
+## Grid line of sight. Full cover and smoke block sight, half cover does not, nor does a hedge to anyone standing
+## (it's shoulder high, TacticalMap.HEDGE_HEIGHT, also on flat maps), and so does a thick stretch of
 ## jungle (more than TacticalMap.JUNGLE_SIGHT_TILES jungle tiles between the two ends).
 ## A unit next to full cover can step out to either side of it to look around the corner.
 ##
@@ -18,7 +19,7 @@ const HEIGHT_SIGHT_BONUS := 2.0
 ## the given levels.
 static func has_line(map: TacticalMap, a: Vector2i, b: Vector2i, level_a := 0, level_b := 0, eye_a := -1.0, eye_b := -1.0) -> bool:
 	if not map.has_height():
-		return _flat_line(map, a, b)
+		return _flat_line(map, a, b, eye_a if eye_a >= 0.0 else TacticalMap.STANCE_EYE[0], eye_b if eye_b >= 0.0 else TacticalMap.STANCE_EYE[0])
 	if eye_a < 0.0:
 		eye_a = map.eye_height(a, level_a)
 	if eye_b < 0.0:
@@ -81,7 +82,7 @@ static func has_line(map: TacticalMap, a: Vector2i, b: Vector2i, level_a := 0, l
 static func peek_positions(map: TacticalMap, p: Vector2i, level := 0) -> Array[Vector2i]:
 	var result: Array[Vector2i] = [p]
 	for d: Vector2i in TacticalMap.DIRS4:
-		if map.cover_toward(p, d, level) != Cover.FULL:
+		if map.cover_toward(p, d, level, true) != Cover.FULL:
 			continue
 		for side: Vector2i in [Vector2i(d.y, d.x), Vector2i(-d.y, -d.x)]:
 			var q := p + side
@@ -145,7 +146,8 @@ static func _cached_peeks(map: TacticalMap, p: Vector2i, level: int) -> Array[Ve
 	return cached
 
 
-static func _flat_line(map: TacticalMap, a: Vector2i, b: Vector2i) -> bool:
+## On flat ground only hedges care about eye heights: lines pass over them above TacticalMap.HEDGE_HEIGHT.
+static func _flat_line(map: TacticalMap, a: Vector2i, b: Vector2i, eye_a: float, eye_b: float) -> bool:
 	var step := Vector2i(signi(b.x - a.x), signi(b.y - a.y))
 	var nx := absi(b.x - a.x)
 	var ny := absi(b.y - a.y)
@@ -156,23 +158,24 @@ static func _flat_line(map: TacticalMap, a: Vector2i, b: Vector2i) -> bool:
 	while ix < nx or iy < ny:
 		# Which tile boundary does the line cross next: vertical (<0), horizontal (>0) or a corner (0)?
 		var cmp := (1 + 2 * ix) * ny - (1 + 2 * iy) * nx
+		var h := lerpf(eye_a, eye_b, (ix + 0.5) / nx if cmp <= 0 else (iy + 0.5) / ny)
 		var next: Vector2i
 		if cmp == 0:
 			next = current + step
 			var side_x := Vector2i(next.x, current.y)
 			var side_y := Vector2i(current.x, next.y)
-			if not _open_corner(map, current, side_x, next) and not _open_corner(map, current, side_y, next):
+			if not _open_corner(map, current, side_x, next, h) and not _open_corner(map, current, side_y, next, h):
 				return false
 			ix += 1
 			iy += 1
 		elif cmp < 0:
 			next = Vector2i(current.x + step.x, current.y)
-			if map.edge_blocks_sight(current, next):
+			if _flat_edge_blocks(map, current, next, h):
 				return false
 			ix += 1
 		else:
 			next = Vector2i(current.x, current.y + step.y)
-			if map.edge_blocks_sight(current, next):
+			if _flat_edge_blocks(map, current, next, h):
 				return false
 			iy += 1
 		current = next
@@ -185,8 +188,14 @@ static func _flat_line(map: TacticalMap, a: Vector2i, b: Vector2i) -> bool:
 	return true
 
 
-static func _open_corner(map: TacticalMap, a: Vector2i, via: Vector2i, b: Vector2i) -> bool:
-	return not map.edge_blocks_sight(a, via) and not map.blocks_sight(via) and not map.edge_blocks_sight(via, b)
+static func _open_corner(map: TacticalMap, a: Vector2i, via: Vector2i, b: Vector2i, h: float) -> bool:
+	return not _flat_edge_blocks(map, a, via, h) and not map.blocks_sight(via) and not _flat_edge_blocks(map, via, b, h)
+
+
+static func _flat_edge_blocks(map: TacticalMap, a: Vector2i, b: Vector2i, h: float) -> bool:
+	if not map.edge_blocks_sight(a, b):
+		return false
+	return h < TacticalMap.HEDGE_HEIGHT or map.get_edge_kind(a, b) != "hedge"
 
 
 static func _open_corner_at(map: TacticalMap, a: Vector2i, via: Vector2i, b: Vector2i, h: float) -> bool:

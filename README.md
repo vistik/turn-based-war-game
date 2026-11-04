@@ -11,8 +11,10 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 ## Features
 
 **Theatres**
-- Pick the war on the main menu; every way to play (campaign, two-player campaign, skirmish, online, the map
-  editor) then starts in it. Saves, replays, scenarios and online games remember their theatre.
+- **For now only Normandy 1944 is playable.** Vietnam and Iraq 2004 are switched off in the menus and the map
+  editor (`Theatres.PLAYABLE`) while WW2 gets the attention; their code, tests and tools still run, and their
+  saves, replays and scenarios still load. Add an id back to `PLAYABLE` and the main menu shows a theatre
+  picker again; every way to play then starts in the theatre picked.
 - Each theatre has its own colour scheme for menus and the battle screen, so it's plain which one is picked:
   olive and khaki for Normandy, jungle green and bamboo amber for Vietnam, slate and desert sand for Iraq 2004.
 - The engine (movement, shooting, cover, suppression, AI, online, replays) is shared. Each theatre brings its own
@@ -46,7 +48,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 **Music**
 - The tracks in `music/` (MP3, OGG or WAV) play as one playlist, in name order, looping round all of them
   through menus and battles. Tracks added to the save folder's `music/` join the playlist.
-- Turn it off with the Music button on the main menu or M in battle, or set the volume in Settings.
+- Turn it off with M in battle, or set the volume in Settings.
 - With no tracks at all, the game falls back to themes composed in code for each theatre (a menu and a battle
   theme each).
 
@@ -208,6 +210,11 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   the orders page. In the editor, the Mission tool (8) sets the mission and places its zone, VIP and targets.
 
 **Ways to play**
+- **Main menu**: built around one big **Play** button (focused, so Enter works too): one click starts a battle
+  against the AI on a fresh standard 44x44 random map, fighting for the objectives, both sides spread out,
+  the AI on a random game plan. Saved games sit in compact Continue rows under it, the other modes (Campaign,
+  Skirmish, Two players, Online) in a grid below, and Quick test, Replays, Map editor, Settings and Quit in
+  a quiet footer.
 - **Campaign**: five missions with one persistent squad. Soldiers gain XP and rank, get wounded and die for
   good. Supplies buy replacements.
 - **Two-player campaign** (hotseat, or against the AI):
@@ -239,7 +246,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   to corner (the default), grouped at the usual spawns, balanced or massed on the left or right flank, offensive (further forward) or defensive (further back, behind sandbags),
   in contact (a few tiles apart either side of the middle) or random. The minimap shows where each side's soldiers will start (a random deployment only once the
   battle begins), and changes as you pick. Online, the host picks both. Pick a mission and the attacking side too.
-- **Quick test battle** (main menu): one click starts a small 32x32 random map in the chosen theatre, against
+- **Quick test battle** (main menu footer): one click starts a small 32x32 random map in the chosen theatre, against
   the AI, with both sides already in contact mid-map: the fastest way to try something out.
 - **Online**: two computers connect directly, at home or over the internet, no server needed.
   - Every game has a password. The joiner proves it knows the password before the host lets it in (the

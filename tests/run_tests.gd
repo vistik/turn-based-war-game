@@ -1225,6 +1225,12 @@ func test_missed_rifle_rounds_fly_on() -> void:
 					check_eq(shot.get("stray_unit", -1), 2, "the hit is marked on the shot")
 	check(friend_hits > 0 and friend_hits < 40, "a stray round sometimes hits the friend behind the target (%d of 120)" % friend_hits)
 	check_eq(walled_hits, 0, "a wall behind the target stops the round")
+	# A diagonal shot flies on diagonally, round the corners of the tiles it passes.
+	var slant := make_battle([["Rifleman", 0, Vector2i(2, 2)], ["Rifleman", 1, Vector2i(6, 5)]])
+	var flight := slant.round_flight(Vector2i(2, 2), slant.units[1])
+	check(flight["tile"].x > 6 and flight["tile"].y > 5, "a diagonal miss flies on past the target (%s)" % [flight["tile"]])
+	slant.units[1].defense = 200
+	check(events_of(slant.shoot(slant.units[0], slant.units[1]), "shot")[0].has("stray"), "and the shot is marked where it went")
 	var battle := make_battle([["Rifleman", 0, Vector2i(2, 8)], ["Rifleman", 1, Vector2i(6, 8)], ["Rifleman", 0, Vector2i(8, 8)]])
 	var risks := battle.stray_risks(battle.units[0], battle.units[0].pos, battle.units[1])
 	check(risks.size() == 1 and risks[0]["unit"] == battle.units[2], "the odds warn about the friend behind the target")

@@ -352,7 +352,8 @@ func round_flight(from: Vector2i, target: Unit) -> Dictionary:
 		# A diagonal step goes round by the side the line passes nearer.
 		var hops: Array[Vector2i] = [next]
 		if next.x != cur.x and next.y != cur.y:
-			hops = [Vector2i(next.x, cur.y), next] if absf(dir.x) >= absf(dir.y) else [Vector2i(cur.x, next.y), next]
+			var corner := Vector2i(next.x, cur.y) if absf(dir.x) >= absf(dir.y) else Vector2i(cur.x, next.y)
+			hops.push_front(corner)
 		for hop in hops:
 			if not map.in_bounds(hop):
 				return {"tile": cur}

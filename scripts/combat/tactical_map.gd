@@ -58,6 +58,11 @@ const TREE_COST := 2.0
 const FUEL_CRUSH_COST := 6.0
 ## Low obstacles and hedges a tank can drive through (and destroys on the way).
 const CRUSHABLE_EDGES := ["fence", "stone", "hedge", "dyke", "bamboo_wall", "bamboo_window"]
+## Edges that are full cover when whole. They take three stages to bring down: damaged (still full cover),
+## breached (half cover, a gap to climb and shoot through), gone. Half-cover edges go in two.
+const FULL_EDGE_KINDS := ["wall", "hedge", "bamboo_wall", "mud_wall"]
+## Light edges a machine gun can shoot to pieces; it only chips stone, brick and mud walls.
+const FLIMSY_EDGES := ["fence", "hedge", "bamboo_wall", "bamboo_window", "window", "broken_window"]
 
 # --- Height ---
 ## Heights are in levels: one level is a storey, about three metres. Ground rises in whole levels (hills,
@@ -101,6 +106,9 @@ var _object_kinds := {}
 ## Edge key (see _edge_key) -> cover level, and -> kind.
 var _edges := {}
 var _edge_kinds := {}
+## Damage to walls, hedges and fences, by edge key (see damage_edge): 1 damaged, 2 breached, 3 gone. Gone
+## edges are kept here so a building still knows how many of its walls have fallen.
+var _edge_damage := {}
 ## Tile -> battle turn index at which the smoke there clears.
 var _smoke := {}
 ## Tiles with a tank on them: they give half cover to soldiers beside them.
@@ -333,8 +341,8 @@ func get_edge(a: Vector2i, b: Vector2i) -> int:
 	return _edges.get(_edge_key(a, b), Cover.NONE)
 
 
-## Kinds: full cover "wall", "hedge", "bamboo_wall", "mud_wall"; half cover "window", "fence", "stone", "dyke",
-## "bamboo_window", "mud_window".
+## Kinds: full cover "wall", "hedge", "bamboo_wall", "mud_wall"; half cover "window", "broken_window" (one
+## climbed through), "fence", "stone", "dyke", "bamboo_window", "mud_window".
 func get_edge_kind(a: Vector2i, b: Vector2i) -> String:
 	return edge_kind(_edge_key(a, b))
 
@@ -345,6 +353,7 @@ func edge_kind(key: Vector3i) -> String:
 
 func set_edge(a: Vector2i, b: Vector2i, cover: int, kind := "") -> void:
 	var key := _edge_key(a, b)
+	_edge_damage.erase(key)
 	if cover == Cover.NONE:
 		_edges.erase(key)
 		_edge_kinds.erase(key)
@@ -360,6 +369,40 @@ func set_edge(a: Vector2i, b: Vector2i, cover: int, kind := "") -> void:
 
 func get_edges() -> Dictionary:
 	return _edges
+
+
+## How damaged the edge is: 0 whole, 1 damaged, 2 breached, 3 gone (see damage_edge).
+func edge_damage(key: Vector3i) -> int:
+	return _edge_damage.get(key, 0)
+
+
+func get_edge_damage() -> Dictionary:
+	return _edge_damage
+
+
+## Knocks an edge `stages` steps toward gone, no further than `cap` (a machine gun only chips stone). A full
+## wall or hedge is breached at 2 (down to half cover, its kind kept) and gone at 3; a window, low wall or
+## fence is gone at 2. A hit window loses its glass. Returns whether anything changed.
+func damage_edge(key: Vector3i, stages: int, cap := 3) -> bool:
+	if not _edges.has(key) or stages <= 0:
+		return false
+	var kind := edge_kind(key)
+	var before: int = _edge_damage.get(key, 0)
+	var damage := mini(before + stages, maxi(cap, before))
+	if damage == before:
+		return false
+	if damage >= (3 if FULL_EDGE_KINDS.has(kind) else 2):
+		_edges.erase(key)
+		_edge_kinds.erase(key)
+		_edge_damage[key] = 3
+	else:
+		_edge_damage[key] = damage
+		_edge_kinds[key] = "broken_window" if kind == "window" else kind
+		if damage >= 2:
+			_edges[key] = Cover.HALF
+	revision += 1
+	layout_revision += 1
+	return true
 
 
 ## The two tiles on either side of an edge key.
@@ -745,6 +788,13 @@ func tiles_in_radius(center: Vector2i, radius: float) -> Array[Vector2i]:
 ## Destroys every object and wall inside the radius and blasts a crater at the centre.
 ## Objects leave rubble. Returns how many pieces of cover were destroyed.
 func destroy_cover(center: Vector2i, radius: float) -> int:
+	return blast_cover(center, radius, 3, 3)
+
+
+## A blast: clears objects, wire, mines and tunnel entrances in reach and leaves a crater, and knocks the
+## walls, hedges and fences round the tile it lands on `center_stages` steps toward gone (damage_edge), those
+## further out `area_stages`. Returns how many things it destroyed or damaged.
+func blast_cover(center: Vector2i, radius: float, center_stages: int, area_stages: int) -> int:
 	var area := {}
 	var destroyed := 0
 	for p in tiles_in_radius(center, radius):
@@ -762,9 +812,8 @@ func destroy_cover(center: Vector2i, radius: float) -> int:
 			destroyed += 1
 	for key: Vector3i in _edges.keys():
 		var pair := edge_tiles(key)
-		if area.has(pair[0]) or area.has(pair[1]):
-			_edges.erase(key)
-			_edge_kinds.erase(key)
+		var stages := center_stages if center in pair else (area_stages if area.has(pair[0]) or area.has(pair[1]) else 0)
+		if damage_edge(key, stages):
 			destroyed += 1
 	if in_bounds(center) and get_terrain(center) not in [Terrain.INDOOR, Terrain.TRENCH]:
 		set_terrain(center, Terrain.CRATER)
@@ -788,6 +837,8 @@ func to_dict() -> Dictionary:
 		data["storeys"] = _storeys.duplicate()
 	if not _stairs.is_empty():
 		data["stairs"] = _stairs.duplicate()
+	if not _edge_damage.is_empty():
+		data["edge_damage"] = _edge_damage.duplicate()
 	return data
 
 
@@ -798,6 +849,7 @@ static func from_dict(data: Dictionary) -> TacticalMap:
 	map._object_kinds = data["object_kinds"].duplicate()
 	map._edges = data["edges"].duplicate()
 	map._edge_kinds = data["edge_kinds"].duplicate()
+	map._edge_damage = data.get("edge_damage", {}).duplicate()
 	map._smoke = data["smoke"].duplicate()
 	map._vehicles = data["vehicles"].duplicate()
 	map._fires = data.get("fires", {}).duplicate()

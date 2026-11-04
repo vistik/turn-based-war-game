@@ -64,6 +64,36 @@ const OBJECT_SHOT_BONUS := {"fuel": 10, "oil_tank": 30, "car": 20}
 const FIRE_TURNS := 4
 const FIRE_DAMAGE := 2
 const FIRE_SUPPRESSION := 20
+## How many stages explosions knock off walls, hedges and fences (TacticalMap.damage_edge): [round the tile
+## they land on, further out]. A whole wall takes 3 stages to bring down (damaged, breached, gone), a window,
+## low wall or fence 2. "direct_heavy": a tank shell or rocket fired at someone behind cover hits that cover.
+const WALL_HITS := {
+	"grenade": Vector2i(1, 1), "shell": Vector2i(2, 1), "charge": Vector2i(3, 3), "direct_heavy": 2,
+}
+## A building of two storeys or more falls in when this share of its outer walls is breached or gone. Everyone
+## in it takes COLLAPSE_DAMAGE, plus COLLAPSE_FALL_DAMAGE per floor they fall, and is badly shaken.
+const COLLAPSE_SHARE := 0.5
+const COLLAPSE_DAMAGE := [2, 4]
+const COLLAPSE_FALL_DAMAGE := 2
+const COLLAPSE_SUPPRESSION := 60
+## Grenades, shells, rockets and mortar rounds set what burns in their blast alight, for BLAST_FIRE_TURNS: the
+## chance per tile by its ground (dry crops and tall grass catch easily, grass and scrub less, roads, rubble,
+## water and indoors never), BLAST_FIRE_CENTER more where it lands. Not under anyone standing there, nor on
+## upper floors.
+const BLAST_FIRE_TURNS := 2
+const BLAST_FIRE_CHANCE := {
+	TacticalMap.Terrain.WHEAT: 0.6, TacticalMap.Terrain.TALL_GRASS: 0.6, TacticalMap.Terrain.TRAMPLED: 0.5,
+	TacticalMap.Terrain.ROUGH: 0.3, TacticalMap.Terrain.FLOOR: 0.2, TacticalMap.Terrain.JUNGLE: 0.25,
+}
+const BLAST_FIRE_CENTER := 0.3
+## Once a round, each fire may spread to the tiles beside it (not diagonally), by their ground, and burns
+## there for BLAST_FIRE_TURNS. It never spreads under a soldier or tank, nor through a wall or hedge between
+## the tiles. A fuel drum or oil tank beside a fire may cook off (FIRE_COOK_OFF).
+const FIRE_SPREAD_CHANCE := {
+	TacticalMap.Terrain.WHEAT: 0.22, TacticalMap.Terrain.TALL_GRASS: 0.22, TacticalMap.Terrain.TRAMPLED: 0.15,
+	TacticalMap.Terrain.ROUGH: 0.08, TacticalMap.Terrain.FLOOR: 0.04, TacticalMap.Terrain.JUNGLE: 0.08,
+}
+const FIRE_COOK_OFF := 0.25
 ## A mine hits whoever steps on it and the tiles beside it. Explosions still lose EXPLOSION_VS_ARMOR against tanks.
 const MINE_RADIUS := 1.0
 const MINE_DAMAGE_MIN := 4
@@ -113,6 +143,13 @@ const ROCKET_BLAST_RADIUS := 0.5
 ## tiles of the line of fire, friends included: each in turn with MG_STRAY_CHANCE, for half damage.
 const MG_STRAY_LINE := 0.75
 const MG_STRAY_CHANCE := 20
+## A missed rifle, pistol or SMG round flies on up to ROUND_FLIES_ON tiles past the target, until a full wall,
+## a glazed window (which it shatters) or a tree or other solid object stops it. Anyone within
+## STRAY_ROUND_LINE tiles of its flight, friends included, is hit with STRAY_ROUND_CHANCE each in turn
+## (nearest the shooter first, only one), for half damage.
+const ROUND_FLIES_ON := 5.0
+const STRAY_ROUND_LINE := 0.5
+const STRAY_ROUND_CHANCE := 10
 
 # --- Stances, steady shots and suppressive fire ---
 ## Prone soldiers are small targets at range, smaller still behind low cover, but easy to hit up close
@@ -192,6 +229,13 @@ static func can_hurt(weapon: Weapon, target: Unit, from: Vector2i) -> bool:
 ## Whether a weapon's misses can hit something else: machine guns, rockets and tank guns.
 static func misses_stray(weapon: Weapon) -> bool:
 	return weapon.heavy or weapon.anti_tank
+
+
+## Whether a weapon's misses fly on as single rounds (see ROUND_FLIES_ON): rifles, pistols, SMGs and sniper
+## rifles. Machine guns, rockets and shells stray their own way (misses_stray); grenade launchers and
+## mortars don't.
+static func misses_fly_on(weapon: Weapon) -> bool:
+	return not misses_stray(weapon) and weapon.blast_radius <= 0.0
 
 
 ## Chance (0-100) to hit an explosive object of `kind` on `tile` from `from`.

@@ -99,6 +99,10 @@ static func _hamlet(nm: NaturalMap, at: Vector2i, hamlet_name: String) -> bool:
 	if huts.size() < 2:
 		return false
 	nm.landmark(hamlet_name, nm.nearest_open(at))
+	# Now and then a hut has been shelled or burnt out.
+	for rect in huts:
+		if nm.rng.randf() < 0.18:
+			nm.ruin(rect, 0.35)
 	for rect in huts:
 		var yard := rect.get_center() + Vector2i(nm.rng.randi_range(-3, 3), nm.rng.randi_range(-3, 3))
 		if nm.is_free(yard):

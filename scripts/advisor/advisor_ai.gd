@@ -7,7 +7,7 @@ extends TacticalAI
 ## Names for what gives cover, by object or edge kind.
 const COVER_NAMES := {
 	"rock": "the rocks", "tree": "the tree", "crate": "the crates", "sandbags": "the sandbags", "hay": "the hay bales",
-	"pew": "the pews", "wreck": "the wreck", "wall": "the wall", "hedge": "the hedge", "window": "the window",
+	"pew": "the pews", "wreck": "the wreck", "wall": "the wall", "hedge": "the hedge", "window": "the window", "broken_window": "the broken window",
 	"fence": "the fence", "stone": "the low wall", "crater": "the crater", "tank": "the tank",
 }
 

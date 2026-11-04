@@ -54,6 +54,10 @@ static func start_battle(p_battle: Battle, p_ai_teams: Array, title: String) -> 
 ## length, "style": a Theatre.map_styles() id ("" or left out: the seed picks), "seed": int, "mission": {"type", "attacker", "vip_known"} (see Mission; points if left out)}, or {"map": "scenario", "scenario": Scenario.to_data(), "seed": int}: the same setup
 ## always builds the same battle, which is how both online players start identical games.
 ## Bigger maps bring bigger forces, need more points to win and allow more rounds. Returns [battle, title].
+## The default deployment: each side spread out along its whole edge (see WarCampaign.deployment_tiles).
+const SPREAD_OUT := {"flank": "wide", "posture": "normal"}
+
+
 static func build_skirmish(setup: Dictionary) -> Array:
 	var seed: int = setup["seed"]
 	if setup["map"] == "scenario":
@@ -62,7 +66,7 @@ static func build_skirmish(setup: Dictionary) -> Array:
 		return [scenario.build_battle(seed), scenario.title]
 	var theatre := Theatres.get_theatre(setup.get("theatre", Theatres.DEFAULT))
 	# Where each side deploys: {"flank", "posture"} as in the two-player campaign, or {} for the usual spawns.
-	var deployments: Array = setup.get("deployment", [{}, {}])
+	var deployments: Array = setup.get("deployment", [SPREAD_OUT, SPREAD_OUT])
 	var layout: Dictionary
 	var forces: Dictionary
 	var title: String
@@ -73,6 +77,11 @@ static func build_skirmish(setup: Dictionary) -> Array:
 	else:
 		var size: int = setup.get("size", 44)
 		layout = theatre.generate_map(seed, Vector2i(size, size), setup.get("style", ""))
+		# Small maps can lack room for fair objectives; the next seeds (the same on both online games) will do.
+		var next_seed := seed
+		while not layout.has("map") and next_seed < seed + 20:
+			next_seed += 1
+			layout = theatre.generate_map(next_seed, Vector2i(size, size), setup.get("style", ""))
 		forces = theatre.skirmish_forces(size)
 		title = "%s %dx%d #%d" % [style_title(theatre, layout.get("style", "")), size, size, seed % 10000]
 	var mission_setup: Dictionary = setup.get("mission", {})

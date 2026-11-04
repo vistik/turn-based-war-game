@@ -337,6 +337,55 @@ func mg_bystanders(shooter: Unit, from: Vector2i, target: Unit) -> Array[Unit]:
 	return result
 
 
+## Where a missed small-arms round fired from `from` at `target` ends up: {"tile"} and, if a wall or window
+## stopped it, "edge" (its key). It flies on past the target (CombatRules.ROUND_FLIES_ON) over low cover and
+## through empty or broken windows, but not through a full wall, a glazed window or a solid object. A round
+## fired at someone upstairs flies over the ground-floor walls.
+func round_flight(from: Vector2i, target: Unit) -> Dictionary:
+	var dir := Vector2(target.pos - from).normalized()
+	var cur := target.pos
+	var steps := int(CombatRules.ROUND_FLIES_ON * 4.0)
+	for i in range(1, steps + 1):
+		var next := Vector2i((Vector2(target.pos) + dir * 0.25 * i).round())
+		if next == cur:
+			continue
+		# A diagonal step goes round by the side the line passes nearer.
+		var hops: Array[Vector2i] = [next]
+		if next.x != cur.x and next.y != cur.y:
+			hops = [Vector2i(next.x, cur.y), next] if absf(dir.x) >= absf(dir.y) else [Vector2i(cur.x, next.y), next]
+		for hop in hops:
+			if not map.in_bounds(hop):
+				return {"tile": cur}
+			if target.level == 0:
+				var cover := map.get_edge(cur, hop)
+				if cover == Cover.FULL or (cover != Cover.NONE and map.get_edge_kind(cur, hop) == "window"):
+					return {"tile": cur, "edge": TacticalMap.edge_key(cur, hop)}
+				if map.get_object(hop) == Cover.FULL:
+					return {"tile": hop}
+			cur = hop
+	return {"tile": cur}
+
+
+## Everyone a missed small-arms round from `from` at `target` could hit on its way: near the line from the
+## shooter to where the round ends (round_flight), at the target's level, nearest the shooter first.
+func round_bystanders(shooter: Unit, from: Vector2i, target: Unit) -> Array[Unit]:
+	var result: Array[Unit] = []
+	var a := Vector2(from)
+	var b := Vector2(round_flight(from, target)["tile"])
+	for u in alive_units():
+		if u == shooter or u == target or u.vehicle or u.level != target.level:
+			continue
+		var p := Vector2(u.pos)
+		var t := (p - a).dot(b - a) / maxf(0.001, a.distance_squared_to(b))
+		if t > 0.0 and t <= 1.0 and p.distance_to(a.lerp(b, t)) <= CombatRules.STRAY_ROUND_LINE:
+			result.append(u)
+	result.sort_custom(func(x: Unit, y: Unit) -> bool:
+		var dx := Vector2(x.pos).distance_squared_to(a)
+		var dy := Vector2(y.pos).distance_squared_to(a)
+		return dx < dy or (dx == dy and x.id < y.id))
+	return result
+
+
 ## Who else a shot from `from` could hurt if it misses: [{"unit", "chance" (0-1, given a miss), "damage" (expected
 ## if it does)}]. Machine guns endanger bystanders near the line of fire; rockets and shells whoever is near
 ## where they may land. Empty for other weapons.
@@ -352,6 +401,15 @@ func stray_risks(shooter: Unit, from: Vector2i, target: Unit) -> Array[Dictionar
 		var untouched := 1.0
 		for u in mg_bystanders(shooter, from, target):
 			var chance := untouched * CombatRules.MG_STRAY_CHANCE / 100.0
+			untouched -= chance
+			result.append({"unit": u, "chance": chance, "damage": maxf(0.0, half - u.armor)})
+	elif CombatRules.misses_fly_on(weapon):
+		var half := 0.0
+		for d in range(weapon.damage_min, weapon.damage_max + 1):
+			half += maxi(1, floori(d / 2.0)) / float(rolls)
+		var untouched := 1.0
+		for u in round_bystanders(shooter, from, target):
+			var chance := untouched * CombatRules.STRAY_ROUND_CHANCE / 100.0
 			untouched -= chance
 			result.append({"unit": u, "chance": chance, "damage": maxf(0.0, half - u.armor)})
 	elif weapon.anti_tank:
@@ -744,7 +802,7 @@ func detonate(u: Unit, tile: Vector2i) -> Array:
 	for known: Dictionary in known_mines:
 		known.erase(tile)
 	var events: Array = [{"type": "ied", "tile": tile}]
-	events.append_array(_explode(u, tile, CombatRules.IED_RADIUS, CombatRules.IED_DAMAGE_MIN, CombatRules.IED_DAMAGE_MAX, 0, null, CombatRules.IED_VS_ARMOR))
+	events.append_array(_explode(u, tile, CombatRules.IED_RADIUS, CombatRules.IED_DAMAGE_MIN, CombatRules.IED_DAMAGE_MAX, 0, null, CombatRules.IED_VS_ARMOR, 0, CombatRules.WALL_HITS["shell"]))
 	events.append_array(_after_action())
 	return events
 
@@ -924,6 +982,14 @@ func move(u: Unit, dest: Vector2i, level := -1, facing := Vector2i.ZERO) -> Arra
 			hazard.append_array(_detonate(null, step, crushed))
 		if map.has_mine(step) and u.level == 0:
 			hazard.append_array(_trigger_mine(u, step))
+		# Climbing in or out through a glazed window smashes it (still half cover, now without its glass).
+		if previous != step and u.level == 0 and map.get_edge(previous, step) == Cover.HALF and map.get_edge_kind(previous, step) == "window":
+			map.set_edge(previous, step, Cover.HALF, "broken_window")
+			events.append(_move_event(u, segment, segment_facings, segment_levels, tall))
+			segment = [step]
+			segment_facings = [u.facing]
+			segment_levels = [u.level]
+			events.append({"type": "window_broken", "unit": u.id, "tiles": [previous, step]})
 		if not hazard.is_empty():
 			events.append(_move_event(u, segment, segment_facings, segment_levels, tall))
 			segment = [step]
@@ -1009,6 +1075,7 @@ func suppressive_fire(u: Unit, target: Unit) -> Array:
 	u.fired = true
 	var events: Array = [{"type": "shot", "shooter": u.id, "target": target.id, "result": "suppressing", "chance": 100, "reaction": false}]
 	target.under_fire = true
+	events.append_array(_hit_cover(u, target))
 	events.append_array(_suppress(target, roundi(u.weapon.suppression * CombatRules.SUPPRESSIVE_FIRE_FACTOR)))
 	for ally in alive_units(target.team):
 		if ally != target and not ally.vehicle and Vector2(ally.pos).distance_to(Vector2(target.pos)) <= CombatRules.SUPPRESSIVE_FIRE_RADIUS:
@@ -1125,6 +1192,19 @@ func lay_trap(u: Unit, tile: Vector2i) -> Array:
 	return events
 
 
+## Whether a soldier can stand down for the rest of the turn (hold).
+func can_hold(u: Unit) -> String:
+	return can_act(u)
+
+
+## Spends a soldier's remaining actions: he stays as he is until the next turn. The last one to hold ends the turn.
+func hold(u: Unit) -> Array:
+	if can_hold(u) != "":
+		return []
+	u.actions = 0
+	return _status(u, "Holds")
+
+
 func reload(u: Unit) -> Array:
 	if can_reload(u) != "":
 		return []
@@ -1160,7 +1240,7 @@ func throw_grenade(u: Unit, tile: Vector2i) -> Array:
 		events[0]["from_level"] = u.level
 		events[0]["level"] = level
 	events.append_array(_explode(u, landing, CombatRules.GRENADE_RADIUS, CombatRules.GRENADE_DAMAGE_MIN, CombatRules.GRENADE_DAMAGE_MAX, CombatRules.GRENADE_SHRED,
-			null, CombatRules.EXPLOSION_VS_ARMOR, level))
+			null, CombatRules.EXPLOSION_VS_ARMOR, level, CombatRules.WALL_HITS["grenade"]))
 	events.append_array(_after_action())
 	return events
 
@@ -1240,6 +1320,8 @@ func _apply_command(command: Dictionary) -> Array:
 			return overwatch(u)
 		"reload":
 			return reload(u)
+		"hold":
+			return hold(u)
 		"rally":
 			return rally(u)
 		"grenade":
@@ -1300,6 +1382,9 @@ func _begin_turn(team: int) -> Array:
 	var cleared := map.clear_smoke(turn_index)
 	if not cleared.is_empty():
 		events.append({"type": "smoke_clear", "tiles": cleared})
+	# Every fire still alight at the start of the round may spread once, even one about to burn out.
+	if team == first_team:
+		events.append_array(_spread_fires())
 	var burnt_out := map.clear_fires(turn_index)
 	if not burnt_out.is_empty():
 		events.append({"type": "fire_out", "tiles": burnt_out})
@@ -1440,7 +1525,8 @@ func _land_strike(strike: Dictionary) -> Array:
 	# Shells and bombs come down on the roof (a pitched one gives way: they burst inside).
 	var level := map.top_level(landing)
 	if strike["kind"] == "he":
-		events.append_array(_explode(shooter, landing, spec["radius"], spec["damage"][0], spec["damage"][1], 0, null, CombatRules.EXPLOSION_VS_ARMOR, level))
+		events.append_array(_explode(shooter, landing, spec["radius"], spec["damage"][0], spec["damage"][1], 0, null, CombatRules.EXPLOSION_VS_ARMOR, level,
+				CombatRules.WALL_HITS["shell"]))
 	elif strike["kind"] == "napalm":
 		events.append_array(_napalm(shooter, landing, level))
 	else:
@@ -1454,8 +1540,10 @@ func _land_strike(strike: Dictionary) -> Array:
 ## `armor_loss`: what a vehicle's armour takes off the blast (less for an IED's shaped charge).
 ## `level`: the floor of `center` it goes off on. On maps with height it only hurts those within a level of
 ## that floor (shaking those within two), and only tears up cover on the ground.
+## `walls`: how many stages it knocks off the walls round the tile it lands on (x) and further out (y); see
+## TacticalMap.blast_cover and CombatRules.WALL_HITS.
 func _explode(source: Unit, center: Vector2i, radius: float, damage_min: int, damage_max: int, shred: int, spared: Unit = null,
-		armor_loss := CombatRules.EXPLOSION_VS_ARMOR, level := 0) -> Array:
+		armor_loss := CombatRules.EXPLOSION_VS_ARMOR, level := 0, walls: Vector2i = CombatRules.WALL_HITS["charge"]) -> Array:
 	var caught := []
 	for p in map.tiles_in_radius(center, radius):
 		if map.is_explosive(p):
@@ -1467,7 +1555,8 @@ func _explode(source: Unit, center: Vector2i, radius: float, damage_min: int, da
 		if map.tunnel_owner(p) != -1:
 			for known: Dictionary in known_tunnels:
 				known.erase(p)
-	var destroyed := map.destroy_cover(center, radius) if level == 0 else 0
+	var walls_before := map.get_edge_damage().duplicate()
+	var destroyed := map.blast_cover(center, radius, walls.x, walls.y) if level == 0 else 0
 	var events: Array = [{"type": "explosion", "unit": source.id if source != null else -1, "center": center, "radius": radius, "destroyed": destroyed}]
 	if level != 0:
 		events[0]["level"] = level
@@ -1487,8 +1576,205 @@ func _explode(source: Unit, center: Vector2i, radius: float, damage_min: int, da
 				events.append_array(_damage(victim, damage, shred, source))
 		if victim.is_alive() and distance <= radius + 1.0:
 			events.append_array(_suppress(victim, CombatRules.EXPLOSION_SUPPRESSION))
+	if level == 0:
+		events.append_array(_blast_fires(center, radius))
+	events.append_array(_collapse_weakened(walls_before))
 	for item: Array in caught:
 		events.append_array(_detonate(source, item[0], item[1]))
+	return events
+
+
+## A shot at someone behind a wall, hedge or fence also hits it: a tank shell or rocket knocks two stages off
+## (breaching a wall), a machine gun shoots light cover (fences, hedges, bamboo, windows) apart a stage at a
+## time but only chips stone, brick and mud. Rifles and the like leave walls standing.
+func _hit_cover(shooter: Unit, target: Unit) -> Array:
+	var weapon := shooter.weapon
+	var heavy := weapon.anti_tank or weapon.blast_radius > 0.0
+	if not heavy and weapon.kind != "mg":
+		return []
+	if target.level != 0:
+		return []
+	var key := _covering_edge(target.pos, shooter.pos)
+	if key.z < 0:
+		return []
+	var before := map.get_edge_damage().duplicate()
+	var kind := map.edge_kind(key)
+	var changed := false
+	if heavy:
+		changed = map.damage_edge(key, CombatRules.WALL_HITS["direct_heavy"])
+	elif TacticalMap.FLIMSY_EDGES.has(kind):
+		changed = map.damage_edge(key, 1)
+	else:
+		changed = map.damage_edge(key, 1, 1)
+	if not changed:
+		return []
+	var pair := TacticalMap.edge_tiles(key)
+	var events: Array = [{"type": "wall_hit", "tiles": [pair[0], pair[1]], "kind": kind, "damage": map.edge_damage(key)}]
+	events.append_array(_collapse_weakened(before))
+	return events
+
+
+## The edge between `target` and an attacker at `from` that gives the target its cover (the strongest one
+## facing the attacker), or a key with z = -1 if none.
+func _covering_edge(target: Vector2i, from: Vector2i) -> Vector3i:
+	var offset := from - target
+	var best := Vector3i(0, 0, -1)
+	var best_cover := Cover.NONE
+	for d: Vector2i in TacticalMap.DIRS4:
+		var along := offset.x * d.x + offset.y * d.y
+		var across := absi(offset.x * d.y - offset.y * d.x)
+		if along > 0 and along * 2 >= across:
+			var cover := map.get_edge(target, target + d)
+			if cover > best_cover:
+				best_cover = cover
+				best = TacticalMap.edge_key(target, target + d)
+	return best
+
+
+## Buildings of two storeys or more whose walls were knocked about since `before` (a copy of the map's edge
+## damage) come down once half their outer walls are breached or gone (CombatRules.COLLAPSE_SHARE).
+func _collapse_weakened(before: Dictionary) -> Array:
+	var events: Array = []
+	var checked := {}
+	for key: Vector3i in map.get_edge_damage():
+		if before.get(key, 0) == map.edge_damage(key):
+			continue
+		for p: Vector2i in TacticalMap.edge_tiles(key):
+			if checked.has(p) or not map.in_bounds(p) or map.get_storeys(p) < 2:
+				continue
+			var building := _building_tiles(p)
+			for q: Vector2i in building:
+				checked[q] = true
+			if _building_broken(building):
+				events.append_array(_collapse(building))
+	return events
+
+
+## The tiles of the building of two storeys or more that p belongs to (4-connected).
+func _building_tiles(p: Vector2i) -> Array[Vector2i]:
+	var tiles: Array[Vector2i] = [p]
+	var seen := {p: true}
+	var head := 0
+	while head < tiles.size():
+		var q := tiles[head]
+		head += 1
+		for d: Vector2i in TacticalMap.DIRS4:
+			var n := q + d
+			if not seen.has(n) and map.in_bounds(n) and map.get_storeys(n) >= 2:
+				seen[n] = true
+				tiles.append(n)
+	return tiles
+
+
+## Whether at least CombatRules.COLLAPSE_SHARE of a building's outer walls (not counting doorways) are breached
+## or gone.
+func _building_broken(tiles: Array[Vector2i]) -> bool:
+	var inside := {}
+	for p in tiles:
+		inside[p] = true
+	var walls := 0
+	var broken := 0
+	for p in tiles:
+		for d: Vector2i in TacticalMap.DIRS4:
+			if inside.has(p + d):
+				continue
+			var key := TacticalMap.edge_key(p, p + d)
+			var damage := map.edge_damage(key)
+			if map.get_edges().has(key) or damage >= 3:
+				walls += 1
+				if damage >= 2:
+					broken += 1
+	return walls > 0 and broken >= walls * CombatRules.COLLAPSE_SHARE
+
+
+## A building falls in: it becomes a heap of rubble inside walls broken down to stumps. Everyone in it is hurt,
+## those upstairs worse the further they fall, and all of them end up on the ground, badly shaken.
+func _collapse(tiles: Array[Vector2i]) -> Array:
+	var inside := {}
+	for p in tiles:
+		inside[p] = true
+	var center := Vector2.ZERO
+	for p in tiles:
+		center += Vector2(p)
+	var events: Array = [{"type": "collapse", "tiles": tiles.duplicate(), "center": Vector2i((center / tiles.size()).round())}]
+	for p in tiles:
+		for d: Vector2i in TacticalMap.DIRS4:
+			var key := TacticalMap.edge_key(p, p + d)
+			if inside.has(p + d):
+				map.set_edge(p, p + d, Cover.NONE)
+			elif map.get_edges().has(key):
+				map.damage_edge(key, maxi(0, 2 - map.edge_damage(key)))
+		map.set_stairs(p, false)
+		map.set_storeys(p, 1)
+		map.set_object(p, Cover.NONE)
+		map.set_terrain(p, TacticalMap.Terrain.RUBBLE)
+	for u in alive_units():
+		if not inside.has(u.pos) or u.vehicle:
+			continue
+		var fell := u.level
+		u.level = 0
+		var damage := rng.randi_range(CombatRules.COLLAPSE_DAMAGE[0], CombatRules.COLLAPSE_DAMAGE[1]) + fell * CombatRules.COLLAPSE_FALL_DAMAGE
+		events.append({"type": "status", "unit": u.id, "text": "Buried!" if fell == 0 else "Falls %d floor%s!" % [fell, "" if fell == 1 else "s"]})
+		events.append_array(_damage(u, damage, 0))
+		if u.is_alive():
+			events.append_array(_suppress(u, CombatRules.COLLAPSE_SUPPRESSION))
+	return events
+
+
+## What catches fire in a blast (see CombatRules.BLAST_FIRE_CHANCE).
+func _blast_fires(center: Vector2i, radius: float) -> Array:
+	var burning: Array[Vector2i] = []
+	for p in map.tiles_in_radius(center, radius):
+		if map.has_fire(p) or map.get_object(p) != Cover.NONE or unit_at(p) != null or map.has_vehicle(p):
+			continue
+		var chance: float = CombatRules.BLAST_FIRE_CHANCE.get(map.get_terrain(p), 0.0)
+		if chance <= 0.0:
+			continue
+		if p == center:
+			chance += CombatRules.BLAST_FIRE_CENTER
+		if rng.randf() < chance:
+			_ignite(p)
+			burning.append(p)
+	if burning.is_empty():
+		return []
+	return [{"type": "fire", "tiles": burning}]
+
+
+## Sets tile p alight for CombatRules.BLAST_FIRE_TURNS. Crops, grass and undergrowth burn away to scorched ground.
+func _ignite(p: Vector2i) -> void:
+	if map.get_terrain(p) in [TacticalMap.Terrain.JUNGLE, TacticalMap.Terrain.TALL_GRASS, TacticalMap.Terrain.WHEAT, TacticalMap.Terrain.TRAMPLED]:
+		map.set_terrain(p, TacticalMap.Terrain.ROUGH)
+	map.add_fire(p, turn_index + CombatRules.BLAST_FIRE_TURNS)
+
+
+## Fires creep into the tiles beside them (CombatRules.FIRE_SPREAD_CHANCE), and set off drums next to them.
+func _spread_fires() -> Array:
+	var spread: Array[Vector2i] = []
+	var cook_off := []
+	# Decided against the fires as they were, so a new fire doesn't spread again the same round.
+	var burning: Array = map.get_fires().keys()
+	burning.sort()
+	for from: Vector2i in burning:
+		for d: Vector2i in TacticalMap.DIRS4:
+			var p := from + d
+			if not map.in_bounds(p) or map.has_fire(p) or map.get_edge(from, p) != Cover.NONE:
+				continue
+			if map.is_explosive(p):
+				if not cook_off.any(func(item: Array) -> bool: return item[0] == p) and rng.randf() < CombatRules.FIRE_COOK_OFF:
+					cook_off.append([p, map.get_object_kind(p)])
+				continue
+			if map.get_object(p) != Cover.NONE or unit_at(p) != null or map.has_vehicle(p):
+				continue
+			var chance: float = CombatRules.FIRE_SPREAD_CHANCE.get(map.get_terrain(p), 0.0)
+			if chance > 0.0 and rng.randf() < chance:
+				_ignite(p)
+				spread.append(p)
+	var events: Array = []
+	if not spread.is_empty():
+		events.append({"type": "fire", "tiles": spread, "spread": true})
+	for item: Array in cook_off:
+		if map.get_object_kind(item[0]) == item[1]:
+			events.append_array(_detonate(null, item[0], item[1]))
 	return events
 
 
@@ -1537,7 +1823,8 @@ func _detonate(source: Unit, tile: Vector2i, kind: String) -> Array:
 	if map.get_object_kind(tile) == kind:
 		map.set_object(tile, Cover.NONE)
 	var events: Array = [{"type": "detonation", "tile": tile, "kind": kind}]
-	events.append_array(_explode(source, tile, spec["radius"], spec["damage_min"], spec["damage_max"], 0))
+	events.append_array(_explode(source, tile, spec["radius"], spec["damage_min"], spec["damage_max"], 0, null, CombatRules.EXPLOSION_VS_ARMOR, 0,
+			CombatRules.WALL_HITS["shell"]))
 	var burning: Array[Vector2i] = []
 	for p in map.tiles_in_radius(tile, spec["fire"]):
 		if map.get_object(p) == Cover.NONE and map.get_terrain(p) != TacticalMap.Terrain.INDOOR:
@@ -1557,7 +1844,7 @@ func _trigger_mine(u: Unit, tile: Vector2i) -> Array:
 		known.erase(tile)
 	if kind == "ied":
 		var blast: Array = [{"type": "mine", "unit": u.id, "tile": tile, "kind": kind}]
-		blast.append_array(_explode(null, tile, CombatRules.IED_RADIUS, CombatRules.IED_DAMAGE_MIN, CombatRules.IED_DAMAGE_MAX, 0, null, CombatRules.IED_VS_ARMOR))
+		blast.append_array(_explode(null, tile, CombatRules.IED_RADIUS, CombatRules.IED_DAMAGE_MIN, CombatRules.IED_DAMAGE_MAX, 0, null, CombatRules.IED_VS_ARMOR, 0, CombatRules.WALL_HITS["shell"]))
 		return blast
 	if kind == "punji":
 		if u.vehicle:
@@ -1568,7 +1855,8 @@ func _trigger_mine(u: Unit, tile: Vector2i) -> Array:
 			trap.append_array(_suppress(u, CombatRules.HIT_SUPPRESSION_BONUS))
 		return trap
 	var events: Array = [{"type": "mine", "unit": u.id, "tile": tile}]
-	events.append_array(_explode(null, tile, CombatRules.MINE_RADIUS, CombatRules.MINE_DAMAGE_MIN, CombatRules.MINE_DAMAGE_MAX, 0))
+	events.append_array(_explode(null, tile, CombatRules.MINE_RADIUS, CombatRules.MINE_DAMAGE_MIN, CombatRules.MINE_DAMAGE_MAX, 0, null, CombatRules.EXPLOSION_VS_ARMOR, 0,
+			CombatRules.WALL_HITS["grenade"]))
 	return events
 
 
@@ -1702,7 +1990,8 @@ func _stray(shooter: Unit, target: Unit, shot: Dictionary) -> Array:
 	var level := landing_level(landing, map.floor_height(target.pos, target.level))
 	if victim != null and victim.level != level:
 		victim = null
-	events.append_array(_explode(shooter, landing, radius, CombatRules.SPLASH_DAMAGE_MIN, CombatRules.SPLASH_DAMAGE_MAX, 0, victim, CombatRules.EXPLOSION_VS_ARMOR, level))
+	events.append_array(_explode(shooter, landing, radius, CombatRules.SPLASH_DAMAGE_MIN, CombatRules.SPLASH_DAMAGE_MAX, 0, victim, CombatRules.EXPLOSION_VS_ARMOR, level,
+			CombatRules.WALL_HITS["shell"]))
 	if victim != null and victim.is_alive():
 		# A direct hit (after the blast, so a knocked-out tank's wreck survives it).
 		shot["stray_unit"] = victim.id
@@ -1710,6 +1999,32 @@ func _stray(shooter: Unit, target: Unit, shot: Dictionary) -> Array:
 		if victim.vehicle:
 			damage = maxi(0, damage - CombatRules.armor_value(victim, CombatRules.armor_side(victim, shooter.pos)))
 		events.append_array(_damage(victim, damage, 0, shooter))
+	return events
+
+
+## Where a missed rifle, pistol or SMG round goes: it may hit someone near its flight (half damage),
+## otherwise it ends in whatever stopped it, shattering a glazed window. Marks the shot event like _stray,
+## plus "stray_edge" (the two tiles either side) when a wall or window stopped it.
+func _stray_round(shooter: Unit, target: Unit, shot: Dictionary) -> Array:
+	var weapon := shooter.weapon
+	var events := []
+	for bystander in round_bystanders(shooter, shooter.pos, target):
+		if rng.randi_range(0, 99) < CombatRules.STRAY_ROUND_CHANCE:
+			shot["stray"] = bystander.pos
+			shot["stray_unit"] = bystander.id
+			var damage := maxi(1, floori(rng.randi_range(weapon.damage_min, weapon.damage_max) / 2.0))
+			events.append_array(_damage(bystander, damage, 0, shooter))
+			if bystander.is_alive():
+				events.append_array(_suppress(bystander, CombatRules.HIT_SUPPRESSION_BONUS))
+			return events
+	var flight := round_flight(shooter.pos, target)
+	shot["stray"] = flight["tile"]
+	if flight.has("edge"):
+		var key: Vector3i = flight["edge"]
+		var pair := TacticalMap.edge_tiles(key)
+		shot["stray_edge"] = [pair[0], pair[1]]
+		if map.edge_kind(key) == "window" and map.damage_edge(key, 1, 1):
+			events.append({"type": "window_broken", "unit": shooter.id, "tiles": [pair[0], pair[1]], "shot": true})
 	return events
 
 
@@ -1765,6 +2080,8 @@ func _fire(shooter: Unit, target: Unit, reaction: bool, steady := false) -> Arra
 		"result": result, "chance": odds["hit"], "reaction": reaction,
 	}]
 	var weapon := shooter.weapon
+	# What the round does to the target, shown after the blast it sets off (the dice are rolled in this order).
+	var on_target: Array = []
 	if result != "miss":
 		var damage := rng.randi_range(weapon.damage_min, weapon.damage_max)
 		if result == "crit":
@@ -1772,19 +2089,32 @@ func _fire(shooter: Unit, target: Unit, reaction: bool, steady := false) -> Arra
 		elif result == "graze":
 			damage = maxi(1, floori(damage / 2.0))
 		if target.vehicle and not weapon.anti_tank:
-			events.append({"type": "status", "unit": target.id, "text": "Bounced off the armour"})
+			on_target.append({"type": "status", "unit": target.id, "text": "Bounced off the armour"})
 		else:
 			if target.vehicle:
 				var side := CombatRules.armor_side(target, shooter.pos)
 				events[0]["armor"] = side
 				damage = maxi(0, damage - CombatRules.armor_value(target, side))
-			events.append_array(_damage(target, damage, 0, shooter))
+			on_target.append_array(_damage(target, damage, 0, shooter))
+	var cover_hit := _hit_cover(shooter, target)
 	if result == "miss" and CombatRules.misses_stray(weapon):
+		events.append_array(cover_hit)
 		events.append_array(_stray(shooter, target, events[0]))
+	elif result == "miss" and CombatRules.misses_fly_on(weapon):
+		events.append_array(cover_hit)
+		events.append_array(_stray_round(shooter, target, events[0]))
 	elif weapon.blast_radius > 0.0 and result != "miss":
-		# High explosive bursts on the target.
-		events.append_array(_explode(shooter, target.pos, weapon.blast_radius, CombatRules.SPLASH_DAMAGE_MIN, CombatRules.SPLASH_DAMAGE_MAX, 0, target,
-				CombatRules.EXPLOSION_VS_ARMOR, target.level))
+		# High explosive bursts on the target: the blast shows first, then what the hit did to him.
+		var blast := _explode(shooter, target.pos, weapon.blast_radius, CombatRules.SPLASH_DAMAGE_MIN, CombatRules.SPLASH_DAMAGE_MAX, 0, target,
+				CombatRules.EXPLOSION_VS_ARMOR, target.level, CombatRules.WALL_HITS["shell"])
+		events.append(blast[0])
+		events.append_array(cover_hit)
+		events.append_array(on_target)
+		events.append_array(blast.slice(1))
+		on_target = []
+	else:
+		events.append_array(cover_hit)
+	events.append_array(on_target)
 	if target.is_alive():
 		var suppression := shooter.weapon.suppression + (CombatRules.HIT_SUPPRESSION_BONUS if result != "miss" else 0)
 		events.append_array(_suppress(target, suppression))

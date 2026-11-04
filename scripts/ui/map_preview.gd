@@ -82,8 +82,11 @@ static func render(layout: Dictionary, theatre_id := "", team_colors := [Color("
 		_ring(image, Vector2(objective["center"]) * k, float(objective["radius"]) * k, OBJECTIVE)
 	var spawns: Array = layout.get("spawns", [[], []])
 	for team in spawns.size():
+		# Each soldier a dot a little bigger than his tile, outlined, so the deployment reads at a glance.
 		for p: Vector2i in spawns[team]:
-			image.fill_rect(Rect2i(p.x * k, p.y * k, k, k), team_colors[team])
+			image.fill_rect(Rect2i(p.x * k - 2, p.y * k - 2, k + 4, k + 4).intersection(Rect2i(Vector2i.ZERO, image.get_size())), Color(0.05, 0.05, 0.05))
+		for p: Vector2i in spawns[team]:
+			image.fill_rect(Rect2i(p.x * k - 1, p.y * k - 1, k + 2, k + 2).intersection(Rect2i(Vector2i.ZERO, image.get_size())), team_colors[team])
 	return image
 
 

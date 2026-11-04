@@ -16,7 +16,7 @@ const DrawLayer := preload("res://scripts/view/draw_layer.gd")
 const PANEL_WIDTH := 280.0
 const TOP_BAR_HEIGHT := 50.0
 ## Controls listed by the "?" button in the top bar.
-const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel\nHold right click while moving: targets from there\nTab next unit   Enter end turn\n1-9, 0: actions, by their place on the bar (1 shoot, 2 overwatch, 3 reload, 4 prone; 5 on: the role's own)\nH: suggest a move (Shift+H: this soldier)\nWASD / arrows / middle drag: pan\nWheel: cursor height in tall buildings (zoom on flat maps)\nCtrl/Cmd + wheel or pinch: zoom   F: focus selected\nQ / E: rotate   V: iso / top-down\nPage Up / Down or wheel: cursor up / down a floor\n+ / -: playback speed   M: music on / off"
+const HELP_TEXT := "Left click: select, move, target\nRight click / Esc: cancel (Esc again: deselect, then drag the map)\nHold right click while moving: targets from there\nSpace: done with this soldier   Tab next unit   Enter end turn\n1-9, 0: actions, by their place on the bar (1 shoot, 2 overwatch, 3 reload, 4 prone; 5 on: the role's own)\nH: suggest a move (Shift+H: this soldier)\nWASD / arrows / middle drag: pan\nWheel or pinch: zoom   F: focus selected\nCtrl/Cmd + wheel: cursor height in tall buildings\nQ / E: rotate   V: iso / top-down\nPage Up / Down or Ctrl/Cmd + wheel: cursor up / down a floor\n+ / -: playback speed   M: music on / off"
 const NEUTRAL_COLOR := Color("e8e2cf")
 ## The selected unit's ring and the chevron over its head.
 const SELECTION_COLOR := Color("ffd34d")
@@ -30,7 +30,7 @@ const DASH_COLOR := Color("f5c542")
 const SPOTTED_COLOR := Color("ff6a3d")
 ## The selected soldier's field of fire: where he can shoot.
 const FIRE_COLOR := Color("ff3b30")
-const KEY_ACTIONS := {KEY_TAB: "next", KEY_ENTER: "end", KEY_KP_ENTER: "end"}
+const KEY_ACTIONS := {KEY_TAB: "next", KEY_SPACE: "hold", KEY_ENTER: "end", KEY_KP_ENTER: "end"}
 ## Number keys, by the bar slot they press (1 the first, 0 the tenth).
 const SLOT_KEYS := {KEY_1: 1, KEY_2: 2, KEY_3: 3, KEY_4: 4, KEY_5: 5, KEY_6: 6, KEY_7: 7, KEY_8: 8, KEY_9: 9, KEY_0: 10}
 ## Actions every soldier has, always on the same key: [action, slot]. Tanks have no stance, so 4 stays empty.
@@ -46,9 +46,9 @@ const ACTION_BUTTONS := [
 	["medkit", "Medkit"], ["mortar", "Mortar"], ["trap", "Lay a trap"], ["detonate", "Set off an IED"],
 	["charge", "Plant a demolition charge, or pull one"], ["tunnel", "Through the tunnels: up at another entrance (both actions)"],
 	["clear_mine", "Clear a mine, or blow in a tunnel"],
-	["next", "Next soldier"], ["end", "End turn"],
+	["hold", "Hold: done with this soldier for the turn"], ["next", "Next soldier"], ["end", "End turn"],
 ]
-const TURN_KEYS := {"next": "Tab", "end": "Enter"}
+const TURN_KEYS := {"hold": "Space", "next": "Tab", "end": "Enter"}
 const SHOT_LABELS := {"miss": "MISS", "graze": "GRAZE", "hit": "HIT", "crit": "CRITICAL", "suppressing": "SUPPRESSING FIRE"}
 const STANCE_COLOR := "8fd3ff"
 ## Seconds a soldier takes to fall, and for a tank to brew up.
@@ -71,7 +71,7 @@ const GROUND_Z := -4
 const SHADOW_Z := -3
 const FOG_Z := -2
 const OVERLAY_Z := -1
-## Seconds between floor changes from the mouse wheel, so one flick of the wheel moves one floor.
+## Seconds between floor changes from Ctrl/Cmd + mouse wheel, so one flick of the wheel moves one floor.
 const FLOOR_STEP_DELAY := 0.18
 ## Camera movement per unit of a trackpad's two-finger pan.
 const PAN_GESTURE_SPEED := 14.0
@@ -174,7 +174,7 @@ var _floaters := []
 var _effects := []
 var _overlay_state := ""
 ## Cursor height, XCOM-style: the floor the cursor aims at (0 ground, 1 the first floor up, ..., a building's
-## roof at its storeys), set with the mouse wheel and starting at the selected soldier's floor. Only the
+## roof at its storeys), set with Ctrl/Cmd + mouse wheel and starting at the selected soldier's floor. Only the
 ## building under the cursor is drawn cut open at that floor (its floors above hidden); every other building
 ## keeps its roof on (ALL_FLOORS). Picking treats every building as cut at the cursor's floor, so what is
 ## picked never depends on what is hovered. In the open building, moves go to exactly the cursor's floor.
@@ -394,7 +394,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			_set_mode(Mode.MOVE)
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
-			_set_mode(Mode.MOVE)
+			# Cancels the action being aimed; while just moving, lets go of the soldier, so the left button
+			# drags the map.
+			if mode != Mode.MOVE:
+				_set_mode(Mode.MOVE)
+			elif selected != null:
+				_select(null)
 		elif KEY_ACTIONS.has(event.keycode):
 			_on_action(KEY_ACTIONS[event.keycode])
 		elif SLOT_KEYS.has(event.keycode) and _slot_actions.has(SLOT_KEYS[event.keycode]):
@@ -412,8 +417,8 @@ func _handle_camera_input(event: InputEvent) -> bool:
 		match event.button_index:
 			MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN when event.pressed:
 				var up: bool = event.button_index == MOUSE_BUTTON_WHEEL_UP
-				# With tall buildings about, the wheel goes up and down their floors; Ctrl/Cmd + wheel zooms.
-				if _wheel_steps_floors() and not (event.ctrl_pressed or event.meta_pressed):
+				# The wheel zooms; Ctrl/Cmd + wheel goes up and down the floors of tall buildings (if there are any).
+				if _wheel_steps_floors() and (event.ctrl_pressed or event.meta_pressed):
 					if _time - _last_floor_step >= FLOOR_STEP_DELAY:
 						_last_floor_step = _time
 						_change_cursor_level(1 if up else -1)
@@ -635,6 +640,13 @@ func _on_action(action: String) -> void:
 		_select(_next_ready_unit(selected), true)
 		return
 	if selected == null:
+		return
+	if action == "hold":
+		var why := battle.can_hold(selected)
+		if why != "":
+			_flash(why)
+		else:
+			_command({"cmd": "hold", "unit": selected.id})
 		return
 	var err := ""
 	match action:
@@ -909,7 +921,7 @@ func _unit_point(u: Unit, height: float) -> Vector2:
 	return _proj.project(_display_pos[u.id], height + _unit_lift(u))
 
 
-## Whether the mouse wheel shows floors rather than zooming: on maps with buildings of two storeys or more.
+## Whether Ctrl/Cmd + wheel shows floors (rather than zooming too): on maps with buildings of two storeys or more.
 func _wheel_steps_floors() -> bool:
 	return not battle.map.get_tall_buildings().is_empty()
 
@@ -1285,7 +1297,7 @@ func _play_event(e: Dictionary) -> void:
 			_hold_layout = false
 			_effects.append({"kind": "explosion", "at": _center(e["center"]), "radius": e["radius"] + 0.5, "age": 0.0, "life": 1.4,
 					"lift": TerrainPainter.floor_lift(battle.map, e["center"], e.get("level", 0))})
-			_log_line("Explosion: %d pieces of cover destroyed." % e["destroyed"])
+			_log_line("Explosion: %d pieces of cover damaged or destroyed." % e["destroyed"])
 			await _wait(0.6)
 		"smoke":
 			_effects.append({"kind": "puff_burst", "at": _center(e["center"]), "age": 0.0, "life": 0.8, "lift": _lift_at(_center(e["center"]))})
@@ -1297,7 +1309,11 @@ func _play_event(e: Dictionary) -> void:
 			_float(_center(e["tile"]), "KABOOM!", Color("ff8a3d"))
 			_log_line("[color=#ff9b6b]The %s %s![/color]" % [_object_name(e["kind"]).to_lower(), "go up" if e["kind"] == "fuel" else "goes up"])
 		"fire":
-			_log_line("[color=#ffb84d]Fire spreads over %d tiles.[/color]" % e["tiles"].size())
+			var count: int = e["tiles"].size()
+			if e.get("spread", false):
+				_log_line("[color=#ffb84d]The fire spreads to %d more tile%s.[/color]" % [count, "" if count == 1 else "s"])
+			else:
+				_log_line("[color=#ffb84d]%d tile%s catch fire.[/color]" % [count, "" if count == 1 else "s"])
 		"fire_out":
 			_log_line("[color=#999]The fire burns out.[/color]")
 		"mine":
@@ -1314,6 +1330,34 @@ func _play_event(e: Dictionary) -> void:
 				var finder := battle.get_unit(e["unit"])
 				_log_line("%s %d tunnel entrance%s." % ["%s finds" % finder.name if finder != null else "Found", e["tiles"].size(), "" if e["tiles"].size() == 1 else "s"])
 				await _wait(0.3)
+		"wall_hit":
+			_hold_layout = false
+			var at: Vector2 = (_center(e["tiles"][0]) + _center(e["tiles"][1])) * 0.5
+			_effects.append({"kind": "puff_burst", "at": at, "age": 0.0, "life": 0.6})
+			var damage: int = e["damage"]
+			var what: String = {"hedge": "Hedge", "fence": "Fence"}.get(e["kind"], "Wall")
+			var text: String = ("%s gone" % what) if damage >= 3 or (damage >= 2 and not TacticalMap.FULL_EDGE_KINDS.has(e["kind"])) else ("%s breached" % what if damage >= 2 else "%s hit" % what)
+			_float(at, text, Color("d8c8a8"))
+			_log_line("%s." % text)
+		"collapse":
+			_hold_layout = false
+			var center := _center(e["center"])
+			_effects.append({"kind": "explosion", "at": center, "radius": sqrt(float(e["tiles"].size())) + 1.0, "age": 0.0, "life": 1.8, "lift": 0.0})
+			_float(center, "COLLAPSE!", Color("ffb84d"))
+			_log_line("[color=#ffb84d]The building comes down![/color]")
+			await _wait(0.8)
+		"window_broken":
+			_hold_layout = false
+			var crasher := battle.get_unit(e["unit"])
+			var at: Vector2 = (_center(e["tiles"][0]) + _center(e["tiles"][1])) * 0.5
+			if _view_team() == -1 or _seen_units.has(crasher.id) or _visible_tiles.has(e["tiles"][0]) or _visible_tiles.has(e["tiles"][1]):
+				_float(at, "CRASH", Color("cfe6f5"))
+				_effects.append({"kind": "puff_burst", "at": at, "age": 0.0, "life": 0.5})
+				if e.get("shot", false):
+					_log_line("A stray round shatters a window.")
+				else:
+					_log_line("%s smashes through a window." % crasher.name if _knows(crasher) or _seen_units.has(crasher.id) else "Glass breaks.")
+				await _wait(0.2)
 		"tunnel_collapsed":
 			_float(_center(e["tile"]), "Tunnel blown in", Color("8fe08a"))
 			_effects.append({"kind": "puff_burst", "at": _center(e["tile"]), "age": 0.0, "life": 0.8})
@@ -1534,14 +1578,21 @@ func _play_move(e: Dictionary) -> void:
 	var u := battle.get_unit(e["unit"])
 	var path: Array = e["path"]
 	var watched := u.team != _view_team() and _view_team() != -1
-	if controllers[u.team] != null and (not watched or _viewer_sees(path[0]) or _viewer_sees(path[-1])) and _follows(u.team):
-		_focus(_center(path[int(path.size() / 2.0)]))
+	var levels: Array = e.get("levels", [])
+	if controllers[u.team] != null and _follows(u.team):
+		# An enemy is only followed where the viewer's side can actually see him: the camera goes to the stretch
+		# of the move in sight, and stays put if none of it is.
+		var seen: Array[Vector2] = []
+		for i in path.size():
+			if not watched or _viewer_sees_unit(u, path[i], levels[i] if i < levels.size() else 0):
+				seen.append(_center(path[i]))
+		if not seen.is_empty():
+			_focus(seen[int(seen.size() / 2.0)])
 	if GameSettings.instant_movement:
 		await _jump_move(u, e)
 		return
 	_walking[u.id] = true
 	var facings: Array = e.get("facings", [])
-	var levels: Array = e.get("levels", [])
 	for i in range(1, path.size()):
 		if u.vehicle and i < facings.size():
 			# Tanks turn before they drive on, and back up without turning.
@@ -1549,7 +1600,7 @@ func _play_move(e: Dictionary) -> void:
 		elif path[i] != path[i - 1]:
 			_facing[u.id] = Vector2(path[i] - path[i - 1]).normalized()
 		if watched:
-			_move_visibility[u.id] = _viewer_sees(path[i])
+			_move_visibility[u.id] = _viewer_sees_unit(u, path[i], levels[i] if i < levels.size() else 0)
 		var height := TerrainPainter.floor_lift(battle.map, path[i], levels[i] if i < levels.size() else 0)
 		var duration := 0.3 if u.vehicle else (0.28 if path[i] == path[i - 1] else 0.16)
 		await _tween_unit(u.id, _center(path[i]), duration, height)
@@ -1566,15 +1617,30 @@ func _jump_move(u: Unit, e: Dictionary) -> void:
 		_facing[u.id] = Vector2(facings[-1]).normalized()
 	elif path.size() > 1:
 		_facing[u.id] = Vector2(path[-1] - path[-2]).normalized()
-	if u.team != _view_team() and _view_team() != -1:
-		_move_visibility[u.id] = _viewer_sees(path[-1])
-	_display_pos[u.id] = _center(path[-1])
 	var levels: Array = e.get("levels", [])
+	if u.team != _view_team() and _view_team() != -1:
+		_move_visibility[u.id] = _viewer_sees_unit(u, path[-1], levels[-1] if not levels.is_empty() else 0)
+	_display_pos[u.id] = _center(path[-1])
 	_display_height[u.id] = TerrainPainter.floor_lift(battle.map, path[-1], levels[-1] if not levels.is_empty() else 0)
 	if u.vehicle:
 		for tile: Vector2i in path:
 			_hide_crushed(tile)
 	await _wait(0.1)
+
+
+## On a turn played elsewhere (the AI, an online opponent), brings an attack on screen before it plays, so
+## the shot or throw is seen before what it does: the camera goes between attacker and target and waits for
+## the pan. Nothing moves if both are on screen already, or the camera doesn't follow that side.
+func _frame_exchange(attacker: Unit, at: Vector2) -> void:
+	if controllers[attacker.team] == null or not _follows(attacker.team) or not is_inside_tree():
+		return
+	var from: Vector2 = _display_pos[attacker.id]
+	var screen := Rect2(_camera.position - get_viewport_rect().size / _camera.zoom * 0.5, get_viewport_rect().size / _camera.zoom).grow(-60.0)
+	var shift := _view_shift()
+	if screen.has_point(_proj.project(from) + shift) and screen.has_point(_proj.project(at) + shift):
+		return
+	_focus((from + at) * 0.5)
+	await _wait(0.4)
 
 
 ## Whether the camera follows a team's moves: always your own, the opponent's only if the setting says so.
@@ -1590,6 +1656,7 @@ func _play_shot(e: Dictionary) -> void:
 	_revealed[shooter.id] = true
 	_revealed[target.id] = true
 	_facing[shooter.id] = (_display_pos[target.id] - _display_pos[shooter.id]).normalized()
+	await _frame_exchange(shooter, _display_pos[target.id])
 	if e["reaction"]:
 		_float(_display_pos[shooter.id], "OVERWATCH!", Color("ffd34d"))
 		await _wait(0.45)
@@ -1603,6 +1670,9 @@ func _play_shot(e: Dictionary) -> void:
 	var hit: bool = e["result"] != "miss" and not suppressing
 	if e.has("stray_unit"):
 		to = _unit_point(battle.get_unit(e["stray_unit"]), 0.7)
+	elif e.has("stray_edge"):
+		var wall: Vector2 = (_center(e["stray_edge"][0]) + _center(e["stray_edge"][1])) * 0.5
+		to = _proj.project(wall, 0.5 + _lift_at(_center(e["stray"])))
 	elif e.has("stray"):
 		to = _proj.project(_center(e["stray"]), 0.3 + _lift_at(_center(e["stray"])))
 	elif not hit:
@@ -1641,6 +1711,7 @@ func _play_throw(e: Dictionary) -> void:
 	if landing != _display_pos[u.id]:
 		_facing[u.id] = (landing - _display_pos[u.id]).normalized()
 	_revealed[u.id] = true
+	await _frame_exchange(u, landing)
 	_effects.append({"kind": "shell", "from": _display_pos[u.id], "to": landing, "age": 0.0, "life": 0.5,
 			"lift": _unit_lift(u), "to_lift": TerrainPainter.floor_lift(battle.map, e["center"], e.get("level", 0))})
 	await _wait(0.5)
@@ -1723,6 +1794,18 @@ func _play_mortar_fire(e: Dictionary) -> void:
 	else:
 		_log_line("%s fires a %s round. It lands at the start of their next turn." % [u.name, round_name])
 	await _wait(0.8)
+
+
+## Whether the viewer's side would see unit u standing on `tile` (at `level`): the tile in someone's sight and
+## u not hidden there (in the wheat, the jungle...) from him.
+func _viewer_sees_unit(u: Unit, tile: Vector2i, level := 0) -> bool:
+	var team := _view_team()
+	if team == -1 or u.team == team:
+		return true
+	for v in battle.alive_units(team):
+		if battle.sees_tile(v.pos, v.level, tile, v.sight) and not Battle.hidden_at(battle.map, v.pos, u, tile, level):
+			return true
+	return false
 
 
 func _viewer_sees(tile: Vector2i) -> bool:
@@ -1987,6 +2070,7 @@ func _update_panel() -> void:
 		button.queue_redraw()
 	_buttons["suppress"].disabled = s == null or battle.can_fire(s) != "" or s.ammo < CombatRules.SUPPRESSIVE_FIRE_AMMO
 	_buttons["next"].disabled = s == null or _next_ready_unit(s) == null
+	_buttons["hold"].disabled = s == null or battle.can_hold(s) != ""
 	_buttons["end"].disabled = battle.winner != -1 or not _is_human_turn()
 	# Only there while someone at this screen can give orders.
 	_action_bar.visible = replay == null and battle.winner == -1 and _is_human_turn() and not _agent_turn()
@@ -2306,7 +2390,7 @@ func _build_ui() -> void:
 	_add_button(view_row, "toggle_view", "V Iso / top")
 	if not battle.map.get_tall_buildings().is_empty():
 		_add_button(view_row, "floors", "Cursor: ground")
-		_buttons["floors"].tooltip_text = "The floor the cursor aims at (mouse wheel, or Page Up / Page Down). The building under the cursor opens up at that floor and moves go there. Ctrl/Cmd + wheel zooms"
+		_buttons["floors"].tooltip_text = "The floor the cursor aims at (Ctrl/Cmd + mouse wheel, or Page Up / Page Down). The building under the cursor opens up at that floor and moves go there. The wheel alone zooms"
 	_add_button(view_row, "speed", "Speed 1x")
 	var help_button := Button.new()
 	help_button.text = "?"
@@ -2446,7 +2530,7 @@ func _build_action_bar(layer: CanvasLayer) -> void:
 		button.pressed.connect(_on_action.bind(spec[0]))
 		button.mouse_entered.connect(func() -> void: _action_caption.text = button.describe())
 		button.mouse_exited.connect(func() -> void: _action_caption.text = "")
-		(turn if spec[0] in ["next", "end"] else actions).add_child(button)
+		(turn if TURN_KEYS.has(spec[0]) else actions).add_child(button)
 		_buttons[spec[0]] = button
 	_buttons["end"].theme_type_variation = "PrimaryButton"
 	_buttons["end"].primary = true

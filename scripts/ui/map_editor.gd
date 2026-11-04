@@ -30,7 +30,7 @@ const BAD := Color("ff7a6a")
 const GOOD := Color("8fe08a")
 ## "mine" isn't an object: it buries a mine (hidden from both sides in play) instead.
 const OBJECT_KINDS := ["tree", "rock", "sandbags", "crate", "hay", "pew", "fuel", "oil_tank", "palm", "bamboo", "rice_sacks", "car", "hesco", "jersey", "howitzer", "mine"]
-const EDGE_KINDS := ["hedge", "wall", "window", "stone", "fence", "dyke", "bamboo_wall", "bamboo_window", "mud_wall", "mud_window"]
+const EDGE_KINDS := ["hedge", "wall", "window", "broken_window", "stone", "fence", "dyke", "bamboo_wall", "bamboo_window", "mud_wall", "mud_window"]
 const BRUSHES := [1, 2, 3, 5, 9]
 const NEW_SIZES := [24, 32, 44, 48, 64, 84]
 const CHUNK := 8

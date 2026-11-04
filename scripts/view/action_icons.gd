@@ -108,6 +108,12 @@ static func draw(c: CanvasItem, at: Vector2, action: String, s: float, ink: Colo
 				c.draw_rect(Rect2(p.call(x - 0.19, -0.15), Vector2(0.38, 1.0) * s), ink)
 			c.draw_polyline(PackedVector2Array([p.call(0.0, -0.15), p.call(0.15, -0.55), p.call(0.5, -0.68)]), ink, w)
 			c.draw_circle(p.call(0.66, -0.72), w * 1.1, ink)
+		"hold":
+			# Hold: a hand raised, palm out.
+			c.draw_rect(Rect2(p.call(-0.45, -0.1), Vector2(0.9, 0.8) * s), ink)
+			for x: float in [-0.38, -0.12, 0.14, 0.4]:
+				c.draw_line(p.call(x, -0.05), p.call(x, -0.75 if absf(x) < 0.3 else -0.6), ink, w * 1.3)
+			c.draw_line(p.call(-0.45, 0.25), p.call(-0.8, -0.15), ink, w * 1.3)
 		"next":
 			# Next soldier: a double chevron.
 			c.draw_polyline(PackedVector2Array([p.call(-0.65, -0.65), p.call(-0.05, 0.0), p.call(-0.65, 0.65)]), ink, w)

@@ -67,9 +67,27 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   reload and fire in the same turn.
 - Directional half and full cover, flanking and line of sight that steps out around corners. Fog of war,
   overwatch, and destructible cover with craters.
+- Walls come down in stages: damaged (shell holes, still full cover), breached (a jagged gap: half cover, climb
+  and shoot through), gone. Windows, low walls and fences go in two. Tank shells, AT rockets and mortar rounds
+  knock two stages off the walls round where they land (one further out); a grenade one. A tank shell or
+  rocket fired at someone behind a wall breaches it. Machine guns shoot fences, hedges, bamboo and windows
+  apart a stage a burst, but only chip stone, brick and mud.
+- A building of two storeys or more collapses once half its outer walls (doorways not counted) are breached
+  or gone: it becomes a heap of rubble inside broken stumps of wall. Everyone in it is hurt and shaken, those
+  upstairs worse the further they fall.
+- Climbing in or out through a glazed window smashes it: "CRASH", and from then on it's an empty frame with
+  shards in the corners (still half cover). Mud-brick and bamboo windows have no glass to break.
+- Buildings look like their war: Normandy's grey limestone with green shutters and slate roofs, Vietnam's
+  ochre colonial stucco with blue-green shutters and red tile roofs (and bamboo huts), Iraq's rendered
+  concrete with iron window grilles and pale flat roofs (and mud-brick compounds). Walls standing in rubble
+  or by a crater are drawn shot up, broken off at uneven heights; bamboo huts are burnt to charred stumps.
+  Shelled towns in Normandy and Iraq have ruined houses, and now and then a Vietnamese hut is burnt out.
 - Fog of war hides what the enemy does out of sight: no turning, stance changes, reloading, healing or damage
   shown for units you can't see, only what you'd notice from afar (a mortar firing, smoke rising, a mine
-  going off).
+  going off). On the enemy's turn the camera only follows a move to the part of it your side can see (a
+  soldier hidden in the wheat doesn't count); a move entirely out of sight leaves the camera where it is.
+  Before an enemy shot or throw plays, the camera brings shooter and target on screen, so you see the shot
+  before what it does; a shell or rocket hit shows its explosion before the damage and the kill.
 - Enemies show only who and where they are: their side and role. Never their health, suppression, wounds or
   status (overwatch); a hit on one just says HIT. The agent link and move suggestions
   follow the same rule.
@@ -103,6 +121,9 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   close.
 - Suppressive fire from machine guns. Grenades scatter, and missed rockets, tank shells and MG bursts can hit
   someone else, friends included. The odds panel tells you who is at risk.
+- Missed rifle, pistol, SMG and sniper rounds fly on past the target, up to 5 tiles, until a wall, a tree or
+  a glazed window stops them (the window shatters). Anyone close to their flight, friend or foe, may be hit
+  (10% each, nearest first, half damage); a wall behind the target keeps whoever is behind it safe.
 - Objectives (church, crossroads, farm) score victory points every round. Reinforcement waves arrive mid-battle.
 - **Height**:
   - Ground rises in levels on rolling hills, ridges and knolls. A one-level step is a grassy bank, drawn as a
@@ -123,7 +144,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
     sight, and upstairs a doorway below is wall.
   - Blasts only hurt those within a level of where they go off. Shells and air strikes land on the roof;
     grenades go for the floor the enemy is on.
-  - The cursor has a height. The mouse wheel (or Page Up / Page Down) raises and lowers it a floor at a time,
+  - The cursor has a height. Ctrl/Cmd + mouse wheel (or Page Up / Page Down) raises and lowers it a floor at a time,
     starting at the selected soldier's floor. The building under the cursor opens up at that floor (the floors
     above are cut away) while every other building keeps its roof on. A dashed stalk drops from a raised
     cursor to the ground, the move range shows the tiles you can reach on that floor, and a click goes exactly
@@ -134,6 +155,13 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   - **Fuel drums and oil tanks:** they explode when shot, caught in a blast or run over by a tank, set off
     others nearby, and leave the ground burning. Nobody can enter fire, and anyone in it is burnt at the
     start of their turn.
+  - **Blast fires:** grenades, mortar rounds, rockets and tank shells set what burns alight for a couple of
+    turns: dry crops and tall grass catch easily, grass, scrub and jungle less; roads, rubble, water and
+    floors indoors never, nor the tile under a soldier. Crops and undergrowth burn away to scorched ground.
+  - **Spreading fire:** once a round every fire may creep into the tiles beside it, by their ground: about
+    one in five for wheat and tall grass, less for trampled crops, scrub and jungle, rarely over bare grass,
+    never across roads, rubble, water, walls or hedges, nor under a soldier or tank. A fuel drum or oil tank
+    next to a fire may cook off. Burnt crops turn to scrub, which rarely catches, so fires die out once the crops are gone.
   - **Mines:** hidden. Soldiers may spot them as they walk past (tank crews never do), clear spotted ones
     from next to them, and blasts set them off.
   - **Wheat:** trampled flat when soldiers walk through it (crawling leaves it standing), so it stops hiding
@@ -196,8 +224,8 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
     Company against four German 105mm guns dug in along a hedgerow, linked by a trench, with MG nests and
     the manor behind them. A demolition mission: blow all four guns in 15 rounds. Lt. Speirs brings men of
     D Company up the lane in round 5; the manor garrison comes out in round 3.
-  - Random maps come in several kinds per theatre, picked by name, in three sizes (standard 44x44, large
-    64x64, huge 84x84 with bigger forces):
+  - Random maps come in several kinds per theatre, picked by name, in four sizes (small 32x32, standard 44x44,
+    large 64x64, huge 84x84 with bigger forces):
     - Normandy: bocage crossroads, hedgerow hamlets, a shelled market town, a forest edge.
     - Vietnam: a paddy valley, a jungle trail, delta hamlets.
     - Iraq 2004: the Helmand green zone, an Iraqi town, a desert village with a wadi and a checkpoint.
@@ -207,9 +235,12 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
     irregular patchwork, and each side's half is its own. Objectives are picked from the map's landmarks
     (church, crossroads, farm, bazaar, landing zone...) so that both sides walk about as far to them. Play vs AI, hotseat, watch AI vs AI, or let an AI agent play a side
   (Agent vs AI, Me vs agent). On the village and random
-  maps each side picks a deployment, as in the two-player campaign: the usual spawns, balanced or massed on
-  the left or right flank, offensive (further forward) or defensive (further back, behind sandbags),
-  or random. Online, the host picks both. Pick a mission and the attacking side too.
+  maps each side picks a deployment, as in the two-player campaign: spread out along the whole edge, corner
+  to corner (the default), grouped at the usual spawns, balanced or massed on the left or right flank, offensive (further forward) or defensive (further back, behind sandbags),
+  in contact (a few tiles apart either side of the middle) or random. The minimap shows where each side's soldiers will start (a random deployment only once the
+  battle begins), and changes as you pick. Online, the host picks both. Pick a mission and the attacking side too.
+- **Quick test battle** (main menu): one click starts a small 32x32 random map in the chosen theatre, against
+  the AI, with both sides already in contact mid-map: the fastest way to try something out.
 - **Online**: two computers connect directly, at home or over the internet, no server needed.
   - Every game has a password. The joiner proves it knows the password before the host lets it in (the
     password itself never travels); wrong guesses are turned away, and a run of them locks the game for a
@@ -261,20 +292,21 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 | Key | Action |
 |---|---|
 | Left click | Select a soldier, move, pick a target. Tanks: click where to go, then where to face; click the selected tank to turn it on the spot |
-| Right click / Esc | Cancel |
+| Right click / Esc | Cancel the action; Esc again deselects the soldier, so the left button drags the map |
 | Hold right click (moving) | Count and ring the seen enemies the soldier could target from the hovered tile |
 | 1 – 4 | The actions every soldier has, always on the same keys: 1 shoot (a steady shot with both actions left), 2 overwatch, 3 reload, 4 go prone / stand up (tanks have no 4) |
 | 5 – 0 | The role's own actions, numbered in the order they sit on the bar: suppressive fire, grenade, smoke, rally, medkit, mortar, trap, IED, then the ones that only show up now and then (a demolition charge, a tunnel entrance, a mine or tunnel next to the soldier). An officer: 5 grenade, 6 smoke, 7 rally. Gear that runs out stays on the bar, greyed, so the keys never shift |
 | Action bar | Bottom right: every action the soldier has as an icon with its key in the corner and what's left (grenades, smoke, medkits, ammo); hover for its name. The icons share one look: ink only, the same size and line weight |
 | Shoot on drums / an oil tank | In shoot mode, click fuel drums or an oil tank to blow them up |
 | H / Shift+H | Suggest a move / suggest for the selected soldier |
+| Space | Hold: this soldier is done for the turn (keeps the actions he has left unspent); the next one is selected, and the last one to hold ends the turn |
 | Tab / Enter | Next soldier / end turn (the camera centres on each newly selected soldier) |
 | WASD, arrows, middle drag, left drag (no soldier selected) | Pan |
-| Wheel | On maps with tall buildings: the cursor up or down a floor (the building under it opens at that floor). Elsewhere: zoom |
-| Ctrl/Cmd + wheel, pinch / F | Zoom / focus the selected soldier |
+| Wheel, pinch / F | Zoom / focus the selected soldier |
+| Ctrl/Cmd + wheel | On maps with tall buildings: the cursor up or down a floor (the building under it opens at that floor). Elsewhere: zoom |
 | Two-finger swipe | Pan (trackpad) |
 | Q / E / V | Rotate the view / switch isometric and top-down |
-| Page Up / Page Down | The cursor up / down a floor, like the wheel |
+| Page Up / Page Down | The cursor up / down a floor, like Ctrl/Cmd + wheel |
 | + / - | Playback speed |
 | M | Music on / off |
 

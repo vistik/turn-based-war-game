@@ -96,10 +96,6 @@ func _headline(u: Unit, plan: Dictionary, seen: Array[Unit]) -> String:
 		"shoot_object":
 			var what := "oil tank" if battle.map.get_object_kind(plan["tile"]) == "oil_tank" else "fuel drums"
 			return "%s: blow up the %s at (%d, %d)" % [u.name, what, plan["tile"].x, plan["tile"].y]
-		"plant":
-			return "%s: plant a charge on the %s" % [u.name, battle.target_at(plan["tile"]).get("name", "target")]
-		"defuse":
-			return "%s: pull the charge off the %s" % [u.name, battle.target_at(plan["tile"]).get("name", "target")]
 	return "%s: %s" % [u.name, plan["kind"].capitalize().to_lower()]
 
 
@@ -169,7 +165,7 @@ func _reasons(u: Unit, plan: Dictionary, seen: Array[Unit]) -> Array[String]:
 			if not names.is_empty():
 				reasons.append("catches " + ", ".join(names))
 			if plan["kind"] == "mortar":
-				reasons.append("lands next turn")
+				reasons.append("observed" if battle.is_observed(u, plan["tile"]) else "fired blind, may land wide")
 	return reasons
 
 

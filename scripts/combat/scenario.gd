@@ -26,17 +26,11 @@ extends RefCounted
 ##   "objectives": [{"name": "Crossroads", "center": [2, 1.5], "radius": 2.5}],
 ##   "units": [{"team": "Allies", "role": "Officer", "pos": [0, 1], "facing": "E", "name": "Lt. Adams", "rank": 1}],
 ##   "reinforcements": [{"round": 4, "team": "Germany", "roster": ["Tank", "Rifleman"], "spawns": [[3, 1]]}],
-##   "mission": {"type": "extract", "attacker": "Allies", "vip_known": false,      (optional, see Mission; points if left out)
-##               "zone": {"name": "Extraction point", "center": [2.5, 1.5], "radius": 3.5}, "opens": 1,
-##               "targets": [{"name": "Ammo dump", "tile": [3, 2]}], "needed": 1}
 ## }
 ## [/codeblock]
-## Extraction and Assassination need a unit with role "VIP" on the side whose VIP it is (the attacker in an
-## Extraction, the defender in an Assassination) and a zone; Demolition needs targets (drawn as the defender's
-## target object unless something already stands there); Last stand needs exactly one objective.
 ## "team" is the side's name in its theatre, "Allies"/"Germany" in Normandy (or 0/1), "facing" one of N, NE, E, SE, S, SW, W, NW. Units without a name
 ## get one from the battle seed. Roster entries may also be {"role", "name", "rank"}. The file always holds the
-## whole map; a "mirrored" key left by older versions is ignored.
+## whole map; "mirrored" and "mission" keys left by older versions are ignored.
 
 const FORMAT := "normandy-1944-scenario"
 const VERSION := 1
@@ -68,9 +62,6 @@ var objectives: Array[Dictionary] = []
 var units: Array[Dictionary] = []
 ## Each: {"round": int, "team": int, "roster": Array (role names or {"role", "name", "rank"}), "spawns": Array[Vector2i]}.
 var reinforcements: Array[Dictionary] = []
-## The win condition, {} for points: {"type", "attacker": int, "vip_known", "zone": {"name", "center": Vector2,
-## "radius"}, "opens", "targets": [{"name", "tile": Vector2i}], "needed"}, each key only where the type uses it.
-var mission := {}
 ## Why the last from_data/load_file failed, if it did.
 static var last_error := ""
 
@@ -118,52 +109,7 @@ func build_battle(seed := 0) -> Battle:
 	var layout := {"map": copy_map(map), "objectives": objectives.duplicate(true), "spawns": [[], []], "reinforcement_spawns": [[], []]}
 	var options := {"theatre": theatre_id, "vp_to_win": vp_to_win, "max_rounds": max_rounds, "reinforcements": waves}
 	options.merge(theatre().battle_options())
-	options["mission"] = battle_mission(layout["map"])
 	return BattleFactory.create(layout, rosters, seed, options)
-
-
-## The mission as BattleFactory takes it, with demolition targets put on the map where nothing stands yet.
-func battle_mission(on_map: TacticalMap) -> Dictionary:
-	var type := Mission.type_of(mission)
-	if type == Mission.POINTS:
-		return {}
-	var attacker := int(mission.get("attacker", 0))
-	var result := {"type": type, "attacker": attacker}
-	match type:
-		Mission.EXTRACT, Mission.ASSASSINATE:
-			result["vip_team"] = attacker if type == Mission.EXTRACT else 1 - attacker
-			result["vip_known"] = bool(mission.get("vip_known", false))
-			result["zone"] = mission.get("zone", {"name": "Exit", "center": Vector2.ZERO, "radius": Mission.ZONE_RADIUS}).duplicate()
-			if type == Mission.EXTRACT:
-				result["found"] = false
-			else:
-				result["opens"] = int(mission.get("opens", 1))
-		Mission.DEMOLITION:
-			var kind: String = theatre().faction(1 - attacker).get("target_object", "crate")
-			var targets := []
-			for t: Dictionary in mission.get("targets", []):
-				targets.append({"name": t["name"], "tile": t["tile"], "state": "intact", "unit": -1})
-				if on_map.in_bounds(t["tile"]) and on_map.get_object(t["tile"]) == Cover.NONE:
-					on_map.set_object(t["tile"], Cover.HALF, kind)
-			result["targets"] = targets
-			result["needed"] = clampi(int(mission.get("needed", targets.size())), 1, maxi(1, targets.size()))
-	return result
-
-
-## The scenario's mission as plain data (for to_data, and for the editor to copy).
-static func mission_from_battle(battle: Battle) -> Dictionary:
-	var m := battle.mission
-	if m.is_empty():
-		return {}
-	var result := {"type": m["type"], "attacker": int(m.get("attacker", 0))}
-	for key in ["vip_known", "opens", "needed"]:
-		if m.has(key):
-			result[key] = m[key]
-	if m.has("zone"):
-		result["zone"] = m["zone"].duplicate()
-	if m.has("targets"):
-		result["targets"] = m["targets"].map(func(t: Dictionary) -> Dictionary: return {"name": t["name"], "tile": t["tile"]})
-	return result
 
 
 ## A start tile for a wave without spawns: the team's first unit, or the middle of its map edge.
@@ -183,7 +129,6 @@ static func from_battle(battle: Battle, p_title := "", keep_names := true) -> Sc
 	s.map = copy_map(battle.map)
 	s.vp_to_win = battle.vp_to_win
 	s.max_rounds = battle.max_rounds
-	s.mission = mission_from_battle(battle)
 	for objective in battle.objectives:
 		s.objectives.append({"name": objective["name"], "center": Vector2(objective["center"]), "radius": float(objective["radius"])})
 	for u in battle.alive_units():
@@ -299,14 +244,6 @@ func swapped() -> Scenario:
 				s.units.append(_flipped_unit(u))
 	for wave in reinforcements:
 		s.reinforcements.append(_flipped_wave(wave))
-	# The forces change sides, and so does the mission.
-	if not mission.is_empty():
-		s.mission = mission.duplicate(true)
-		s.mission["attacker"] = 1 - int(mission.get("attacker", 0))
-		if mission.has("zone"):
-			s.mission["zone"]["center"] = _flip_point(mission["zone"]["center"])
-		if mission.has("targets"):
-			s.mission["targets"] = mission["targets"].map(func(t: Dictionary) -> Dictionary: return {"name": t["name"], "tile": _flip_tile(t["tile"])})
 	return s
 
 
@@ -330,10 +267,8 @@ func validate() -> PackedStringArray:
 	for team in 2:
 		if counts[team] == 0:
 			problems.append("%s have no units" % theatre().team_name(team))
-	var type := Mission.type_of(mission)
-	if objectives.is_empty() and type == Mission.POINTS:
+	if objectives.is_empty():
 		problems.append("No objectives: the battle can only end by elimination, never on the round limit")
-	problems.append_array(_mission_problems())
 	for wave in reinforcements:
 		for p: Vector2i in wave["spawns"]:
 			if not map.is_passable(p):
@@ -351,40 +286,6 @@ func validate() -> PackedStringArray:
 			var target := Vector2i(objective["center"])
 			if not reach.has(target) and map.is_passable(target):
 				problems.append("%s at %s can't reach %s" % [_who(u), u["pos"], objective["name"]])
-	return problems
-
-
-## What's missing or wrong for the mission to be played.
-func _mission_problems() -> PackedStringArray:
-	var problems := PackedStringArray()
-	var type := Mission.type_of(mission)
-	var attacker := int(mission.get("attacker", 0))
-	match type:
-		Mission.HOLD:
-			if objectives.size() != 1:
-				problems.append("A last stand needs exactly one objective (it has %d)" % objectives.size())
-		Mission.EXTRACT, Mission.ASSASSINATE:
-			var vip_team := attacker if type == Mission.EXTRACT else 1 - attacker
-			var vips := units.filter(func(u: Dictionary) -> bool: return u["role"] == Mission.VIP_ROLE and u["team"] == vip_team)
-			if vips.size() != 1:
-				problems.append("%s needs one %s VIP (it has %d)" % [Mission.title(type), theatre().team_name(vip_team), vips.size()])
-			var zone: Dictionary = mission.get("zone", {})
-			if zone.is_empty() or not map.in_bounds(Vector2i(zone["center"])):
-				problems.append("%s needs a zone on the map" % Mission.title(type))
-		Mission.DEMOLITION:
-			var targets: Array = mission.get("targets", [])
-			if targets.is_empty():
-				problems.append("Demolition needs at least one target")
-			for t: Dictionary in targets:
-				if not map.in_bounds(t["tile"]):
-					problems.append("Target %s is off the map" % t["name"])
-			if int(mission.get("needed", 1)) > targets.size():
-				problems.append("Demolition needs %d targets blown but has only %d" % [int(mission.get("needed", 1)), targets.size()])
-	if type != Mission.POINTS:
-		for u in units:
-			if u["role"] == Mission.VIP_ROLE and type not in [Mission.EXTRACT, Mission.ASSASSINATE]:
-				problems.append("A VIP only belongs in an extraction or an assassination")
-				break
 	return problems
 
 
@@ -476,17 +377,6 @@ func to_data() -> Dictionary:
 	}
 	if theatre_id != Theatres.DEFAULT:
 		data["theatre"] = theatre_id
-	if not mission.is_empty():
-		var m := {"type": mission["type"], "attacker": theatre().team_name(int(mission.get("attacker", 0)))}
-		for key in ["vip_known", "opens", "needed"]:
-			if mission.has(key):
-				m[key] = mission[key]
-		if mission.has("zone"):
-			var zone: Dictionary = mission["zone"]
-			m["zone"] = {"name": zone["name"], "center": _pair(zone["center"]), "radius": _number(zone["radius"])}
-		if mission.has("targets"):
-			m["targets"] = mission["targets"].map(func(t: Dictionary) -> Dictionary: return {"name": t["name"], "tile": _pair(t["tile"])})
-		data["mission"] = m
 	return data
 
 
@@ -596,28 +486,6 @@ static func from_data(data: Variant) -> Scenario:
 		for p in w.get("spawns", []):
 			spawns.append(_vec2i(p))
 		s.reinforcements.append({"round": int(w.get("round", 4)), "team": wave_team, "roster": roster, "spawns": spawns})
-	var md: Variant = data.get("mission", {})
-	if md is Dictionary and not md.is_empty():
-		var type := str(md.get("type", Mission.POINTS))
-		if not Mission.TYPES.has(type):
-			last_error = "Unknown mission: %s" % type
-			return null
-		if type != Mission.POINTS:
-			s.mission = {"type": type, "attacker": s._team(md.get("attacker", 0))}
-			if md.has("vip_known"):
-				s.mission["vip_known"] = bool(md["vip_known"])
-			if md.has("opens"):
-				s.mission["opens"] = int(md["opens"])
-			if md.has("needed"):
-				s.mission["needed"] = int(md["needed"])
-			if md.get("zone") is Dictionary:
-				var zone: Dictionary = md["zone"]
-				s.mission["zone"] = {"name": str(zone.get("name", "Exit")), "center": _vec2(zone.get("center", [0, 0])), "radius": float(zone.get("radius", Mission.ZONE_RADIUS))}
-			if md.get("targets") is Array:
-				s.mission["targets"] = []
-				for t: Variant in md["targets"]:
-					if t is Dictionary:
-						s.mission["targets"].append({"name": str(t.get("name", "Target")), "tile": _vec2i(t.get("tile", [0, 0]))})
 	return s
 
 

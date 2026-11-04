@@ -17,10 +17,14 @@ const WHEAT_CONCEALMENT_RANGE := 4.0
 # --- Suppression and morale ---
 const SUPPRESSED_AIM_PENALTY := 15
 const PINNED_AIM_PENALTY := 30
+## Actions per soldier on the first side's opening turn (round 1); everyone else always gets two.
+const FIRST_TURN_ACTIONS := 1
+## A heavy machine gun fired after moving this turn, off the hip instead of from its bipod.
+const HEAVY_MOVED_AIM_PENALTY := 25
 ## Extra suppression when a shot actually hits.
 const HIT_SUPPRESSION_BONUS := 15
 ## Machine gun fire also suppresses (at half strength) the target's allies this close to it.
-const MG_AREA_RADIUS := 1.5
+const MG_AREA_RADIUS := 2.0
 ## Suppression from an explosion to everyone within its radius + 1.
 const EXPLOSION_SUPPRESSION := 50
 ## Suppression lost at the start of each of the unit's turns, plus bonuses for cover and a nearby officer.
@@ -49,7 +53,10 @@ const SMOKE_RADIUS := 1.5
 ## Smoke lasts this many turns (both sides' turns count, so 4 = two rounds).
 const SMOKE_TURNS := 4
 ## Mortar ranges, blast and scatter are per role: see Theatre.INDIRECT_DEFAULTS and Unit.indirect.
-const MEDKIT_HEAL := 4
+const MEDKIT_HEAL := 5
+## A medkit also takes this much off the patient's suppression, and may be used on an unhurt man this shaken.
+const MEDKIT_CALM := 40
+const MEDKIT_STEADIES_AT := 40
 
 # --- Terrain hazards ---
 ## Fuel drums and oil tanks: the blast when they go up, and how far around it the fire spreads.
@@ -70,25 +77,38 @@ const FIRE_SUPPRESSION := 20
 const WALL_HITS := {
 	"grenade": Vector2i(1, 1), "shell": Vector2i(2, 1), "charge": Vector2i(3, 3), "direct_heavy": 2,
 }
-## A building of two storeys or more falls in when this share of its outer walls is breached or gone. Everyone
-## in it takes COLLAPSE_DAMAGE, plus COLLAPSE_FALL_DAMAGE per floor they fall, and is badly shaken.
-const COLLAPSE_SHARE := 0.5
+## A building of two storeys falls in when this share of its outer walls is breached or gone, a taller one at
+## COLLAPSE_SHARE_PER_STOREY less per storey above two (never under COLLAPSE_SHARE_MIN). Everyone in it takes
+## COLLAPSE_DAMAGE, plus COLLAPSE_FALL_DAMAGE per floor they fall, and is badly shaken.
+const COLLAPSE_SHARE := 0.4
+const COLLAPSE_SHARE_PER_STOREY := 0.05
+const COLLAPSE_SHARE_MIN := 0.25
 const COLLAPSE_DAMAGE := [2, 4]
 const COLLAPSE_FALL_DAMAGE := 2
 const COLLAPSE_SUPPRESSION := 60
 ## Grenades, shells, rockets and mortar rounds set what burns in their blast alight, for BLAST_FIRE_TURNS: the
 ## chance per tile by its ground (dry crops and tall grass catch easily, grass and scrub less, roads, rubble,
-## water and indoors never), BLAST_FIRE_CENTER more where it lands. Not under anyone standing there, nor on
+## water and indoors never), BLAST_FIRE_CENTER more where it lands. Under someone standing in crops or tall
+## grass at FIRE_UNDER_UNIT_SHARE of the chance (he burns at the start of his turn unless he gets out); not on
 ## upper floors.
 const BLAST_FIRE_TURNS := 2
+## Dry crops and tall grass burn longer.
+const LONG_BURN_TURNS := 4
+## Under a soldier, fire catches (and spreads) at this share of the usual chance, only in crops and tall grass.
+const FIRE_UNDER_UNIT_SHARE := 0.5
+## A fire smokes: its tile is full of smoke (blocking sight) while it burns and FIRE_SMOKE_TURNS after.
+const FIRE_SMOKE_TURNS := 2
+## A soldier who starts his turn beside a fire is shaken by the heat and smoke.
+const FIRE_HEAT_SUPPRESSION := 10
 const BLAST_FIRE_CHANCE := {
 	TacticalMap.Terrain.WHEAT: 0.6, TacticalMap.Terrain.TALL_GRASS: 0.6, TacticalMap.Terrain.TRAMPLED: 0.5,
 	TacticalMap.Terrain.ROUGH: 0.3, TacticalMap.Terrain.FLOOR: 0.2, TacticalMap.Terrain.JUNGLE: 0.25,
 }
 const BLAST_FIRE_CENTER := 0.3
 ## Once a round, each fire may spread to the tiles beside it (not diagonally), by their ground, and burns
-## there for BLAST_FIRE_TURNS. It never spreads under a soldier or tank, nor through a wall or hedge between
-## the tiles. A fuel drum or oil tank beside a fire may cook off (FIRE_COOK_OFF).
+## there for BLAST_FIRE_TURNS (LONG_BURN_TURNS in crops and tall grass). It spreads under a soldier only in
+## crops or tall grass, at FIRE_UNDER_UNIT_SHARE of the chance; never under a tank, nor through a wall or hedge
+## between the tiles. A fuel drum or oil tank beside a fire may cook off (FIRE_COOK_OFF).
 const FIRE_SPREAD_CHANCE := {
 	TacticalMap.Terrain.WHEAT: 0.22, TacticalMap.Terrain.TALL_GRASS: 0.22, TacticalMap.Terrain.TRAMPLED: 0.15,
 	TacticalMap.Terrain.ROUGH: 0.08, TacticalMap.Terrain.FLOOR: 0.04, TacticalMap.Terrain.JUNGLE: 0.08,
@@ -169,8 +189,8 @@ const STEADY_SHOT_BONUS := 15
 ## Suppressive fire, machine guns only: no damage, but this times the weapon's suppression on the target and the full amount
 ## on the target's allies close by, none of whom recover suppression at the start of their next turn.
 ## Burns this many rounds.
-const SUPPRESSIVE_FIRE_FACTOR := 1.5
-const SUPPRESSIVE_FIRE_RADIUS := 1.5
+const SUPPRESSIVE_FIRE_FACTOR := 1.6
+const SUPPRESSIVE_FIRE_RADIUS := 2.5
 const SUPPRESSIVE_FIRE_AMMO := 2
 
 # --- Height ---
@@ -267,6 +287,9 @@ static func shot_odds(map: TacticalMap, shooter: Unit, target: Unit, reaction :=
 		modifiers.append(["Suppressed", -SUPPRESSED_AIM_PENALTY])
 		hit -= SUPPRESSED_AIM_PENALTY
 
+	if shooter.weapon.heavy and shooter.moved and not reaction:
+		modifiers.append(["Fired on the move", -HEAVY_MOVED_AIM_PENALTY])
+		hit -= HEAVY_MOVED_AIM_PENALTY
 	if steady:
 		modifiers.append(["Steady shot", STEADY_SHOT_BONUS])
 		hit += STEADY_SHOT_BONUS

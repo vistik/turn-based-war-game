@@ -64,28 +64,28 @@ const MISSIONS := [
 		"vp_to_win": 10, "max_rounds": 16,
 	},
 	{
-		"name": "Panzers in the Orchard",
-		"briefing": "D+6. Recon spotted a Panzer IV among the orchards. Rifles won't scratch it: get the bazooka round its side or rear.",
+		"name": "The Orchard",
+		"briefing": "D+6. Germans are dug in among the orchards with a machine gun and a Panzerschreck team. Work round them and take the ground.",
 		"map": {"seed": 3303, "size": Vector2i(40, 40)},
-		"enemy": ["Officer", "Rifleman", "Rifleman", "SMG", "MG", "Tank"],
+		"enemy": ["Officer", "Rifleman", "Rifleman", "Rifleman", "SMG", "MG", "AT"],
 		"vp_to_win": 10, "max_rounds": 16,
 	},
 	{
 		"name": "Counterattack",
-		"briefing": "D+9. The Germans are coming back with armour. A Sherman has joined us. Hold the ground we took.",
+		"briefing": "D+9. The Germans are coming back hard. A machine-gun team has joined us. Hold the ground we took.",
 		"map": {"seed": 4404, "size": Vector2i(40, 40)},
 		"enemy": ["Officer", "Rifleman", "Rifleman", "SMG", "MG", "AT"],
-		"enemy_reinforcements": [{"round": 3, "roster": ["Tank", "Rifleman", "Rifleman"]}, {"round": 6, "roster": ["Rifleman", "SMG"]}],
-		"support": ["Tank"],
+		"enemy_reinforcements": [{"round": 3, "roster": ["SMG", "Rifleman", "Rifleman"]}, {"round": 6, "roster": ["Rifleman", "SMG"]}],
+		"support": ["MG"],
 		"vp_to_win": 10, "max_rounds": 14,
 	},
 	{
 		"name": "The Road to Caen",
 		"briefing": "D+14. The last ridge before Caen. Everything they have left is waiting for us. This is it.",
 		"map": {"seed": 5505, "size": Vector2i(46, 46)},
-		"enemy": ["Officer", "Rifleman", "Rifleman", "Rifleman", "Medic", "SMG", "MG", "Sniper", "Mortar", "AT", "Tank"],
-		"enemy_reinforcements": [{"round": 4, "roster": ["Tank", "Rifleman"]}],
-		"support": ["Tank"],
+		"enemy": ["Officer", "Rifleman", "Rifleman", "Rifleman", "Medic", "SMG", "MG", "Sniper", "Mortar", "AT", "MG"],
+		"enemy_reinforcements": [{"round": 4, "roster": ["SMG", "Rifleman"]}],
+		"support": ["MG", "Rifleman"],
 		"vp_to_win": 12, "max_rounds": 18,
 	},
 ]
@@ -112,7 +112,6 @@ func _init() -> void:
 				"Mortar", "Rifleman", "SMG", "Rifleman"],
 			"ai_heavy": "Tank",
 			"fill_roles": ["Rifleman", "SMG", "Officer", "MG", "Mortar"],
-			"vip_name": "Liaison Officer", "targets": ["Ammo dump", "Fuel depot", "Radio truck"], "target_object": "crate",
 		},
 		{
 			"name": "Germany", "adjective": "German", "color": Color("b8c0c8"),
@@ -128,7 +127,6 @@ func _init() -> void:
 				"Mortar", "Rifleman", "SMG", "Rifleman"],
 			"ai_heavy": "Tank",
 			"fill_roles": ["Rifleman", "SMG", "Officer", "MG", "Mortar"],
-			"vip_name": "Staff Officer", "targets": ["Ammo dump", "Flak gun", "Radio post"], "target_object": "crate",
 		},
 	]
 
@@ -138,20 +136,20 @@ static func _roles(side: int) -> Dictionary:
 	var w := func(kind: String) -> Dictionary: return WEAPONS[kind][side]
 	return {
 		"Officer": Theatre.role({"name": "Officer", "sight": 19.0, "grenades": 1, "smoke": 2, "weapon": w.call("smg"), "leader": true,
-			"name_prefix": "Lt. ", "range": 5.0, "cost": 5, "note": "Rallies and steadies nearby soldiers"}),
-		"Rifleman": Theatre.role({"name": "Rifleman", "grenades": 1, "weapon": w.call("rifle"), "range": 7.0, "cost": 3,
+			"name_prefix": "Lt. ", "range": 5.0, "cost": 4, "note": "Rallies and steadies nearby soldiers"}),
+		"Rifleman": Theatre.role({"name": "Rifleman", "grenades": 1, "weapon": w.call("rifle"), "range": 7.0, "cost": 4,
 			"note": "Reliable all-rounder with a grenade"}),
-		"SMG": Theatre.role({"name": "SMG", "aim": 60, "mobility": 8.0, "grenades": 2, "weapon": w.call("smg"), "range": 3.0, "cost": 4,
+		"SMG": Theatre.role({"name": "SMG", "aim": 64, "mobility": 8.0, "grenades": 2, "weapon": w.call("smg"), "range": 3.0, "cost": 4,
 			"note": "Fast, deadly up close"}),
-		"MG": Theatre.role({"name": "MG", "hp": 8, "aim": 70, "mobility": 6.0, "weapon": w.call("mg"), "range": 9.0, "cost": 6,
-			"note": "Heavy suppression; moves or fires, not both"}),
+		"MG": Theatre.role({"name": "MG", "hp": 8, "aim": 70, "mobility": 6.0, "weapon": w.call("mg"), "range": 9.0, "cost": 5,
+			"note": "Heavy suppression; set up to fire well, -25 aim on the move"}),
 		"AT": Theatre.role({"name": "AT", "aim": 60, "weapon": w.call("at"), "range": 4.0, "cost": 6,
 			"note": "Bazooka: the answer to tanks" if side == 0 else "Panzerschreck: the answer to tanks"}),
 		"Medic": Theatre.role({"name": "Medic", "hp": 6, "aim": 55, "medkits": 3, "weapon": w.call("carbine"), "range": 6.0,
 			"cost": 4, "note": "Heals and treats wounds"}),
 		"Sniper": Theatre.role({"name": "Sniper", "hp": 6, "aim": 75, "mobility": 6.0, "sight": 24.0, "weapon": w.call("sniper"),
 			"range": 12.0, "holds_back": true, "cost": 6, "note": "Long sight, best at range; firing takes the whole turn, then a reload"}),
-		"Mortar": Theatre.role({"name": "Mortar", "hp": 6, "aim": 55, "mobility": 6.0, "mortar_rounds": 4,
+		"Mortar": Theatre.role({"name": "Mortar", "hp": 6, "aim": 55, "mobility": 6.0, "mortar_rounds": 6,
 			"weapon": w.call("carbine"), "indirect": {"name": "mortar"}, "range": 14.0, "holds_back": true, "cost": 5,
 			"note": "Indirect fire over cover"}),
 		"Tank": Theatre.role({"name": "Tank", "vehicle": true, "hull_armor": TANK_ARMOR, "hp": 18, "aim": 60, "sight": 16.0,
@@ -199,8 +197,8 @@ func skirmish_forces(size: int) -> Dictionary:
 		rounds = 24
 		points = 16
 	if size >= 80:
-		roster.append_array(["Tank", "MG", "Medic"])
-		wave.append_array(["Tank", "SMG"])
+		roster.append_array(["MG", "Medic", "Rifleman"])
+		wave.append_array(["SMG", "Rifleman"])
 		rounds = 28
 		points = 20
 	var waves := []

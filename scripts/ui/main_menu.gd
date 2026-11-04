@@ -46,11 +46,6 @@ var _recruit_choice: OptionButton
 ## Per side, the skirmish deployment picked (an index into DEPLOYMENTS), kept while the game runs.
 var _deploy_choices: Array[OptionButton] = []
 static var _last_deployments := [0, 0]
-## The mission picked last (an index into Mission.TYPES), who attacks, and whether the VIP's enemies know where
-## he is, kept while the game runs.
-static var _last_mission := 0
-static var _last_attacker := 0
-static var _last_vip_known := false
 ## The map, skirmish mode and online port picked last, kept while the game runs.
 static var _last_map := 0
 static var _last_size := 1
@@ -156,7 +151,7 @@ func _show_main() -> void:
 	box.add_child(modes)
 	for spec: Array in [
 			["Campaign", "%d missions, one squad" % theatre.campaign_missions().size(), _show_campaign_menu],
-			["Skirmish", "Your map, mission and rules", _show_skirmish],
+			["Skirmish", "Your map, deployment and rules", _show_skirmish],
 			["Two players", "Hotseat campaign over 3 to 5 maps", _show_war_setup],
 			["Online", "Play a friend on another computer", _show_online]]:
 		_menu_button(modes, spec[0], spec[1], spec[2]).size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -342,57 +337,10 @@ func _field(parent: Control, label: String, control: Control) -> void:
 	row.add_child(control)
 
 
-## The mission choice: the win condition, which side attacks, and (Extraction, Assassination) whether the
-## enemy knows where the VIP is. Scenarios bring their own mission, so it is hidden for them.
-func _add_mission_choice(parent: Control) -> void:
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 6)
-	parent.add_child(box)
-	var type := OptionButton.new()
-	for t: String in Mission.TYPES:
-		type.add_item(Mission.title(t))
-	type.selected = _last_mission
-	_field(box, "Mission", type)
-	var attacker := OptionButton.new()
-	for side in 2:
-		attacker.add_item(_theatre().team_name(side))
-	attacker.selected = _last_attacker
-	_field(box, "Attacker", attacker)
-	var known := CheckBox.new()
-	known.text = "The enemy knows where the VIP is"
-	known.button_pressed = _last_vip_known
-	box.add_child(known)
-	var hint := _text(box, "", MUTED, 13, true)
-	var update := func(_value: Variant = null) -> void:
-		_last_mission = type.selected
-		_last_attacker = attacker.selected
-		_last_vip_known = known.button_pressed
-		var mission_type: String = Mission.TYPES[type.selected]
-		var scenario := _map_choice.selected >= _builtin_maps.size()
-		box.get_child(1).visible = mission_type != Mission.POINTS and not scenario
-		known.visible = mission_type in [Mission.EXTRACT, Mission.ASSASSINATE] and not scenario
-		type.disabled = scenario
-		hint.text = "Scenarios bring their own mission." if scenario else Mission.blurb(mission_type, attacker.selected, _theatre())
-	type.item_selected.connect(update)
-	attacker.item_selected.connect(update)
-	known.toggled.connect(update)
-	_map_choice.item_selected.connect(update)
-	update.call()
-
-
-## The mission setup picked for GameSession.build_skirmish ({} for points).
-func _chosen_mission() -> Dictionary:
-	var type: String = Mission.TYPES[clampi(_last_mission, 0, Mission.TYPES.size() - 1)]
-	if type == Mission.POINTS:
-		return {}
-	return {"type": type, "attacker": _last_attacker, "vip_known": _last_vip_known}
-
-
 func _show_skirmish() -> void:
 	var box := _new_page(520)
 	_title(box, "Skirmish", 40)
 	_add_map_choice(box)
-	_add_mission_choice(box)
 	var opponent := OptionButton.new()
 	for mode: Array in SKIRMISH_MODES:
 		opponent.add_item(mode[0])
@@ -474,7 +422,6 @@ func _show_online() -> void:
 	_section(box, "Host a new game")
 	_text(box, "You play the %s on the map you pick." % _theatre().team_name(0), MUTED, 14, true)
 	_add_map_choice(box)
-	_add_mission_choice(box)
 	_button(box, "Host game", _host, online_save.is_empty())
 
 	_section(box, "Join a game")
@@ -528,9 +475,6 @@ func _skirmish_setup() -> Dictionary:
 			"seed": _map_seed if spec[1] == "random" else randi() % 1000000000 + 1, "deployment": _chosen_deployments()}
 	# The next game gets a fresh map unless this one is picked again from the preview.
 	_map_seed = randi() % 1000000000 + 1
-	var mission := _chosen_mission()
-	if not mission.is_empty():
-		setup["mission"] = mission
 	return setup
 
 
@@ -1089,14 +1033,6 @@ func _theatre() -> Theatre:
 	return Theatres.get_theatre(_theatre_id)
 
 
-## "Extraction, Allies attack", or "Victory points".
-static func _mission_label(setup: Dictionary, theatre: Theatre) -> String:
-	var type := Mission.type_of(setup)
-	if type == Mission.POINTS:
-		return Mission.title(type)
-	return "%s, %s attack" % [Mission.title(type), theatre.team_name(int(setup.get("attacker", 0)))]
-
-
 # --- Two-player campaign ---
 
 func _show_war_setup() -> void:
@@ -1106,8 +1042,7 @@ func _show_war_setup() -> void:
 	_text(box, ("Each side gets %d supply for the whole campaign. Every map is worth a different number of points (1 to 5). " +
 			"Before each map both sides secretly commit between %d and %d supply, buy units with it and choose a deployment. " +
 			"Supply committed to a map is gone, the rest is kept for later maps. Win a map to take its points; a draw splits them. " +
-			"Most points at the end wins. Some maps are missions instead of a fight for points: a last stand, an extraction, " +
-			"a demolition raid or an assassination, with one side attacking.") % [WarCampaign.SUPPLY, WarCampaign.MIN_SPEND, WarCampaign.MAX_SPEND], UITheme.PAPER, 15, true)
+			"Most points at the end wins.") % [WarCampaign.SUPPLY, WarCampaign.MIN_SPEND, WarCampaign.MAX_SPEND], UITheme.PAPER, 15, true)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
 	box.add_child(row)
@@ -1162,10 +1097,10 @@ func _show_war() -> void:
 
 	_section(box, "Maps")
 	var grid := GridContainer.new()
-	grid.columns = 6
+	grid.columns = 5
 	grid.add_theme_constant_override("h_separation", 22)
 	box.add_child(grid)
-	for header in ["Map", "Size", "Mission", "Points", "Supply spent", "Result"]:
+	for header in ["Map", "Size", "Points", "Supply spent", "Result"]:
 		_text(grid, header, MUTED, 13)
 	for i in war.maps.size():
 		var m: Dictionary = war.maps[i]
@@ -1173,7 +1108,6 @@ func _show_war() -> void:
 		var color := UITheme.PAPER if now else (Color(1, 1, 1, 0.75) if not m["result"].is_empty() else MUTED)
 		_text(grid, ("▶ " if now else "") + m["name"], color, 15)
 		_text(grid, "%dx%d" % [m["size"], m["size"]], color, 15)
-		_text(grid, _mission_label(m.get("mission", {}), war.theatre()), color, 15)
 		_text(grid, str(m["points"]), color, 15)
 		var result: Dictionary = m["result"]
 		if result.is_empty():
@@ -1238,15 +1172,6 @@ func _show_orders(side: int) -> void:
 	_title(box, "%s orders: %s" % [war.theatre().team_name(side), m["name"]], 32)
 	_text(box, "Worth %d point%s. You have %d supply: commit between %d and %d to this map. Up to %d units." % [
 			m["points"], "" if m["points"] == 1 else "s", war.supply[side], limits[0], limits[1], war.max_units(side)], UITheme.PAPER, 15, true)
-	var mission: Dictionary = m.get("mission", {})
-	if Mission.type_of(mission) != Mission.POINTS:
-		var attacker := int(mission.get("attacker", 0))
-		var where := ""
-		if mission["type"] in [Mission.EXTRACT, Mission.ASSASSINATE]:
-			where = " The VIP's enemies %s where he is." % ("know" if mission.get("vip_known", false) else "don't know")
-		elif mission["type"] in [Mission.HOLD, Mission.DEMOLITION]:
-			where = " The defender's units are placed for it, whatever deployment it picks."
-		_text(box, "%s: %s%s" % [Mission.title(mission["type"]), Mission.blurb(mission["type"], attacker, war.theatre()), where], UITheme.PAPER, 15, true)
 
 	_section(box, "Units")
 	var grid := GridContainer.new()

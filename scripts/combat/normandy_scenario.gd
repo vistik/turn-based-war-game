@@ -7,7 +7,7 @@ extends RefCounted
 
 const SIZE := 48
 const ROSTER := ["Officer", "Rifleman", "AT", "Medic", "SMG", "MG", "Sniper", "Mortar"]
-const REINFORCEMENTS := ["Tank", "Rifleman"]
+const REINFORCEMENTS := ["SMG", "Rifleman"]
 const REINFORCEMENT_ROUND := 4
 ## Start positions: the Allies on the west edge round the road, Germany on the east edge round theirs.
 const SPAWNS := [

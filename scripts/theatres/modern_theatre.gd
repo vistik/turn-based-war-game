@@ -18,7 +18,7 @@ const WEAPONS := {
 	"m110": {"name": "M110", "kind": "sniper", "damage": [5, 7], "crit": 25, "crit_damage": 3, "clip": 1, "suppression": 12, "range": SNIPER_RANGE},
 	"m2": {"name": "M2 .50 cal", "kind": "mg", "damage": [4, 6], "crit": 10, "crit_damage": 2, "clip": 10, "suppression": 55, "range": MG_RANGE},
 	"ak47": {"name": "AK-47", "kind": "assault", "damage": [3, 5], "crit": 10, "crit_damage": 2, "clip": 8, "suppression": 25, "range": AK_RANGE},
-	"pkm": {"name": "PKM", "kind": "mg", "damage": [4, 6], "crit": 5, "crit_damage": 2, "clip": 6, "suppression": 40, "range": MG_RANGE},
+	"pkm": {"name": "PKM", "kind": "mg", "damage": [4, 6], "crit": 5, "crit_damage": 2, "clip": 8, "suppression": 40, "range": MG_RANGE},
 	"svd": {"name": "SVD Dragunov", "kind": "sniper", "damage": [5, 7], "crit": 20, "crit_damage": 3, "clip": 1, "suppression": 10, "range": SNIPER_RANGE},
 	## The RPG-7's warhead bursts on the target: deadly to the MRAP's sides, and it tears cover apart.
 	"rpg7": {"name": "RPG-7", "kind": "at", "damage": [8, 11], "crit": 0, "crit_damage": 0, "clip": 1, "suppression": 30,
@@ -47,12 +47,12 @@ const MISSIONS := [
 	},
 	{
 		"name": "Hold the District Centre",
-		"briefing": "An MRAP is with us and a quick reaction force flies in on round 4. Everything they have is coming. Hold all three.",
+		"briefing": "A second SAW team is with us and a quick reaction force flies in on round 4. Everything they have is coming. Hold all three.",
 		"map": {"seed": 8302, "size": Vector2i(44, 44)},
 		"enemy": ["Commander", "Commander", "Fighter", "Fighter", "Fighter", "Fighter", "Fighter", "Fighter", "PKM Gunner", "PKM Gunner",
 			"RPG", "RPG", "Sniper", "Bomb Maker", "Mortar"],
 		"enemy_reinforcements": [{"round": 3, "roster": ["Fighter", "Fighter", "Fighter"]}, {"round": 6, "roster": ["Fighter", "RPG", "PKM Gunner"]}],
-		"support": ["MRAP"],
+		"support": ["SAW Gunner"],
 		"reinforcements": [{"round": 4, "team": 0, "roster": ["Rifleman", "Rifleman", "SAW Gunner"], "air": true}],
 		"vp_to_win": 12, "max_rounds": 16,
 	},
@@ -80,7 +80,6 @@ func _init() -> void:
 				"Rifleman", "Rifleman"],
 			"ai_heavy": "MRAP",
 			"fill_roles": ["Rifleman", "Medic", "Team Leader", "EOD Tech"],
-			"vip_name": "Informant", "targets": ["Ammo point", "Comms mast", "Fuel bladder"], "target_object": "crate",
 		},
 		{
 			"name": "Insurgents", "adjective": "insurgent", "color": Color("b07a5a"),
@@ -99,7 +98,6 @@ func _init() -> void:
 				"Mortar", "Fighter", "RPG", "Fighter", "Fighter", "PKM Gunner", "Fighter", "Bomb Maker", "Fighter", "Fighter"],
 			"ai_heavy": "",
 			"fill_roles": ["Fighter", "Commander", "RPG", "Bomb Maker"],
-			"vip_name": "Emir", "targets": ["Weapons cache", "IED workshop", "Safe house"], "target_object": "crate",
 		},
 	]
 
@@ -117,9 +115,9 @@ static func _coalition_roles() -> Dictionary:
 		"Marksman": Theatre.role({"name": "Marksman", "hp": 7, "aim": 76, "mobility": 6.0, "body_armor": 1, "sight": 22.0, "weapon": WEAPONS["m110"],
 			"range": 12.0, "holds_back": true, "cost": 7, "note": "Long sight, best at range; firing takes the whole turn, then a reload", "kit": "Sniper", "icon": "Sniper"}),
 		"Medic": Theatre.role({"name": "Medic", "hp": 7, "aim": 60, "mobility": 6.5, "body_armor": 1, "medkits": 4, "weapon": WEAPONS["m4"],
-			"range": 6.0, "cost": 5, "note": "Heals and treats wounds"}),
-		"JTAC": Theatre.role({"name": "JTAC", "hp": 8, "aim": 64, "mobility": 6.5, "body_armor": 1, "mortar_rounds": 2,
-			"weapon": WEAPONS["m4"], "indirect": AIR_STRIKE, "range": 9.0, "holds_back": true, "cost": 9,
+			"range": 6.0, "cost": 4, "note": "Heals, treats wounds and steadies the shaken"}),
+		"JTAC": Theatre.role({"name": "JTAC", "hp": 8, "aim": 64, "mobility": 6.5, "body_armor": 1, "mortar_rounds": 4,
+			"weapon": WEAPONS["m4"], "indirect": AIR_STRIKE, "range": 9.0, "holds_back": true, "cost": 8,
 			"note": "Calls air strikes on what he sees", "kit": "RTO", "icon": "RTO"}),
 		"EOD Tech": Theatre.role({"name": "EOD Tech", "hp": 7, "aim": 62, "mobility": 6.5, "body_armor": 1, "spot_chance": 90, "weapon": WEAPONS["m4"],
 			"range": 6.0, "cost": 5, "note": "Finds IEDs and mines almost every time", "kit": "EOD", "icon": "EOD"}),
@@ -135,16 +133,16 @@ static func _insurgent_roles() -> Dictionary:
 			"leader": true, "range": 6.0, "cost": 4, "note": "Leads and steadies the fighters", "kit": "Officer", "icon": "Officer"}),
 		"Fighter": Theatre.role({"name": "Fighter", "hp": 6, "aim": 55, "mobility": 7.5, "grenades": 1, "weapon": WEAPONS["ak47"], "range": 5.0,
 			"cost": 2, "note": "AK-47, cheap and quick", "kit": "Assault", "icon": "SMG"}),
-		"PKM Gunner": Theatre.role({"name": "PKM Gunner", "hp": 6, "aim": 64, "mobility": 6.5, "weapon": WEAPONS["pkm"], "range": 8.0, "cost": 4,
+		"PKM Gunner": Theatre.role({"name": "PKM Gunner", "hp": 7, "aim": 68, "mobility": 6.5, "weapon": WEAPONS["pkm"], "range": 8.0, "cost": 4,
 			"note": "Machine gun: moves and fires", "kit": "MG", "icon": "MG"}),
 		"RPG": Theatre.role({"name": "RPG", "hp": 6, "aim": 54, "mobility": 7.0, "weapon": WEAPONS["rpg7"], "range": 5.0, "cost": 4,
 			"note": "RPG-7: stops the MRAP, blows cover apart", "kit": "AT", "icon": "AT"}),
 		"Sniper": Theatre.role({"name": "Sniper", "hp": 5, "aim": 70, "mobility": 6.5, "sight": 22.0, "weapon": WEAPONS["svd"], "range": 12.0,
 			"holds_back": true, "cost": 5, "note": "Dragunov, best at range"}),
-		"Bomb Maker": Theatre.role({"name": "Bomb Maker", "hp": 5, "aim": 50, "mobility": 7.0, "weapon": WEAPONS["ak47"], "range": 9.0,
-			"holds_back": true, "cost": 4, "note": "Plants IEDs and sets them off from cover", "traits": ["traps", "detonator"], "traps": 2,
+		"Bomb Maker": Theatre.role({"name": "Bomb Maker", "hp": 5, "aim": 55, "mobility": 7.0, "weapon": WEAPONS["ak47"], "range": 7.0,
+			"holds_back": true, "cost": 3, "note": "Plants IEDs and sets them off from cover", "traits": ["traps", "detonator"], "traps": 3,
 			"trap_kind": "ied", "kit": "Sapper", "icon": "Sapper"}),
-		"Mortar": Theatre.role({"name": "Mortar", "hp": 5, "aim": 50, "mobility": 6.0, "mortar_rounds": 3, "weapon": WEAPONS["ak47"],
+		"Mortar": Theatre.role({"name": "Mortar", "hp": 5, "aim": 50, "mobility": 6.0, "mortar_rounds": 5, "weapon": WEAPONS["ak47"],
 			"indirect": {"name": "mortar", "max": 24.0}, "range": 14.0, "holds_back": true, "cost": 4, "note": "82mm mortar"}),
 	}
 
@@ -164,7 +162,7 @@ func is_playable(layout: Dictionary) -> bool:
 func skirmish_forces(size: int) -> Dictionary:
 	var coalition := ["Team Leader", "Rifleman", "Rifleman", "SAW Gunner", "Medic", "JTAC", "EOD Tech"]
 	var insurgents := ["Commander", "Fighter", "Fighter", "Fighter", "Fighter", "Fighter", "PKM Gunner", "RPG", "Sniper", "Bomb Maker", "Mortar"]
-	var coalition_wave := ["MRAP", "Rifleman"]
+	var coalition_wave := ["Rifleman", "Rifleman"]
 	var insurgent_wave := ["Fighter", "Fighter", "Fighter"]
 	var rounds := 20
 	var points := 12
@@ -176,7 +174,7 @@ func skirmish_forces(size: int) -> Dictionary:
 		rounds = 24
 		points = 16
 	if size >= 80:
-		coalition.append_array(["MRAP", "Team Leader", "Rifleman"])
+		coalition.append_array(["Rifleman", "Team Leader", "Rifleman"])
 		insurgents.append_array(["Commander", "Fighter", "Fighter", "Sniper", "RPG"])
 		coalition_wave.append_array(["Rifleman", "Medic"])
 		insurgent_wave.append_array(["Fighter", "Fighter", "PKM Gunner"])

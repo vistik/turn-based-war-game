@@ -53,7 +53,7 @@ func test_normandy_units_are_unchanged() -> void:
 	check(officer.leader, "officers lead")
 	check_eq([officer.aim, officer.max_hp, officer.smoke_grenades], [75, 9, 2], "rank adds aim and HP")
 	var mortar := Unit.create(3, "D", "Mortar", 1, Vector2i.ZERO)
-	check_eq([mortar.indirect["min"], mortar.indirect["max"], mortar.indirect["radius"]], [5.0, 22.0, 1.5], "mortar ranges")
+	check_eq([mortar.indirect["min"], mortar.indirect["max"], mortar.indirect["radius"]], [4.0, 22.0, 1.5], "mortar ranges")
 	var tank := Unit.create(4, "E", "Tank", 0, Vector2i.ZERO)
 	check(tank.vehicle and tank.weapon.anti_tank and tank.weapon.blast_radius == 1.0, "a Sherman")
 	check_eq(CombatRules.armor_value(tank, "front"), 3, "tank front armour")
@@ -252,12 +252,12 @@ func test_the_radio_operator_calls_in_napalm() -> void:
 	check_eq(battle.can_fire_mortar(rto, Vector2i(9, 8), "napalm"), "", "he can call it in after moving, on what he sees")
 	for x in range(9, 12):
 		battle.map.set_terrain(Vector2i(x, 8), TacticalMap.Terrain.JUNGLE)
-	battle.execute({"cmd": "mortar", "unit": rto.id, "tile": Vector2i(9, 8), "kind": "napalm"})
+	# He sees the target himself, so it comes straight down.
+	var events := battle.execute({"cmd": "mortar", "unit": rto.id, "tile": Vector2i(9, 8), "kind": "napalm"})
 	check_eq(rto.mortar_smoke, 0, "the napalm round is spent")
-	var events := battle.end_turn()
-	events.append_array(battle.end_turn())
+	check(battle.strikes.is_empty(), "observed: nothing left in the air")
 	var napalm := events_of(events, "napalm")
-	check_eq(napalm.size(), 1, "it lands")
+	check_eq(napalm.size(), 1, "it lands at once")
 	if not napalm.is_empty():
 		var center: Vector2i = napalm[0]["center"]
 		check(battle.map.has_fire(center) or battle.map.get_object(center) != Cover.NONE, "the ground burns")

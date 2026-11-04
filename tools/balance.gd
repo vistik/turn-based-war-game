@@ -4,8 +4,6 @@ extends SceneTree
 ## Godot --headless --path . -s tools/balance.gd -- [options]
 ##   --scenario PATH   a scenario file (res://scenarios/village.json, user://scenarios/x.json or a plain path)
 ##   --map NAME        village (default) or random; --size N picks a random map size (44, 64, 84)
-##   --mission TYPE    hold, extract, demolition or assassinate instead of points (see Mission), with
-##                     --attacker 0|1 (default 0) and --vip-known for the VIP missions
 ##   --games N         games to play (default 20), with seeds --seed S, S+1, ... (default 1)
 ##   --jobs N          games at once on worker threads (default: CPU cores - 1, at most 8)
 ##   --swap            also play every seed with the start positions exchanged, to separate the
@@ -27,9 +25,6 @@ var _swap := false
 var _quiet := false
 var _csv_path := ""
 var _json_path := ""
-var _mission := {}
-var _attacker := 0
-var _vip_known := false
 
 
 func _initialize() -> void:
@@ -37,8 +32,6 @@ func _initialize() -> void:
 		quit(1)
 		return
 	var source := {"scenario": _scenario_data} if not _scenario_data.is_empty() else {"map": _map, "size": _size, "theatre": _theatre}
-	if not _mission.is_empty() and _scenario_data.is_empty():
-		source["mission"] = _mission
 	var batch := BalanceSim.Batch.new(source, _games, _first_seed, _swap)
 	var total := batch.jobs.size()
 	print("Balance run: %s, %d games, seeds %d-%d, %d at a time%s" % [_describe_source(), total, _first_seed, _first_seed + _games - 1,
@@ -98,17 +91,6 @@ func _parse(args: PackedStringArray) -> bool:
 				_size = value.to_int()
 				_map = "village" if _size == 0 else "random"
 				i += 1
-			"--mission":
-				if not Mission.TYPES.has(value):
-					printerr("Unknown mission: %s (%s)" % [value, ", ".join(Mission.TYPES)])
-					return false
-				_mission = {} if value == Mission.POINTS else {"type": value}
-				i += 1
-			"--attacker":
-				_attacker = clampi(value.to_int(), 0, 1)
-				i += 1
-			"--vip-known":
-				_vip_known = true
 			"--games":
 				_games = maxi(1, value.to_int())
 				i += 1
@@ -129,7 +111,7 @@ func _parse(args: PackedStringArray) -> bool:
 				_json_path = value
 				i += 1
 			"--help", "-h":
-				print("Usage: Godot --headless --path . -s tools/balance.gd -- [--scenario PATH | [--theatre normandy|vietnam] --map village|random --size N [--mission TYPE --attacker 0|1 --vip-known]] [--games N] [--seed S] [--jobs N] [--swap] [--csv PATH] [--json PATH] [--quiet]")
+				print("Usage: Godot --headless --path . -s tools/balance.gd -- [--scenario PATH | [--theatre normandy|vietnam] --map village|random --size N] [--games N] [--seed S] [--jobs N] [--swap] [--csv PATH] [--json PATH] [--quiet]")
 				return false
 			_:
 				printerr("Unknown option: %s (try --help)" % arg)
@@ -137,9 +119,6 @@ func _parse(args: PackedStringArray) -> bool:
 		i += 1
 	if _map == "random" and _size == 0:
 		_size = 44
-	if not _mission.is_empty():
-		_mission["attacker"] = _attacker
-		_mission["vip_known"] = _vip_known
 	return true
 
 
@@ -148,8 +127,6 @@ func _describe_source() -> String:
 		return "scenario \"%s\" (%dx%d)" % [_scenario_data["title"], _scenario_data["map"]["width"], _scenario_data["map"]["height"]]
 	var theatre := Theatres.get_theatre(_theatre)
 	var where: String = theatre.village_title() if _map == "village" else "%s random %dx%d maps" % [theatre.title, _size, _size]
-	if not _mission.is_empty():
-		where += ", %s with %s attacking" % [Mission.title(_mission["type"]), theatre.team_name(_mission["attacker"])]
 	return where
 
 

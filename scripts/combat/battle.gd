@@ -6,8 +6,7 @@ extends RefCounted
 ## suppression, status, heal, objective, score, reinforcements, turn, game_over, stance,
 ## detonation, fire, fire_out, mine, mines_spotted, object_shot, mine_cleared,
 ## and in Vietnam: tunnel, tunnels_spotted, tunnel_collapsed, trap_laid, napalm, kill_points; in Afghanistan
-## and Iraq: ied (an IED set off by the bomb maker; one stepped on is a "mine" event of kind "ied");
-## and for missions (see Mission): vip_found, charge ({"tile", "unit", "state": "armed"|"defused"|"blown"}).
+## and Iraq: ied (an IED set off by the bomb maker; one stepped on is a "mine" event of kind "ied").
 ## A "shot" that went astray carries "stray" (the tile it ended up on) and, if it hit someone, "stray_unit".
 ##
 ## Every command can also be given as data through execute(), which is how AI moves, saved replays
@@ -21,6 +20,9 @@ const TEAM_COUNT := 2
 ## What each kind of shell is called in messages.
 ## Indirect fire at a tile nobody on the side can see scatters this many times as far.
 const BLIND_SCATTER := 1.5
+## Fire comes down at once, without ranging shots first, so it scatters this many times the round's base
+## spread (Battle.mortar_scatter); blind fire scatters BLIND_SCATTER times that again.
+const IMMEDIATE_SCATTER := 2.0
 const KIND_NAMES := {"he": "high explosive", "smoke": "smoke", "napalm": "napalm"}
 ## `winner` value when the game ends level.
 const DRAW := 2
@@ -33,8 +35,12 @@ var theatre_id := Theatres.DEFAULT
 var map: TacticalMap
 var units: Array[Unit] = []
 var current_team := 0
-## The side that moves first in every round (the mission's attacker; team 0 in a points game).
+## The side that moves first in every round.
 var first_team := 0
+## Actions each soldier of the side moving first gets on its opening turn (round 1). Real battles get
+## CombatRules.FIRST_TURN_ACTIONS from BattleFactory, so that side can't fire an aimed volley or dash onto an
+## objective before the other has moved; a battle built by hand keeps the usual two.
+var opening_actions := Unit.ACTIONS_PER_TURN
 var round_number := 1
 ## Counts every turn (both sides); smoke expiry is measured in these.
 var turn_index := 0
@@ -62,9 +68,6 @@ var kill_points := [0, 0]
 var objective_points := [1, 1]
 ## Per team: the enemy tunnel entrances (tile -> true) it has found. A side always knows its own.
 var known_tunnels := [{}, {}]
-## The win condition when it isn't points (see Mission); empty for the usual points game.
-var mission := {}
-
 ## Vector3i(x, y, sight) -> tiles visible from there. Rebuilt when the map changes.
 var _vision := {}
 var _vision_revision := -1
@@ -157,8 +160,6 @@ func is_hidden_from(from: Vector2i, target: Unit) -> bool:
 ## Whether a unit standing on `at` would be hidden from someone on `from` by the ground it is in. Nothing
 ## grows upstairs or on roofs.
 static func hidden_at(p_map: TacticalMap, from: Vector2i, target: Unit, at: Vector2i, level := 0) -> bool:
-	if target.hiding and Vector2(from).distance_to(Vector2(at)) > Mission.HIDING_RANGE:
-		return true
 	if target.fired or target.vehicle or level > 0:
 		return false
 	var cover := p_map.concealment(at)
@@ -175,8 +176,6 @@ func visible_enemies(u: Unit) -> Array[Unit]:
 
 func team_sees(team: int, target: Unit) -> bool:
 	if target.team == team:
-		return true
-	if mission.get("vip_known", false) and target.id == mission.get("vip", -1):
 		return true
 	for u in alive_units(team):
 		if can_see(u, target):
@@ -260,11 +259,12 @@ static func mortar_scatter(origin: Vector2i, target: Vector2i, spec: Dictionary)
 	return Vector2(origin).distance_to(Vector2(target)) * float(spec["scatter"]) + float(spec["scatter_flat"])
 
 
-## How far off `tile` a round fired by `u` may land: unobserved fire (nobody on the side sees the tile) scatters
-## BLIND_SCATTER times as far.
+## How far off `tile` a round fired by `u` may land: IMMEDIATE_SCATTER times the base spread, and unobserved
+## fire BLIND_SCATTER times as far again.
 func firing_scatter(u: Unit, tile: Vector2i) -> float:
 	var scatter := mortar_scatter(u.pos, tile, u.indirect)
-	return scatter if is_spotted(u.team, tile) else scatter * BLIND_SCATTER
+	scatter *= IMMEDIATE_SCATTER
+	return scatter if is_observed(u, tile) else scatter * BLIND_SCATTER
 
 
 ## Whether anyone on the team can see the tile (an indirect-fire target is then observed).
@@ -449,151 +449,6 @@ func stray_risks(shooter: Unit, from: Vector2i, target: Unit) -> Array[Dictionar
 	return result
 
 
-# --- Missions (see Mission) ---
-
-func mission_type() -> String:
-	return Mission.type_of(mission)
-
-
-## The side that has to do something in a mission (in a points game, team 0).
-func mission_attacker() -> int:
-	return int(mission.get("attacker", 0))
-
-
-func mission_defender() -> int:
-	return 1 - mission_attacker()
-
-
-## The mission's VIP, or null (also once he is dead: check is_alive()).
-func vip() -> Unit:
-	return get_unit(mission.get("vip", -1)) if mission.has("vip") else null
-
-
-## Whether a tile is in the mission's extraction or exit zone.
-func in_zone(p: Vector2i) -> bool:
-	var zone: Dictionary = mission.get("zone", {})
-	return not zone.is_empty() and (Vector2(p) + Vector2(0.5, 0.5)).distance_to(zone["center"]) <= float(zone["radius"])
-
-
-## The demolition target on a tile, or {}.
-func target_at(tile: Vector2i) -> Dictionary:
-	for t: Dictionary in mission.get("targets", []):
-		if t["tile"] == tile:
-			return t
-	return {}
-
-
-func targets_destroyed() -> int:
-	var count := 0
-	for t: Dictionary in mission.get("targets", []):
-		if t["state"] == "destroyed":
-			count += 1
-	return count
-
-
-## Targets next to the unit that it could plant a charge on (attacker) or pull one from (defender).
-func charge_tiles(u: Unit) -> Array[Vector2i]:
-	var result: Array[Vector2i] = []
-	for t: Dictionary in mission.get("targets", []):
-		if can_plant(u, t["tile"]) == "" or can_defuse(u, t["tile"]) == "":
-			result.append(t["tile"])
-	return result
-
-
-## Planting a demolition charge on a target next to the soldier: one action. It goes off at the start of
-## his side's next turn.
-func can_plant(u: Unit, tile: Vector2i) -> String:
-	var err := can_act(u)
-	if err != "":
-		return err
-	if mission_type() != Mission.DEMOLITION or u.team != mission_attacker():
-		return "Nothing to blow up"
-	if u.vehicle or u.hiding:
-		return "Only soldiers plant charges"
-	if u.is_pinned():
-		return "Pinned down"
-	var target := target_at(tile)
-	if target.is_empty() or target["state"] != "intact":
-		return "No target to blow there"
-	if maxi(absi(tile.x - u.pos.x), absi(tile.y - u.pos.y)) > 1:
-		return "Only from next to it"
-	return ""
-
-
-func plant(u: Unit, tile: Vector2i) -> Array:
-	if can_plant(u, tile) != "":
-		return []
-	u.actions -= 1
-	var target := target_at(tile)
-	target["state"] = "armed"
-	target["unit"] = u.id
-	var events: Array = [{"type": "charge", "tile": tile, "unit": u.id, "state": "armed"}]
-	events.append_array(_after_action())
-	return events
-
-
-## Pulling a charge off a target next to the soldier before it goes off: one action.
-func can_defuse(u: Unit, tile: Vector2i) -> String:
-	var err := can_act(u)
-	if err != "":
-		return err
-	if mission_type() != Mission.DEMOLITION or u.team != mission_defender():
-		return "No charge to pull"
-	if u.vehicle:
-		return "Only soldiers pull charges"
-	if u.is_pinned():
-		return "Pinned down"
-	var target := target_at(tile)
-	if target.is_empty() or target["state"] != "armed":
-		return "No charge there"
-	if maxi(absi(tile.x - u.pos.x), absi(tile.y - u.pos.y)) > 1:
-		return "Only from next to it"
-	return ""
-
-
-func defuse(u: Unit, tile: Vector2i) -> Array:
-	if can_defuse(u, tile) != "":
-		return []
-	u.actions -= 1
-	var target := target_at(tile)
-	target["state"] = "intact"
-	target["unit"] = -1
-	var events: Array = [{"type": "charge", "tile": tile, "unit": u.id, "state": "defused"}]
-	events.append_array(_after_action())
-	return events
-
-
-## The team's charges go off at the start of its turn: the target is destroyed, and the blast hurts anyone near.
-func _blow_charges(team: int) -> Array:
-	var events := []
-	for t: Dictionary in mission.get("targets", []):
-		if t["state"] != "armed" or team != mission_attacker():
-			continue
-		t["state"] = "destroyed"
-		var tile: Vector2i = t["tile"]
-		var planter := get_unit(t["unit"])
-		events.append({"type": "charge", "tile": tile, "unit": t["unit"], "state": "blown"})
-		map.set_object(tile, Cover.NONE)
-		events.append_array(_explode(planter, tile, Mission.CHARGE_RADIUS, Mission.CHARGE_DAMAGE[0], Mission.CHARGE_DAMAGE[1], Mission.CHARGE_SHRED))
-		map.set_terrain(tile, TacticalMap.Terrain.CRATER)
-	return events
-
-
-## Extraction: the VIP comes out of hiding when one of his own side reaches him, and can act at once.
-func _find_vip() -> Array:
-	var vip_unit := vip()
-	if vip_unit == null or not vip_unit.hiding or not vip_unit.is_alive():
-		return []
-	for u in alive_units(vip_unit.team):
-		if u != vip_unit and maxi(absi(u.pos.x - vip_unit.pos.x), absi(u.pos.y - vip_unit.pos.y)) <= 1:
-			vip_unit.hiding = false
-			mission["found"] = true
-			if current_team == vip_unit.team:
-				vip_unit.actions = Unit.ACTIONS_PER_TURN
-			return [{"type": "vip_found", "unit": vip_unit.id, "by": u.id}]
-	return []
-
-
 # --- Validation: each returns "" when allowed, otherwise the reason it isn't ---
 
 func can_act(u: Unit) -> String:
@@ -677,6 +532,8 @@ func can_suppress(u: Unit, target: Unit) -> String:
 		return err
 	if not can_lay_suppressive_fire(u):
 		return "Only machine gunners lay down suppressive fire"
+	if u.weapon.heavy and u.moved:
+		return "The gun must be set up: no suppressive fire after moving"
 	if u.ammo < CombatRules.SUPPRESSIVE_FIRE_AMMO:
 		return "Needs %d rounds, reload first" % CombatRules.SUPPRESSIVE_FIRE_AMMO
 	if target == null or not target.is_alive() or target.team == u.team:
@@ -915,7 +772,7 @@ func can_use_medkit(u: Unit, target: Unit) -> String:
 	if absi(target.pos.x - u.pos.x) > 1 or absi(target.pos.y - u.pos.y) > 1 \
 			or map.floor_height(target.pos, target.level) != map.floor_height(u.pos, u.level):
 		return "Must be adjacent"
-	if target.hp >= target.max_hp and not target.is_wounded():
+	if target.hp >= target.max_hp and not target.is_wounded() and target.suppression < CombatRules.MEDKIT_STEADIES_AT:
 		return "Not hurt"
 	return ""
 
@@ -1193,6 +1050,13 @@ func lay_trap(u: Unit, tile: Vector2i) -> Array:
 	return events
 
 
+## Actions each of a side's soldiers starts its turn with (see opening_actions).
+func actions_at_turn_start(team: int) -> int:
+	if round_number == 1 and team == first_team:
+		return opening_actions
+	return Unit.ACTIONS_PER_TURN
+
+
 ## Whether a soldier can stand down for the rest of the turn (hold).
 func can_hold(u: Unit) -> String:
 	return can_act(u)
@@ -1262,7 +1126,9 @@ func throw_smoke(u: Unit, tile: Vector2i) -> Array:
 	return events
 
 
-## The shell lands at the start of this team's next turn, scattered around the target.
+## The round comes down at once, scattered around the target (firing_scatter): fire nobody on the side can see
+## (blind) scatters BLIND_SCATTER times as far. (`strikes` only still holds rounds from games saved when they
+## landed a turn later.)
 func fire_mortar(u: Unit, tile: Vector2i, kind: String) -> Array:
 	if can_fire_mortar(u, tile, kind) != "":
 		return []
@@ -1271,13 +1137,22 @@ func fire_mortar(u: Unit, tile: Vector2i, kind: String) -> Array:
 		u.mortar_rounds -= 1
 	else:
 		u.mortar_smoke -= 1
-	strikes.append({"team": u.team, "unit": u.id, "target": tile, "kind": kind, "scatter": firing_scatter(u, tile)})
-	var events: Array = [{"type": "mortar_fire", "unit": u.id, "target": tile, "kind": kind}]
+	var strike := {"team": u.team, "unit": u.id, "target": tile, "kind": kind, "scatter": firing_scatter(u, tile)}
+	var events: Array = [{"type": "mortar_fire", "unit": u.id, "target": tile, "kind": kind, "observed": is_observed(u, tile)}]
+	events.append_array(_land_strike(strike))
 	events.append_array(_after_action())
 	return events
 
 
-## Medkits heal and also treat wounds.
+## Whether fire from `u` on `tile` is observed (and so scatters less): a forward observer (spotter "self") sees
+## it himself; any other indirect fire needs someone on the side to see it.
+func is_observed(u: Unit, tile: Vector2i) -> bool:
+	if u.indirect.get("spotter", "none") == "self":
+		return visible_from(u.pos, u.current_sight(), u.level).has(tile)
+	return is_spotted(u.team, tile)
+
+
+## Medkits heal, treat wounds and steady a shaken man (CombatRules.MEDKIT_CALM off his suppression).
 func use_medkit(u: Unit, target: Unit) -> Array:
 	if can_use_medkit(u, target) != "":
 		return []
@@ -1287,6 +1162,8 @@ func use_medkit(u: Unit, target: Unit) -> Array:
 	target.hp += amount
 	target.wounded_turns = 0
 	var events: Array = [{"type": "heal", "unit": target.id, "amount": amount, "hp": target.hp}]
+	if target.suppression > 0:
+		events.append_array(_suppress(target, -CombatRules.MEDKIT_CALM))
 	events.append_array(_after_action())
 	return events
 
@@ -1343,10 +1220,6 @@ func _apply_command(command: Dictionary) -> Array:
 			return lay_trap(u, tile)
 		"detonate":
 			return detonate(u, tile)
-		"plant":
-			return plant(u, tile)
-		"defuse":
-			return defuse(u, tile)
 	return []
 
 
@@ -1390,6 +1263,8 @@ func _begin_turn(team: int) -> Array:
 	if not burnt_out.is_empty():
 		events.append({"type": "fire_out", "tiles": burnt_out})
 	for u in alive_units(team):
+		if u.level == 0 and not u.vehicle and not map.has_fire(u.pos) and _beside_fire(u.pos):
+			events.append_array(_suppress(u, CombatRules.FIRE_HEAT_SUPPRESSION))
 		if map.has_fire(u.pos) and u.level == 0:
 			events.append({"type": "status", "unit": u.id, "text": "Burning!"})
 			events.append_array(_damage(u, CombatRules.FIRE_DAMAGE, 0))
@@ -1399,9 +1274,8 @@ func _begin_turn(team: int) -> Array:
 		if strike["team"] == team:
 			strikes.erase(strike)
 			events.append_array(_land_strike(strike))
-	events.append_array(_blow_charges(team))
 	for u in alive_units(team):
-		u.actions = 0 if u.hiding else Unit.ACTIONS_PER_TURN
+		u.actions = actions_at_turn_start(team)
 		u.overwatch = false
 		u.fired = false
 		u.moved = false
@@ -1418,7 +1292,6 @@ func _begin_turn(team: int) -> Array:
 			events.append_array(_suppress(u, -recovery))
 	events.append_array(_check_victory())
 	events.append_array(_update_objectives())
-	events.append_array(_check_hold(team))
 	return events
 
 
@@ -1460,10 +1333,12 @@ func to_dict() -> Dictionary:
 		"vp_to_win": vp_to_win, "max_rounds": max_rounds,
 		"reinforcements": waves, "strikes": strikes.duplicate(true), "known_mines": known_mines.duplicate(true),
 	}
-	# Points battles leave the mission out, Normandy battles the theatre, so they read (and checksum) as they always have.
-	if not mission.is_empty():
-		data["mission"] = mission.duplicate(true)
+	# Normandy battles leave the theatre out (and battles where team 0 moves first, first_team), so they read
+	# (and checksum) as they always have.
+	if first_team != 0:
 		data["first_team"] = first_team
+	if opening_actions != Unit.ACTIONS_PER_TURN:
+		data["opening_actions"] = opening_actions
 	if theatre_id != Theatres.DEFAULT:
 		data["theatre"] = theatre_id
 		data["kill_points"] = kill_points.duplicate()
@@ -1500,8 +1375,8 @@ static func from_dict(data: Dictionary) -> Battle:
 	battle.kill_points = data.get("kill_points", [0, 0]).duplicate()
 	battle.objective_points = data.get("objective_points", [1, 1]).duplicate()
 	battle.known_tunnels = data.get("known_tunnels", [{}, {}]).duplicate(true)
-	battle.mission = data.get("mission", {}).duplicate(true)
 	battle.first_team = data.get("first_team", 0)
+	battle.opening_actions = data.get("opening_actions", Unit.ACTIONS_PER_TURN)
 	return battle
 
 
@@ -1557,7 +1432,7 @@ func _explode(source: Unit, center: Vector2i, radius: float, damage_min: int, da
 			for known: Dictionary in known_tunnels:
 				known.erase(p)
 	var walls_before := map.get_edge_damage().duplicate()
-	var destroyed := map.blast_cover(center, radius, walls.x, walls.y) if level == 0 else 0
+	var destroyed := map.blast_cover(center, radius, walls.x, walls.y) if level == 0 else _blast_upstairs(center, walls)
 	var events: Array = [{"type": "explosion", "unit": source.id if source != null else -1, "center": center, "radius": radius, "destroyed": destroyed}]
 	if level != 0:
 		events[0]["level"] = level
@@ -1593,7 +1468,8 @@ func _explode(source: Unit, center: Vector2i, radius: float, damage_min: int, da
 func _hit_cover(shooter: Unit, target: Unit) -> Array:
 	var weapon := shooter.weapon
 	var heavy := weapon.anti_tank or weapon.blast_radius > 0.0
-	if target.level != 0:
+	# Someone on an upper floor is behind the same wall (it runs the whole height); on a roof there is none.
+	if target.level != 0 and not map.is_indoors(target.pos, target.level):
 		return []
 	var key := _covering_edge(target.pos, shooter.pos)
 	if key.z < 0:
@@ -1656,6 +1532,42 @@ func _collapse_weakened(before: Dictionary) -> Array:
 	return events
 
 
+## A blast on an upper floor or roof knocks a stage off that room's outer walls (they run the whole height
+## of the building), but no more than one however big the blast. Returns how many walls it hit.
+func _blast_upstairs(center: Vector2i, walls: Vector2i) -> int:
+	if walls.x <= 0 or map.get_storeys(center) < 2:
+		return 0
+	var hit := 0
+	for d: Vector2i in TacticalMap.DIRS4:
+		var n := center + d
+		if map.in_bounds(n) and map.get_storeys(n) >= 2:
+			continue
+		if map.damage_edge(TacticalMap.edge_key(center, n), 1):
+			hit += 1
+	return hit
+
+
+## How close the building at p (two storeys or more) is to falling in: its broken outer walls over the number
+## that bring it down (1.0 or more: it falls). 0 for anything else.
+func collapse_progress(p: Vector2i) -> float:
+	if not map.in_bounds(p) or map.get_storeys(p) < 2:
+		return 0.0
+	var tiles := _building_tiles(p)
+	var counts := _wall_counts(tiles)
+	if counts.x == 0:
+		return 0.0
+	return counts.y / (counts.x * _collapse_share(tiles))
+
+
+## The share of a building's outer walls that brings it down: CombatRules.COLLAPSE_SHARE for two storeys,
+## less for taller ones (COLLAPSE_SHARE_PER_STOREY each), never under COLLAPSE_SHARE_MIN.
+func _collapse_share(tiles: Array[Vector2i]) -> float:
+	var storeys := 2
+	for p in tiles:
+		storeys = maxi(storeys, map.get_storeys(p))
+	return maxf(CombatRules.COLLAPSE_SHARE_MIN, CombatRules.COLLAPSE_SHARE - CombatRules.COLLAPSE_SHARE_PER_STOREY * (storeys - 2))
+
+
 ## The tiles of the building of two storeys or more that p belongs to (4-connected).
 func _building_tiles(p: Vector2i) -> Array[Vector2i]:
 	var tiles: Array[Vector2i] = [p]
@@ -1672,9 +1584,14 @@ func _building_tiles(p: Vector2i) -> Array[Vector2i]:
 	return tiles
 
 
-## Whether at least CombatRules.COLLAPSE_SHARE of a building's outer walls (not counting doorways) are breached
-## or gone.
+## Whether enough of a building's outer walls (not counting doorways) are breached or gone (_collapse_share).
 func _building_broken(tiles: Array[Vector2i]) -> bool:
+	var counts := _wall_counts(tiles)
+	return counts.x > 0 and counts.y >= counts.x * _collapse_share(tiles)
+
+
+## A building's outer walls (x) and how many of them are breached or gone (y). Doorways don't count.
+func _wall_counts(tiles: Array[Vector2i]) -> Vector2i:
 	var inside := {}
 	for p in tiles:
 		inside[p] = true
@@ -1690,7 +1607,7 @@ func _building_broken(tiles: Array[Vector2i]) -> bool:
 				walls += 1
 				if damage >= 2:
 					broken += 1
-	return walls > 0 and broken >= walls * CombatRules.COLLAPSE_SHARE
+	return Vector2i(walls, broken)
 
 
 ## A building falls in: it becomes a heap of rubble inside walls broken down to stumps. Everyone in it is hurt,
@@ -1731,13 +1648,14 @@ func _collapse(tiles: Array[Vector2i]) -> Array:
 func _blast_fires(center: Vector2i, radius: float) -> Array:
 	var burning: Array[Vector2i] = []
 	for p in map.tiles_in_radius(center, radius):
-		if map.has_fire(p) or map.get_object(p) != Cover.NONE or unit_at(p) != null or map.has_vehicle(p):
+		if map.has_fire(p) or map.get_object(p) != Cover.NONE or map.has_vehicle(p):
 			continue
 		var chance: float = CombatRules.BLAST_FIRE_CHANCE.get(map.get_terrain(p), 0.0)
 		if chance <= 0.0:
 			continue
 		if p == center:
 			chance += CombatRules.BLAST_FIRE_CENTER
+		chance *= _under_unit_share(p)
 		if rng.randf() < chance:
 			_ignite(p)
 			burning.append(p)
@@ -1746,11 +1664,29 @@ func _blast_fires(center: Vector2i, radius: float) -> Array:
 	return [{"type": "fire", "tiles": burning}]
 
 
-## Sets tile p alight for CombatRules.BLAST_FIRE_TURNS. Crops, grass and undergrowth burn away to scorched ground.
+## How much of the usual chance fire has to catch on p: all of it on open ground, CombatRules.FIRE_UNDER_UNIT_SHARE
+## under a soldier in crops or tall grass, none under anyone elsewhere.
+func _under_unit_share(p: Vector2i) -> float:
+	if unit_at(p) == null:
+		return 1.0
+	return CombatRules.FIRE_UNDER_UNIT_SHARE if map.get_terrain(p) in TacticalMap.LONG_BURNING else 0.0
+
+
+## Sets tile p alight for CombatRules.BLAST_FIRE_TURNS (LONG_BURN_TURNS in crops and tall grass), and fills it
+## with smoke. Crops, grass and undergrowth burn away to scorched ground.
 func _ignite(p: Vector2i) -> void:
+	var turns := CombatRules.LONG_BURN_TURNS if map.get_terrain(p) in TacticalMap.LONG_BURNING else CombatRules.BLAST_FIRE_TURNS
 	if map.get_terrain(p) in [TacticalMap.Terrain.JUNGLE, TacticalMap.Terrain.TALL_GRASS, TacticalMap.Terrain.WHEAT, TacticalMap.Terrain.TRAMPLED]:
 		map.set_terrain(p, TacticalMap.Terrain.ROUGH)
-	map.add_fire(p, turn_index + CombatRules.BLAST_FIRE_TURNS)
+	map.add_fire(p, turn_index + turns)
+	map.add_smoke(p, turn_index + turns + CombatRules.FIRE_SMOKE_TURNS)
+
+
+func _beside_fire(p: Vector2i) -> bool:
+	for d: Vector2i in TacticalMap.DIRS4:
+		if map.has_fire(p + d) and map.get_edge(p, p + d) == Cover.NONE:
+			return true
+	return false
 
 
 ## Fires creep into the tiles beside them (CombatRules.FIRE_SPREAD_CHANCE), and set off drums next to them.
@@ -1769,9 +1705,9 @@ func _spread_fires() -> Array:
 				if not cook_off.any(func(item: Array) -> bool: return item[0] == p) and rng.randf() < CombatRules.FIRE_COOK_OFF:
 					cook_off.append([p, map.get_object_kind(p)])
 				continue
-			if map.get_object(p) != Cover.NONE or unit_at(p) != null or map.has_vehicle(p):
+			if map.get_object(p) != Cover.NONE or map.has_vehicle(p):
 				continue
-			var chance: float = CombatRules.FIRE_SPREAD_CHANCE.get(map.get_terrain(p), 0.0)
+			var chance: float = CombatRules.FIRE_SPREAD_CHANCE.get(map.get_terrain(p), 0.0) * _under_unit_share(p)
 			if chance > 0.0 and rng.randf() < chance:
 				_ignite(p)
 				spread.append(p)
@@ -2211,15 +2147,8 @@ func _update_objectives() -> Array:
 	return events
 
 
-## At the end of every round, each held objective scores a point for its owner. In a mission the
-## defender wins when the last round is over.
+## At the end of every round, each held objective scores a point for its owner.
 func _score_round() -> Array:
-	if not mission.is_empty():
-		if round_number < max_rounds:
-			return []
-		winner = mission_defender()
-		var reason: String = {Mission.HOLD: "held", Mission.ASSASSINATE: "survived", Mission.DEMOLITION: "saved"}.get(mission_type(), "time")
-		return [{"type": "game_over", "winner": winner, "reason": reason}]
 	if objectives.is_empty():
 		return []
 	for objective in objectives:
@@ -2235,53 +2164,29 @@ func _score_round() -> Array:
 	return events
 
 
+## Why a battle ended, for the game-over screen: "by holding the objectives".
+static func outcome_text(reason: String) -> String:
+	match reason:
+		"points":
+			return "by holding the objectives"
+		"eliminated":
+			return "by wiping out the enemy"
+	return ""
+
+
 func _check_victory() -> Array:
 	if winner != -1:
 		return []
 	for team in TEAM_COUNT:
-		# A VIP still lying low can't carry on the fight alone.
-		if alive_units(team).all(func(u: Unit) -> bool: return u.hiding):
+		if alive_units(team).is_empty():
 			winner = (team + 1) % TEAM_COUNT
 			return [{"type": "game_over", "winner": winner, "reason": "eliminated"}]
-	return _check_mission()
-
-
-## Mission wins that can happen at any moment: the VIP killed or got out, enough targets blown.
-func _check_mission() -> Array:
-	var reason := ""
-	match mission_type():
-		Mission.EXTRACT, Mission.ASSASSINATE:
-			var vip_unit := vip()
-			var vip_side := mission_attacker() if mission_type() == Mission.EXTRACT else mission_defender()
-			if vip_unit == null or not vip_unit.is_alive():
-				winner = 1 - vip_side
-				reason = "vip_killed"
-			elif not vip_unit.hiding and in_zone(vip_unit.pos) and round_number >= int(mission.get("opens", 1)):
-				winner = vip_side
-				reason = "extracted" if mission_type() == Mission.EXTRACT else "escaped"
-		Mission.DEMOLITION:
-			if targets_destroyed() >= int(mission["needed"]):
-				winner = mission_attacker()
-				reason = "demolished"
-	if reason == "":
-		return []
-	return [{"type": "game_over", "winner": winner, "reason": reason}]
-
-
-## Last stand: the attacker wins if it holds the objective at the start of its own turn.
-func _check_hold(team: int) -> Array:
-	if winner != -1 or mission_type() != Mission.HOLD or team != mission_attacker() or objectives.is_empty():
-		return []
-	if objectives[0]["owner"] != team:
-		return []
-	winner = team
-	return [{"type": "game_over", "winner": winner, "reason": "taken"}]
+	return []
 
 
 ## Checks for victory and objectives, then ends the turn automatically once nobody on the team can act.
 func _after_action() -> Array:
-	var events := _find_vip()
-	events.append_array(_check_victory())
+	var events := _check_victory()
 	if winner != -1:
 		return events
 	events.append_array(_update_objectives())

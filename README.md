@@ -23,7 +23,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 - **Normandy 1944**: everything below. Allies and Germany field the same kinds of soldier with their own weapons.
 - **Vietnam 1967**: lopsided on purpose.
   - The **US Army** has few soldiers. They are tough, good shots and slow under heavy loads: squad leader,
-    riflemen, an M60 gunner, an M79 grenadier who lobs grenades far, a medic, a sniper, an M113 carrier, and an
+    riflemen, an M60 gunner, an M79 grenadier who lobs grenades far, a medic, a sniper and an
     **RTO** whose radio calls **artillery** or **napalm** onto anything he can see. Napalm burns jungle and grass
     away. Reinforcements **fly in by Huey** to a landing zone.
   - The **Viet Cong** have many soldiers. They are cheap, fast and poorly armed: cadres, guerrillas with SKS
@@ -39,7 +39,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   stone houses, wrecked cars and concrete barriers (the map's seed picks one).
   - The **Coalition** wears **body armour** (a point off every hit until grenades shred it). It has an **EOD
     tech** who spots IEDs nearly every time, a **JTAC** who calls precise **air strikes** on what he sees, a SAW
-    gunner, a marksman, a medic and an **MRAP**.
+    gunner, a marksman and a medic. (Its MRAP, like Vietnam's M113 and Normandy's tanks, is switched off for now.)
   - The **insurgents** are many and light: fighters with AKs, PKM gunners, RPG-7s, a Dragunov sniper, a mortar
     and **bomb makers**. Bomb makers plant **IEDs** (a big blast that cuts through armour) and **set them off
     remotely** (K) when they can see them. IEDs are already buried along the road in.
@@ -63,8 +63,11 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 - A short list of actions per soldier: move, shoot, overwatch, reload and go prone for everyone, plus what the
   role brings (grenades, suppressive fire, rally, smoke, medkit, mortar...).
 - A soldier who shoots with both actions left (nothing else done that turn) takes a steady shot: +15 aim.
-- Snipers and heavy machine guns move or fire in a turn, not both: after moving they can't shoot or go on
-  overwatch, and after firing they can't move until their next turn.
+- The side that moves first has only one action per soldier on its opening turn, so it can't fire an aimed
+  volley or dash onto an objective before the other side has moved at all.
+- Snipers move or fire in a turn, not both: after moving they can't shoot or go on overwatch, and after firing
+  they can't move until their next turn. Heavy machine guns fire best set up: after moving they fire at -25 aim
+  and can't lay suppressive fire.
 - Firing takes a sniper both actions and he holds one round, so after every shot he must reload, and can't
   reload and fire in the same turn.
 - Directional half and full cover, flanking and line of sight that steps out around corners. Fog of war,
@@ -78,8 +81,9 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   knock two stages off the walls round where they land (one further out); a grenade one. A tank shell or
   rocket fired at someone behind a wall breaches it. Machine guns shoot fences, hedges, bamboo and windows
   apart a stage a burst, but only chip stone, brick and mud.
-- A building of two storeys or more collapses once half its outer walls (doorways not counted) are breached
-  or gone: it becomes a heap of rubble inside broken stumps of wall. Everyone in it is hurt and shaken, those
+- Hits on soldiers upstairs strike the wall in front of them, and a blast on an upper floor knocks a stage off
+  that room's outer walls. A building of two storeys collapses once 40% of its outer walls (doorways not
+  counted) are breached or gone, a taller one sooner (5% less per storey, at least a quarter): it becomes a heap of rubble inside broken stumps of wall. Everyone in it is hurt and shaken, those
   upstairs worse the further they fall.
 - Climbing in or out through a glazed window smashes it: "CRASH", and from then on it's an empty frame with
   shards in the corners (still half cover). Mud-brick and bamboo windows have no glass to break.
@@ -113,12 +117,16 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   who can rally the squad.
 - Roles:
   - Officer, Rifleman, SMG and Sniper
-  - Medic, with medkits
-  - MG, the only role that lays down suppressive fire; it can't fire after moving
-  - Mortar, with delayed, scattering high explosive shells. It is indirect fire: it can shell
-    any tile in range, even one nobody can see, though unobserved rounds scatter 1.5 times as far
+  - Medic, with medkits: each heals 5, treats a wound and takes 40 off the patient's suppression (a shaken man
+    can be treated even unhurt)
+  - MG, the only role that lays down suppressive fire (from where it set up); it pins and shakes everyone
+    round the target
+  - Mortar, with scattering high explosive shells that land at once, without ranging shots (the target
+    circle shows where a round may come down). It is indirect fire: it can shell a tile nobody on your side
+    sees, but that round scatters 1.5 times as far
   - AT with Bazooka or Panzerschreck
-  - Sherman and Panzer IV tanks
+  - Sherman and Panzer IV tanks: switched off for now (no roster, wave, shop or editor offers them), as are
+    Vietnam's M113 and Iraq's MRAP. Their rules are kept for when they come back.
 - Tanks have front, side and rear armour. They turn slowly (each 45° costs movement) and can back up. A tank's
   move takes two clicks: where to go, then where to face when it gets there (click the destination again to
   keep the heading); click the selected tank itself to turn it on the spot. They flatten crates, walls,
@@ -160,13 +168,16 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 - Terrain hazards:
   - **Fuel drums and oil tanks:** they explode when shot, caught in a blast or run over by a tank, set off
     others nearby, and leave the ground burning. Nobody can enter fire, and anyone in it is burnt at the
-    start of their turn.
+    start of their turn. A fire fills its tile with smoke (blocking sight) until two turns after it dies, and a
+    soldier who starts his turn next to one is shaken by the heat.
   - **Blast fires:** grenades, mortar rounds, rockets and tank shells set what burns alight for a couple of
-    turns: dry crops and tall grass catch easily, grass, scrub and jungle less; roads, rubble, water and
-    floors indoors never, nor the tile under a soldier. Crops and undergrowth burn away to scorched ground.
+    turns (four in dry crops and tall grass): dry crops and tall grass catch easily, grass, scrub and jungle
+    less; roads, rubble, water and floors indoors never. A soldier lying in crops or tall grass may catch
+    fire too (at half the chance), and burns unless he gets out. Crops and undergrowth burn away to scorched ground.
   - **Spreading fire:** once a round every fire may creep into the tiles beside it, by their ground: about
     one in five for wheat and tall grass, less for trampled crops, scrub and jungle, rarely over bare grass,
-    never across roads, rubble, water, walls or hedges, nor under a soldier or tank. A fuel drum or oil tank
+    never across roads, rubble, water, walls or hedges, nor under a tank (under a soldier only in crops or
+    tall grass, at half the chance). A fuel drum or oil tank
     next to a fire may cook off. Burnt crops turn to scrub, which rarely catches, so fires die out once the crops are gone.
   - **Mines:** hidden. Soldiers may spot them as they walk past (tank crews never do), clear spotted ones
     from next to them, and blasts set them off.
@@ -188,31 +199,6 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
     helmet, Germans in field grey with jackboots and the flared Stahlhelm. Machine gunners kneel behind their gun
     while they stay put, and everyone holds their rifle at the ready.
 
-**Missions** (win conditions besides points)
-- Every skirmish (village or random map), online game, scenario and two-player campaign map can be a
-  mission instead of a fight for points. One side attacks and moves first; the defender wins if the
-  round limit comes first. Wiping out the enemy still wins anything.
-  - **Last stand**: one objective, dug in by the defender (in cover, behind sandbags, no reinforcements)
-    against a stronger attacker. The attacker wins by still holding it alone at the start of its own turn,
-    so it has to keep it through the defender's whole turn. The defender holds out for 8 rounds (more on
-    bigger maps).
-  - **Extraction**: a hit and run. The attacker's VIP (liaison officer, pilot, informant) is lying low
-    around the middle of the map. He can't act, and the enemy can't see him from more than 3 tiles away,
-    until one of his own side stands next to him. Then he has to be walked into the extraction point at the
-    attacker's edge. Killing him wins for the defender. Choose whether the enemy knows where he is.
-  - **Demolition**: three targets on the defender's half (ammo dump, flak gun, radio post; weapons caches
-    and safe houses in Iraq; rice and arms caches in Vietnam). A soldier next to one plants a charge (P,
-    one action); it goes off at the start of his side's next turn, unless a defender pulls it first (P,
-    from next to it). Blowing up two wins.
-  - **Assassination**: the defender's VIP (staff officer, commissar, emir) starts among his own at the
-    back, with two bodyguards. The attacker must kill him; his side wins by keeping him alive to the end,
-    or at once by getting him into the exit on a flank, which opens a few rounds in. Choose whether the
-    hunters know where he is.
-- The top bar shows how the mission stands and what your side has to do; zones, targets (pulsing when
-  armed) and the VIP are marked on the map. The AI plays all four from either side.
-- In the two-player campaign some maps roll a mission (and which side attacks), shown on the map list and
-  the orders page. In the editor, the Mission tool (8) sets the mission and places its zone, VIP and targets.
-
 **Ways to play**
 - **Main menu**: built around one big **Play** button (focused, so Enter works too): one click starts a battle
   against the AI on a fresh standard 44x44 random map, fighting for the objectives, both sides spread out,
@@ -224,17 +210,12 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 - **Two-player campaign** (hotseat, or against the AI):
   - 3 to 5 maps, each worth a different number of points (1–5), and one pool of 100 supply per side for the
     whole campaign.
-  - Before every map both sides secretly commit 12–45 supply and buy units with it (rifleman 3 up to tank 15).
+  - Before every map both sides secretly commit 12–45 supply and buy units with it (2 to 8 supply a soldier).
     Committed supply is gone; the rest carries over to later maps.
   - Each side also picks a deployment: balanced, left or right flank, and offensive (deployed further
     forward) or defensive (further back, behind sandbags).
   - Win a map to take its points; a draw splits them. Most points wins.
-  - Some maps are missions (see Missions above) rather than a fight for points.
 - **Skirmish** on the hand-made Normandy village, a random map, or your own scenarios.
-  - Bundled historical scenario **Brecourt Manor** (D-Day, 6 June 1944): Lt. Winters and eleven men of Easy
-    Company against four German 105mm guns dug in along a hedgerow, linked by a trench, with MG nests and
-    the manor behind them. A demolition mission: blow all four guns in 15 rounds. Lt. Speirs brings men of
-    D Company up the lane in round 5; the manor garrison comes out in round 3.
   - Random maps come in several kinds per theatre, picked by name, in four sizes (small 32x32, standard 44x44,
     large 64x64, huge 84x84 with bigger forces):
     - Normandy: bocage crossroads, hedgerow hamlets, a shelled market town, a forest edge.
@@ -249,7 +230,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   maps each side picks a deployment, as in the two-player campaign: spread out along the whole edge, corner
   to corner (the default), grouped at the usual spawns, balanced or massed on the left or right flank, offensive (further forward) or defensive (further back, behind sandbags),
   in contact (a few tiles apart either side of the middle) or random. The minimap shows where each side's soldiers will start (a random deployment only once the
-  battle begins), and changes as you pick. Online, the host picks both. Pick a mission and the attacking side too.
+  battle begins), and changes as you pick. Online, the host picks both.
 - **Quick test battle** (main menu footer): one click starts a small 32x32 random map in the chosen theatre, against
   the AI, with both sides already in contact mid-map: the fastest way to try something out.
 - **Online**: two computers connect directly, at home or over the internet, no server needed.
@@ -263,7 +244,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   - After every order both games check they hold the identical battle. Online games save at each agreed turn
     and can be continued later with the same opponent.
 - **Map and scenario editor**: paint terrain, cover and walls, ground height, storeys and stairs (the Height
-  tool), place units, objectives and reinforcement spawns, set the mission (zone, VIP, targets), and save
+  tool), place units, objectives and reinforcement spawns, and save
   scenarios as JSON. Play or test them with the AI straight away.
 
 **AI**
@@ -273,8 +254,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   broad front, take two neighbouring objectives and dig in on them, a left or right hook rolling up the
   objectives from that flank, a punch through the centre (keeping together), a pincer on both flanks, an
   armoured spearhead (infantry following behind the tanks), wait near home and counterattack, an all-out push,
-  or bleeding the enemy from cover at long range. Plans only come up where they fit (tanks, enough objectives,
-  the side of a mission). It changes plan when it stops making sense: the spearhead without tanks, the ambush
+  or bleeding the enemy from cover at long range. Plans only come up where they fit (tanks, enough objectives). It changes plan when it stops making sense: the spearhead without tanks, the ambush
   when its time is up or it falls behind, and anything turns into an all-out push when far behind late on.
   Its plan is shown in the log when the battle ends (and at the start when watching AI vs AI).
   In a skirmish, "Choose AI plans" sets the plan for each side the AI plays, or leaves it random (the
@@ -306,7 +286,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 | Right click / Esc | Cancel the action; Esc again deselects the soldier, so the left button drags the map |
 | Hold right click (moving) | Count and ring the seen enemies the soldier could target from the hovered tile |
 | 1 – 4 | The actions every soldier has, always on the same keys: 1 shoot (a steady shot with both actions left), 2 overwatch, 3 reload, 4 go prone / stand up (tanks have no 4) |
-| 5 – 0 | The role's own actions, numbered in the order they sit on the bar: suppressive fire, grenade, smoke, rally, medkit, mortar, trap, IED, then the ones that only show up now and then (a demolition charge, a tunnel entrance, a mine or tunnel next to the soldier). An officer: 5 grenade, 6 smoke, 7 rally. Gear that runs out stays on the bar, greyed, so the keys never shift |
+| 5 – 0 | The role's own actions, numbered in the order they sit on the bar: suppressive fire, grenade, smoke, rally, medkit, mortar, trap, IED, then the ones that only show up now and then (a tunnel entrance, a mine or tunnel next to the soldier). An officer: 5 grenade, 6 smoke, 7 rally. Gear that runs out stays on the bar, greyed, so the keys never shift |
 | Action bar | Bottom right: every action the soldier has as an icon with its key in the corner and what's left (grenades, smoke, medkits, ammo); hover for its name. The icons share one look: ink only, the same size and line weight |
 | Shoot on drums / an oil tank | In shoot mode, click fuel drums or an oil tank to blow them up |
 | H / Shift+H | Suggest a move / suggest for the selected soldier |
@@ -324,7 +304,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 While watching a replay: Space play / pause, N next action, Enter next turn, R restart, 1 / 2 / 3 the Allies'
 view, Germany's view, the whole map. Camera keys and + / - work as in battle.
 
-The map editor has its own keys, listed in its panel: 1–9 pick a tool, R turns a unit, Ctrl+Z undoes and
+The map editor has its own keys, listed in its panel: 1–8 pick a tool, R turns a unit, Ctrl+Z undoes and
 Ctrl+S saves.
 
 ## Running

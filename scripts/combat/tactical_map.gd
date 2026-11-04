@@ -62,6 +62,8 @@ const CRUSHABLE_EDGES := ["fence", "stone", "hedge", "dyke", "bamboo_wall", "bam
 ## breached (half cover, a gap to climb and shoot through), gone. Half-cover edges go in two.
 const FULL_EDGE_KINDS := ["wall", "hedge", "bamboo_wall", "mud_wall"]
 ## Light edges a machine gun can shoot to pieces; it only chips stone, brick and mud walls.
+## Ground that burns long and can catch even under a soldier (CombatRules.LONG_BURN_TURNS).
+const LONG_BURNING := [Terrain.WHEAT, Terrain.TALL_GRASS, Terrain.TRAMPLED]
 const FLIMSY_EDGES := ["fence", "hedge", "bamboo_wall", "bamboo_window", "window", "broken_window"]
 ## Hedges are only leaves and twigs: every hit on one knocks this many times the stages off (see damage_edge).
 const HEDGE_DAMAGE_FACTOR := 2

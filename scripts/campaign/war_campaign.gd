@@ -22,11 +22,8 @@ const MAP_COUNTS := [3, 4, 5]
 const FLANKS := ["balanced", "left", "right"]
 const POSTURES := ["offensive", "defensive"]
 const SIZES := [36, 40, 44, 48]
-## Chance a map is fought for points; the rest roll one of the other missions, either side attacking.
-const POINTS_CHANCE := 0.4
 
-## Each: {"name", "seed", "size", "points", "mission": a mission setup ({"type", "attacker", "vip_known"}, see
-## Mission; {} or missing for points), "orders": [Allied, German] (or {} until given), "result": {} or
+## Each: {"name", "seed", "size", "points", "orders": [Allied, German] (or {} until given), "result": {} or
 ## {"winner": team or Battle.DRAW, "vp": [a, b], "spent": [a, b]}}.
 var theatre_id := Theatres.DEFAULT
 var maps: Array[Dictionary] = []
@@ -53,20 +50,7 @@ static func create(map_count: int, seed: int, p_ai_sides := [false, true], p_the
 			"name": places[i], "seed": war._rng.randi_range(1, 999999), "size": SIZES[war._rng.randi_range(0, SIZES.size() - 1)],
 			"points": values[i], "orders": [{}, {}], "result": {},
 		})
-	# Missions are rolled from their own generator, so the maps themselves are what they always were.
-	var rolls := RandomNumberGenerator.new()
-	rolls.seed = seed * 31 + 5
-	for m in war.maps:
-		m["mission"] = roll_mission(rolls)
 	return war
-
-
-## A random mission setup for a map: points some of the time, otherwise any other mission and attacker.
-static func roll_mission(rng: RandomNumberGenerator) -> Dictionary:
-	if rng.randf() < POINTS_CHANCE:
-		return {}
-	var types := Mission.TYPES.filter(func(t: String) -> bool: return t != Mission.POINTS)
-	return {"type": types[rng.randi_range(0, types.size() - 1)], "attacker": rng.randi_range(0, 1), "vip_known": rng.randf() < 0.5}
 
 
 func theatre() -> Theatre:
@@ -126,7 +110,7 @@ func check_orders(side: int, orders: Dictionary) -> String:
 	if roster.size() > max_units(side):
 		return "At most %d units" % max_units(side)
 	for role in roster:
-		if not theatre().has_role(side, role) or role == Mission.VIP_ROLE:
+		if not theatre().has_role(side, role):
 			return "Unknown unit: %s" % role
 	var cost := cost_of(side, roster)
 	var limits := spend_limits(side)
@@ -168,7 +152,7 @@ func ai_orders(side: int) -> Dictionary:
 	# An officer and a core of riflemen first, then support weapons, then more riflemen.
 	var faction := theatre().faction(side)
 	var wishes: Array = faction["ai_wishes"].duplicate()
-	if budget >= 36 and _rng.randf() < 0.6 and faction.get("ai_heavy", "") != "":
+	if budget >= 36 and _rng.randf() < 0.6 and faction.get("ai_heavy", "") != "" and theatre().role_ids(side).has(faction["ai_heavy"]):
 		wishes.insert(1, faction["ai_heavy"])
 	for role: String in wishes:
 		if roster.size() >= max_units(side):
@@ -208,15 +192,9 @@ func build_battle() -> Battle:
 	var deployments: Array = m["orders"]
 	var rosters := deploy(layout, [m["orders"][0]["roster"], m["orders"][1]["roster"]], deployments)
 	var size: int = m["size"]
-	var mission_setup: Dictionary = m.get("mission", {})
-	var rounds := 12 + size / 8
-	if Mission.type_of(mission_setup) != Mission.POINTS:
-		rounds = Mission.rounds_for(Mission.type_of(mission_setup), size)
-	var options := {"theatre": theatre_id, "vp_to_win": 8 + size / 8, "max_rounds": rounds}
+	var options := {"theatre": theatre_id, "vp_to_win": 8 + size / 8, "max_rounds": 12 + size / 8}
 	options.merge(theatre().battle_options())
-	var prepared := Mission.prepare(theatre(), layout, rosters, mission_setup, m["seed"], rounds)
-	options["mission"] = prepared["mission"]
-	return BattleFactory.create(prepared["layout"], prepared["rosters"], m["seed"], options)
+	return BattleFactory.create(layout, rosters, m["seed"], options)
 
 
 ## Places both rosters as their deployments say ({"flank", "posture"}; {} keeps a side on the map's usual

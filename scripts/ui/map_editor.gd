@@ -4,12 +4,12 @@ extends Node2D
 ## load scenario files (user://scenarios/), play them, or let the AI play a few games to check the balance.
 ##
 ## Mouse: left paints or places, right removes, middle drag pans, wheel zooms. Keys: Q/E rotate, V iso or
-## top-down, WASD/arrows pan, 1-7 pick a tool, R turns the selected unit, Ctrl+Z undoes, Ctrl+S saves.
+## top-down, WASD/arrows pan, 1-8 pick a tool, R turns the selected unit, Ctrl+Z undoes, Ctrl+S saves.
 
 const DrawLayer := preload("res://scripts/view/draw_layer.gd")
 
-enum Tool { TERRAIN, OBJECT, EDGE, UNIT, OBJECTIVE, SPAWN, ERASE, MISSION, HEIGHT }
-const TOOL_NAMES := ["Ground", "Objects", "Walls", "Units", "Objectives", "Spawns", "Erase", "Mission", "Height"]
+enum Tool { TERRAIN, OBJECT, EDGE, UNIT, OBJECTIVE, SPAWN, ERASE, HEIGHT }
+const TOOL_NAMES := ["Ground", "Objects", "Walls", "Units", "Objectives", "Spawns", "Erase", "Height"]
 const TOOL_HINTS := [
 	"Left paints the ground, right paints grass.",
 	"Left places, right removes.",
@@ -18,7 +18,6 @@ const TOOL_HINTS := [
 	"Left on an empty spot adds an objective, inside one selects it. Right removes.",
 	"Reinforcements arrive on these tiles. Left adds a tile to the selected wave, right removes it.",
 	"Clears objects, walls, units and spawns under the brush.",
-	"The win condition. Extraction and assassination: left places the zone or the VIP (pick which below). Demolition: left adds a target, right removes one. Last stand uses the one objective.",
 	"Ground height: left raises the ground under the brush to the level, right levels it to 0. Neighbours a level apart are a slope, two or more a cliff. Storeys: left makes indoor tiles that tall (two or more have a flat roof), right one storey. Stairs: left puts a staircase on an indoor tile, right removes it.",
 ]
 ## What the Height tool paints, and its levels.
@@ -63,8 +62,6 @@ var _overlay: Node2D
 var _faded := {}
 
 var _tool := Tool.TERRAIN
-## What a left click with the Mission tool places in an extraction or assassination: "zone" or "vip".
-var _mission_place := "zone"
 var _terrain: int = TacticalMap.Terrain.ROAD
 var _object_kind := "tree"
 var _edge_kind := "hedge"
@@ -356,11 +353,6 @@ func _paint_overlay(c: CanvasItem) -> void:
 		var objective: Dictionary = _s.objectives[i]
 		var selected := i == _selected_objective
 		c.draw_polyline(TerrainPainter.ground_circle(_proj, objective["center"], objective["radius"]), Color.WHITE if selected else NEUTRAL, 3.0 if selected else 1.5)
-	var zone: Dictionary = _s.mission.get("zone", {})
-	if not zone.is_empty():
-		c.draw_polyline(TerrainPainter.ground_circle(_proj, zone["center"], zone["radius"]), Color("ffd34d"), 2.5)
-	for t: Dictionary in _s.mission.get("targets", []):
-		c.draw_polyline(_tile_outline(t["tile"]), Color("ff6a3d"), 3.0)
 	for wi in _s.reinforcements.size():
 		var wave: Dictionary = _s.reinforcements[wi]
 		var color: Color = _team_color(wave["team"])
@@ -401,11 +393,6 @@ func _draw() -> void:
 	for wave in _s.reinforcements:
 		for p: Vector2i in wave["spawns"]:
 			_label(_proj.project(Vector2(p) + Vector2(0.5, 0.5), 0.3) + Vector2(-40, 0), "R%d" % wave["round"], _team_color(wave["team"]), 80, 11)
-	var zone: Dictionary = _s.mission.get("zone", {})
-	if not zone.is_empty():
-		_label(_proj.project(zone["center"], 1.0) + Vector2(-80, 0), zone["name"].to_upper(), Color("ffd34d"), 160, 12)
-	for t: Dictionary in _s.mission.get("targets", []):
-		_label(_proj.project(Vector2(t["tile"]) + Vector2(0.5, 0.5), 1.4) + Vector2(-80, 0), t["name"].to_upper(), Color("ff6a3d"), 160, 12)
 
 
 func _label(at: Vector2, text: String, color: Color, width: float, size := 13) -> void:
@@ -555,7 +542,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					_stroke = 1 if event.button_index == MOUSE_BUTTON_LEFT else 2
 					_stroke_last = ""
 					_apply_stroke()
-					if _tool in [Tool.UNIT, Tool.OBJECTIVE, Tool.SPAWN, Tool.MISSION]:
+					if _tool in [Tool.UNIT, Tool.OBJECTIVE, Tool.SPAWN]:
 						_stroke = 0
 				elif not event.pressed:
 					if _stroke != 0:
@@ -584,7 +571,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				_toggle_view()
 			KEY_R:
 				_turn_selected_unit()
-			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9:
+			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8:
 				_set_tool(event.keycode - KEY_1)
 			_:
 				return
@@ -699,8 +686,6 @@ func _apply_stroke() -> void:
 			_objective_click(_hover, removing)
 		Tool.SPAWN:
 			_spawn_click(_hover, removing)
-		Tool.MISSION:
-			_mission_click(_hover, removing)
 	_overlay.queue_redraw()
 
 
@@ -807,119 +792,6 @@ func _spawn_click(p: Vector2i, removing: bool) -> void:
 			_flash("Spawns must be on open ground")
 	queue_redraw()
 	_after_edit()
-
-
-## Mission tool clicks: place the zone or the VIP, or add and remove demolition targets.
-func _mission_click(p: Vector2i, removing: bool) -> void:
-	var type := Mission.type_of(_s.mission)
-	match type:
-		Mission.EXTRACT, Mission.ASSASSINATE:
-			if removing:
-				return
-			if _mission_place == "vip":
-				if not _s.map.is_passable(p) or (_unit_index_at(p) != -1 and _s.units[_unit_index_at(p)]["role"] != Mission.VIP_ROLE):
-					_flash("The VIP needs an empty, open tile")
-					return
-				var team := _vip_team()
-				for i in range(_s.units.size() - 1, -1, -1):
-					if _s.units[i]["role"] == Mission.VIP_ROLE:
-						_s.units.remove_at(i)
-				_s.units.append(Scenario.unit_entry(team, Mission.VIP_ROLE, p))
-				_selected_unit = -1
-				_rebuild_units()
-			else:
-				var zone: Dictionary = _s.mission.get("zone", {"name": "Extraction point" if type == Mission.EXTRACT else "Exit", "radius": Mission.ZONE_RADIUS})
-				zone["center"] = Vector2(p) + Vector2(0.5, 0.5)
-				_s.mission["zone"] = zone
-		Mission.DEMOLITION:
-			var targets: Array = _s.mission.get("targets", [])
-			var existing := targets.filter(func(t: Dictionary) -> bool: return t["tile"] == p)
-			if removing:
-				for t: Dictionary in existing:
-					targets.erase(t)
-			elif existing.is_empty():
-				if _unit_index_at(p) != -1:
-					_flash("A unit stands there")
-					return
-				var names: Array = _s.theatre().faction(1 - int(_s.mission.get("attacker", 0))).get("targets", ["Target"])
-				targets.append({"name": names[targets.size() % names.size()], "tile": p})
-			_s.mission["targets"] = targets
-		_:
-			_flash("Pick extraction, demolition or assassination to place things on the map")
-	queue_redraw()
-	_after_edit()
-
-
-## Whose the VIP is: the attacker's in an extraction, the defender's in an assassination.
-func _vip_team() -> int:
-	var attacker := int(_s.mission.get("attacker", 0))
-	return attacker if Mission.type_of(_s.mission) == Mission.EXTRACT else 1 - attacker
-
-
-## The mission tool's options: the type, the attacker and what goes with the type.
-func _mission_options() -> void:
-	var type := Mission.type_of(_s.mission)
-	_choice(_options, "Mission", Mission.TYPES.map(func(t: String) -> String: return Mission.title(t)), Mission.TYPES.find(type), func(i: int) -> void:
-		_checkpoint()
-		var new_type: String = Mission.TYPES[i]
-		var attacker := int(_s.mission.get("attacker", 0))
-		_s.mission = {} if new_type == Mission.POINTS else {"type": new_type, "attacker": attacker}
-		if new_type == Mission.DEMOLITION:
-			_s.mission["needed"] = Mission.TARGETS_NEEDED
-		if new_type == Mission.ASSASSINATE:
-			_s.mission["opens"] = 4
-		_mission_place = "zone"
-		_after_edit()
-		_overlay.queue_redraw()
-		_set_tool.call_deferred(Tool.MISSION))
-	if type == Mission.POINTS:
-		_text(_options, "Objectives score every round; first to the points wins. Pick another mission for a different win condition.", MUTED, 12, true)
-		return
-	_choice(_options, "Attacker", _team_names(), int(_s.mission.get("attacker", 0)), func(i: int) -> void:
-		_checkpoint()
-		_s.mission["attacker"] = i
-		# The VIP changes sides with the mission.
-		for u in _s.units:
-			if u["role"] == Mission.VIP_ROLE:
-				u["team"] = _vip_team()
-		_rebuild_units()
-		_after_edit()
-		_set_tool.call_deferred(Tool.MISSION))
-	_text(_options, Mission.blurb(type, int(_s.mission.get("attacker", 0)), _s.theatre()) + " The defender wins when the rounds run out.", MUTED, 12, true)
-	match type:
-		Mission.HOLD:
-			_text(_options, "Uses the one objective (Objectives tool); it starts out the defender's. Rounds (above) is how long they must hold.", MUTED, 12, true)
-		Mission.EXTRACT, Mission.ASSASSINATE:
-			_choice(_options, "Place", ["Zone (%s)" % ("extraction point" if type == Mission.EXTRACT else "exit"), "VIP (%s)" % _s.theatre().team_name(_vip_team())],
-					0 if _mission_place == "zone" else 1, func(i: int) -> void: _mission_place = "zone" if i == 0 else "vip")
-			var known := CheckBox.new()
-			known.text = "The enemy knows where the VIP is"
-			known.button_pressed = _s.mission.get("vip_known", false)
-			known.toggled.connect(func(on: bool) -> void: _s.mission["vip_known"] = on)
-			_options.add_child(known)
-			var row := HBoxContainer.new()
-			_options.add_child(row)
-			_text(row, "Zone radius", MUTED, 13)
-			var radius := _spin(row, 1.0, 10.0, func(v: float) -> void:
-				if _s.mission.has("zone"):
-					_s.mission["zone"]["radius"] = v
-					_overlay.queue_redraw()
-					queue_redraw())
-			radius.step = 0.5
-			radius.value = _s.mission.get("zone", {}).get("radius", Mission.ZONE_RADIUS)
-			if type == Mission.ASSASSINATE:
-				var opens_row := HBoxContainer.new()
-				_options.add_child(opens_row)
-				_text(opens_row, "Exit opens in round", MUTED, 13)
-				_spin(opens_row, 1, 99, func(v: float) -> void: _s.mission["opens"] = int(v)).value = _s.mission.get("opens", 1)
-		Mission.DEMOLITION:
-			var row := HBoxContainer.new()
-			_options.add_child(row)
-			_text(row, "Targets to blow", MUTED, 13)
-			_spin(row, 1, 9, func(v: float) -> void:
-				_s.mission["needed"] = int(v)
-				_after_edit()).value = _s.mission.get("needed", 1)
-			_text(_options, "%d targets placed." % _s.mission.get("targets", []).size(), MUTED, 12)
 
 
 func _unit_index_at(p: Vector2i) -> int:
@@ -1163,8 +1035,6 @@ func _show_tool_options() -> void:
 			_objective_options()
 		Tool.SPAWN:
 			_text(_options, "Wave: %s" % (_wave_choice.get_item_text(_wave) if not _s.reinforcements.is_empty() else "none yet (add one below)"), MUTED, 13, true)
-		Tool.MISSION:
-			_mission_options()
 
 
 func _brush_choice() -> void:
@@ -1352,9 +1222,6 @@ func _load_builtin(kind: String) -> void:
 		_flash("%s has no hand-made map" % Theatres.get_theatre(theatre_id).title)
 		return
 	var setup := {"theatre": theatre_id, "map": kind, "size": size, "seed": seed}
-	# A mission picked with the Mission tool comes along, placed on the new map.
-	if Mission.type_of(_s.mission) != Mission.POINTS:
-		setup["mission"] = {"type": _s.mission["type"], "attacker": _s.mission.get("attacker", 0), "vip_known": _s.mission.get("vip_known", false)}
 	var built := GameSession.build_skirmish(setup)
 	var scenario := Scenario.from_battle(built[0], built[1], false)
 	_open(scenario, "")

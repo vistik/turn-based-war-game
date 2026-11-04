@@ -34,7 +34,7 @@ const WEAPONS := {
 ## The M113's aluminium armour stops less than a tank's.
 const APC_ARMOR := {"front": 2, "side": 1, "rear": 0}
 ## The radio operator calls in a 105mm battery: anywhere he can see, no setting up, a big blast, but scattered.
-const ARTILLERY := {"name": "artillery", "min": 4.0, "max": 999.0, "radius": 2.0, "damage": [3, 6], "scatter": 0.0, "scatter_flat": 1.5,
+const ARTILLERY := {"name": "artillery", "min": 4.0, "max": 999.0, "radius": 2.0, "damage": [3, 6], "scatter": 0.0, "scatter_flat": 1.0,
 	"kinds": ["he", "napalm"], "still": false, "spotter": "self"}
 
 const MISSIONS := [
@@ -55,13 +55,13 @@ const MISSIONS := [
 	},
 	{
 		"name": "Hold the LZ",
-		"briefing": "We're the blocking force. An M113 is with us and more men are coming in by Huey in round 4. Hold the landing zone, the crossing and the hamlet against everything they throw.",
+		"briefing": "We're the blocking force. A second M60 team is with us and more men are coming in by Huey in round 4. Hold the landing zone, the crossing and the hamlet against everything they throw.",
 		"map": {"seed": 7303, "size": Vector2i(44, 44)},
 		"enemy": ["Cadre", "Cadre", "Guerrilla", "Guerrilla", "Guerrilla", "Guerrilla", "Guerrilla", "Assault", "Assault", "Assault",
 			"RPD Gunner", "RPG", "RPG", "Mortar", "Sapper"],
 		"enemy_reinforcements": [{"round": 3, "roster": ["Guerrilla", "Guerrilla", "Assault"], "tunnels": true},
 			{"round": 6, "roster": ["Guerrilla", "Guerrilla", "RPG"], "tunnels": true}],
-		"support": ["M113"],
+		"support": ["M60 Gunner"],
 		"reinforcements": [{"round": 4, "team": 0, "roster": ["Rifleman", "Rifleman", "M60 Gunner"], "air": true}],
 		"vp_to_win": 12, "max_rounds": 16,
 	},
@@ -89,7 +89,6 @@ func _init() -> void:
 				"Sniper", "Rifleman", "Rifleman"],
 			"ai_heavy": "M113",
 			"fill_roles": ["Rifleman", "Grenadier", "Squad Leader", "Medic"],
-			"vip_name": "Pilot", "targets": ["Ammo bunker", "Radio post", "Howitzer"], "target_object": "crate",
 		},
 		{
 			"name": "Viet Cong", "adjective": "VC", "color": Color("d98a63"),
@@ -107,7 +106,6 @@ func _init() -> void:
 				"Mortar", "Guerrilla", "Assault", "Guerrilla", "Guerrilla", "RPG", "Assault", "Guerrilla", "Sapper", "Guerrilla"],
 			"ai_heavy": "",
 			"fill_roles": ["Guerrilla", "Assault", "Cadre", "Sapper"],
-			"vip_name": "Commissar", "targets": ["Arms cache", "Rice cache", "Field hospital"], "target_object": "rice_sacks",
 		},
 	]
 
@@ -122,11 +120,11 @@ static func _us_roles() -> Dictionary:
 		"Grenadier": Theatre.role({"name": "Grenadier", "hp": 8, "aim": 62, "mobility": 6.5, "grenades": 5, "throw_range": 15.0, "weapon": WEAPONS["m79"],
 			"range": 7.0, "cost": 5, "note": "M79: lobs grenades a long way", "kit": "Grenadier", "icon": "Grenadier"}),
 		"M60 Gunner": Theatre.role({"name": "M60 Gunner", "hp": 9, "aim": 72, "mobility": 6.0, "weapon": WEAPONS["m60"], "range": 9.0, "cost": 7,
-			"note": "Heavy suppression; moves or fires, not both", "kit": "MG", "icon": "MG"}),
+			"note": "Heavy suppression; set up to fire well, -25 aim on the move", "kit": "MG", "icon": "MG"}),
 		"Medic": Theatre.role({"name": "Medic", "hp": 7, "aim": 58, "mobility": 6.5, "medkits": 4, "weapon": WEAPONS["m16"],
-			"range": 6.0, "cost": 5, "note": "\"Doc\": heals and treats wounds"}),
-		"RTO": Theatre.role({"name": "RTO", "hp": 8, "aim": 62, "mobility": 6.5, "mortar_rounds": 2, "mortar_smoke": 1, "weapon": WEAPONS["m16"],
-			"indirect": ARTILLERY, "range": 8.0, "holds_back": true, "cost": 9,
+			"range": 6.0, "cost": 4, "note": "\"Doc\": heals, treats wounds and steadies the shaken"}),
+		"RTO": Theatre.role({"name": "RTO", "hp": 8, "aim": 62, "mobility": 6.5, "mortar_rounds": 4, "mortar_smoke": 1, "weapon": WEAPONS["m16"],
+			"indirect": ARTILLERY, "range": 8.0, "holds_back": true, "cost": 8,
 			"note": "Radio: calls artillery or napalm on what he sees", "kit": "RTO", "icon": "RTO"}),
 		"Sniper": Theatre.role({"name": "Sniper", "hp": 7, "aim": 75, "mobility": 6.0, "sight": 22.0, "weapon": WEAPONS["m21"], "range": 12.0,
 			"holds_back": true, "cost": 7, "note": "Long sight, best at range; firing takes the whole turn, then a reload"}),
@@ -155,7 +153,7 @@ static func _vc_roles() -> Dictionary:
 			"note": "RPG-2: stops armour, blows cover apart", "kit": "AT", "icon": "AT"}),
 		"Sapper": vc.call({"name": "Sapper", "hp": 5, "aim": 50, "mobility": 8.5, "grenades": 3, "weapon": WEAPONS["type50"], "range": 3.0,
 			"cost": 3, "note": "Satchel charges; lays punji traps", "kit": "Sapper", "icon": "Sapper", "traits": ["traps"], "traps": 2}),
-		"Mortar": vc.call({"name": "Mortar", "hp": 5, "aim": 50, "mobility": 6.5, "mortar_rounds": 3, "weapon": WEAPONS["sks"],
+		"Mortar": vc.call({"name": "Mortar", "hp": 5, "aim": 50, "mobility": 6.5, "mortar_rounds": 5, "weapon": WEAPONS["sks"],
 			"indirect": {"name": "mortar", "max": 20.0}, "range": 14.0, "holds_back": true, "cost": 4, "note": "60mm mortar over the treeline"}),
 	}
 
@@ -183,12 +181,12 @@ func skirmish_forces(size: int) -> Dictionary:
 	if size >= 60:
 		us.append_array(["Rifleman", "Rifleman", "M60 Gunner", "Sniper"])
 		vc.append_array(["Guerrilla", "Guerrilla", "Assault", "Assault", "RPG", "Sapper"])
-		us_wave.append("M113")
+		us_wave.append("Rifleman")
 		vc_wave.append_array(["Guerrilla", "RPG"])
 		rounds = 24
 		points = 16
 	if size >= 80:
-		us.append_array(["M113", "Squad Leader", "Grenadier"])
+		us.append_array(["Rifleman", "Squad Leader", "Grenadier"])
 		vc.append_array(["Cadre", "Guerrilla", "Guerrilla", "RPD Gunner", "Mortar"])
 		us_wave.append_array(["Rifleman", "Medic"])
 		vc_wave.append_array(["Assault", "Assault", "Guerrilla"])

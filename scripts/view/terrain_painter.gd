@@ -50,8 +50,8 @@ const FLAME := [Color(1.0, 0.82, 0.3), Color(1.0, 0.5, 0.12), Color(0.85, 0.22, 
 const MINE := Color("3d3a33")
 const MINE_SIGN := Color("e7d9a8")
 const WALL_HEIGHT := 1.05
-## How tall a hedge is drawn: kept low, about a fuel drum, so soldiers and props behind it stay in view. For
-## sight and cover it is as tall as TacticalMap.HEDGE_HEIGHT.
+## How tall a hedge is drawn: shoulder high, like TacticalMap.HEDGE_HEIGHT, which standing soldiers see over
+## and those lying down don't.
 const HEDGE_HEIGHT := 0.5
 const LOW_WALL_HEIGHT := 0.45
 const SILL_HEIGHT := 0.4

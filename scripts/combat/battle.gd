@@ -187,16 +187,16 @@ func team_sees(team: int, target: Unit) -> bool:
 func team_visible_tiles(team: int) -> Dictionary:
 	var result := {}
 	for u in alive_units(team):
-		result.merge(visible_from(u.pos, u.current_sight(), u.level))
+		result.merge(visible_from(u.pos, u.current_sight(), u.level, Battle.eye_stance(u)))
 	return result
 
 
-## Tiles in sight from a spot (any floor of them, on maps with height).
-func visible_from(pos: Vector2i, sight: float, level := 0) -> Dictionary:
+## Tiles in sight from a spot (any floor of them, on maps with height), with the eyes of `stance`.
+func visible_from(pos: Vector2i, sight: float, level := 0, stance := 0) -> Dictionary:
 	if _vision_revision != map.revision:
 		_vision.clear()
 		_vision_revision = map.revision
-	var key := Vector4i(pos.x, pos.y, roundi(sight * 10), level)
+	var key := Vector4i(pos.x, pos.y, roundi(sight * 10), level * 4 + stance)
 	if not _vision.has(key):
 		var tiles := {}
 		var r := ceili(sight)
@@ -206,24 +206,24 @@ func visible_from(pos: Vector2i, sight: float, level := 0) -> Dictionary:
 		for y in range(pos.y - r, pos.y + r + 1):
 			for x in range(pos.x - r, pos.x + r + 1):
 				var p := Vector2i(x, y)
-				if map.in_bounds(p) and sees_tile(pos, level, p, sight):
+				if map.in_bounds(p) and sees_tile(pos, level, p, sight, stance):
 					tiles[p] = true
 		_vision[key] = tiles
 	return _vision[key]
 
 
-## Whether someone standing at (pos, level) sees any floor of tile p.
-func sees_tile(pos: Vector2i, level: int, p: Vector2i, sight: float) -> bool:
-	return target_level(pos, level, p, sight) != -1
+## Whether someone at (pos, level), standing unless `stance` says otherwise, sees any floor of tile p.
+func sees_tile(pos: Vector2i, level: int, p: Vector2i, sight: float, stance := 0) -> bool:
+	return target_level(pos, level, p, sight, stance) != -1
 
 
 ## The floor of tile p someone at (pos, level) sees: the ground (or ground floor) if he sees it, else the
 ## highest he does; -1 if none.
-func target_level(pos: Vector2i, level: int, p: Vector2i, sight: float) -> int:
-	if LineOfSight.can_see(map, pos, p, sight, false, level, 0):
+func target_level(pos: Vector2i, level: int, p: Vector2i, sight: float, stance := 0) -> int:
+	if LineOfSight.can_see(map, pos, p, sight, false, level, 0, stance):
 		return 0
 	for l in range(map.top_level(p), 0, -1):
-		if LineOfSight.can_see(map, pos, p, sight, false, level, l):
+		if LineOfSight.can_see(map, pos, p, sight, false, level, l, stance):
 			return l
 	return -1
 
@@ -646,7 +646,7 @@ func can_detonate(u: Unit, tile: Vector2i) -> String:
 		return "Only the bomb maker sets off IEDs"
 	if not map.has_mine(tile) or map.get_mine_kind(tile) != "ied" or not known_mines[u.team].has(tile):
 		return "No IED of ours there"
-	if Vector2(u.pos).distance_to(Vector2(tile)) > CombatRules.DETONATE_RANGE or not visible_from(u.pos, u.current_sight(), u.level).has(tile):
+	if Vector2(u.pos).distance_to(Vector2(tile)) > CombatRules.DETONATE_RANGE or not visible_from(u.pos, u.current_sight(), u.level, Battle.eye_stance(u)).has(tile):
 		return "He can't see it from here"
 	return ""
 
@@ -752,7 +752,7 @@ func can_fire_mortar(u: Unit, tile: Vector2i, kind: String) -> String:
 	if distance > spec["max"]:
 		return "Out of %s range" % what
 	if spec["spotter"] == "self":
-		if not visible_from(u.pos, u.current_sight(), u.level).has(tile):
+		if not visible_from(u.pos, u.current_sight(), u.level, Battle.eye_stance(u)).has(tile):
 			return "Can't see that tile"
 	elif spec["spotter"] == "team" and not team_visible_tiles(u.team).has(tile):
 		return "Nobody can spot that tile"
@@ -1462,22 +1462,27 @@ func _explode(source: Unit, center: Vector2i, radius: float, damage_min: int, da
 
 ## A shot at someone behind a wall, hedge or fence also hits it: a tank shell or rocket knocks two stages off
 ## (breaching a wall), a machine gun shoots light cover (fences, hedges, bamboo, windows) apart a stage at a
-## time but only chips stone, brick and mud. Rifles and the like leave walls standing.
+## time but only chips stone, brick and mud. Rifles and the like leave walls standing but strip a hedge a
+## stage at a time. Hedges take every hit double (TacticalMap.HEDGE_DAMAGE_FACTOR): a machine gun breaches
+## one in a burst, a shell or rocket blows it away.
 func _hit_cover(shooter: Unit, target: Unit) -> Array:
 	var weapon := shooter.weapon
 	var heavy := weapon.anti_tank or weapon.blast_radius > 0.0
-	if not heavy and weapon.kind != "mg":
-		return []
 	# Someone on an upper floor is behind the same wall (it runs the whole height); on a roof there is none.
 	if target.level != 0 and not map.is_indoors(target.pos, target.level):
 		return []
 	var key := _covering_edge(target.pos, shooter.pos)
 	if key.z < 0:
 		return []
-	var before := map.get_edge_damage().duplicate()
 	var kind := map.edge_kind(key)
+	var small_arms := not heavy and weapon.kind != "mg"
+	if small_arms and kind != "hedge":
+		return []
+	var before := map.get_edge_damage().duplicate()
 	var changed := false
-	if heavy:
+	if small_arms:
+		changed = map.damage_edge(key, 1, map.edge_damage(key) + 1)
+	elif heavy:
 		changed = map.damage_edge(key, CombatRules.WALL_HITS["direct_heavy"])
 	elif TacticalMap.FLIMSY_EDGES.has(kind):
 		changed = map.damage_edge(key, 1)

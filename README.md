@@ -72,6 +72,10 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   reload and fire in the same turn.
 - Directional half and full cover, flanking and line of sight that steps out around corners. Fog of war,
   overwatch, and destructible cover with craters.
+- Hedges are shoulder high: standing behind one you see and shoot over it but only get half cover; lie down
+  and it's full cover, but you see nothing past it (and nobody sees you through it). They don't last: every
+  rifle shot at someone behind one strips it a stage (three and it's gone), a machine gun burst breaches it,
+  a grenade nearby too, and a shell or rocket blows it away.
 - Walls come down in stages: damaged (shell holes, still full cover), breached (a jagged gap: half cover, climb
   and shoot through), gone. Windows, low walls and fences go in two. Tank shells, AT rockets and mortar rounds
   knock two stages off the walls round where they land (one further out); a grenade one. A tank shell or

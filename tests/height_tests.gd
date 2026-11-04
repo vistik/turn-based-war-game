@@ -218,9 +218,10 @@ func test_high_ground_beats_low_cover() -> void:
 	raise(map, Rect2i(0, 0, 5, 12), 1)
 	check_eq(map.cover_against(Vector2i(10, 5), Vector2i(3, 5), 0, 0), Cover.NONE, "but not against fire from a level up")
 	map.set_edge(Vector2i(10, 5), Vector2i(9, 5), Cover.FULL, "hedge")
-	check_eq(map.cover_against(Vector2i(10, 5), Vector2i(3, 5)), Cover.FULL, "a hedge still covers from one level up")
+	check_eq(map.cover_against(Vector2i(10, 5), Vector2i(3, 5), 0, 0, true), Cover.FULL, "a hedge still covers the prone from one level up")
+	check_eq(map.cover_against(Vector2i(10, 5), Vector2i(3, 5)), Cover.NONE, "but not the standing, who only have half")
 	raise(map, Rect2i(0, 0, 5, 12), 2)
-	check_eq(map.cover_against(Vector2i(10, 5), Vector2i(3, 5)), Cover.HALF, "from two levels up only half")
+	check_eq(map.cover_against(Vector2i(10, 5), Vector2i(3, 5), 0, 0, true), Cover.HALF, "from two levels up only half")
 
 
 func test_high_ground_aims_better() -> void:

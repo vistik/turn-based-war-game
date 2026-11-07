@@ -54,7 +54,7 @@ expect "the finished game cleared both saves" "[ ! -f $DIR/host/online.sav ] && 
 
 # 3. A joiner with no save adopts the host's and the game finishes the same way.
 run_pair adopted "$DIR/host-copy" "$DIR/empty" "resume" "resume"
-expect "the joiner without a save adopted the host's" "grep -q 'JOINER: You have no saved online game' $DIR/adopted-join.log"
+expect "the joiner without a save adopted the host's" "grep -q 'JOINER: You have no saved online campaign' $DIR/adopted-join.log"
 expect "adopted game finished with the same checksum" "[ -n \"$(final_checksum "$DIR/adopted-host.log")\" ] && [ \"$(final_checksum "$DIR/adopted-host.log")\" = \"$(final_checksum "$DIR/adopted-join.log")\" ]"
 
 # 4. A joiner whose loaded game differs: neither side plays on, and both keep their saves.

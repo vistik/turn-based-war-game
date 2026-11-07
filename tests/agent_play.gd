@@ -33,7 +33,6 @@ func _run() -> void:
 	AdvisorSettings.agent_may_act = false
 	_token = AdvisorSettings.token()
 	var built := GameSession.build_skirmish({"map": "random", "size": 44, "seed": 1944})
-	GameSession.campaign = null
 	GameSession.war = null
 	GameSession.start_battle(built[0], [false, true], built[1])
 	GameSession.agent_team = 0

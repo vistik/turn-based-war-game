@@ -18,6 +18,10 @@ extends Node
 ## its own internet address to the host, who lets it in with let_in(): the host sends packets towards it from
 ## the game port, which opens the host's NAT for the joiner's connection attempts (hole punching).
 ##
+## Between battles the two-player campaign's games trade campaign messages (send_war): sealed orders as a
+## hash first, the orders themselves once both have sealed (see WarCampaign.orders_hash). They wait in
+## war_inbox until the menu takes them, so none is lost while a player is still on the battle screen.
+##
 ## Autoloaded as `Net`. In a new game the host plays the Allies, the joining player Germany; in a continued
 ## game each keeps the side they had.
 
@@ -35,10 +39,12 @@ signal resume_started
 signal resume_declined
 ## Both games agree on the state after a turn change: the turn index and checksum to save at.
 signal turn_agreed(turn_index: int, checksum: String)
+## A campaign message from the opponent arrived in war_inbox.
+signal war_message
 
 const DEFAULT_PORT := 24944
 ## Bumped whenever the rules or the protocol change, so different versions refuse to play each other.
-const PROTOCOL := 11
+const PROTOCOL := 12
 ## How many players may be connecting at once while the host waits; only one gets in.
 const MAX_KNOCKING := 4
 ## Seconds a newcomer has to prove it knows the password.
@@ -61,6 +67,8 @@ var local_team := 0
 var opponent := ""
 ## Commands from the opponent waiting to be applied: {"command", "checksum"}.
 var _queue: Array[Dictionary] = []
+## Campaign messages from the opponent not yet handled (see send_war).
+var war_inbox: Array[Dictionary] = []
 ## Bumped by close(), so anyone still waiting on a closed session gives up.
 var _session := 0
 ## Host, while offering a saved game: the checksum the joining player must load.
@@ -171,6 +179,7 @@ func _reset() -> void:
 	active = false
 	_resume_checksum = ""
 	_queue.clear()
+	war_inbox.clear()
 	_peer_id = 0
 	_pending.clear()
 	_welcomed = false
@@ -314,6 +323,19 @@ func send_setup(setup: Dictionary) -> void:
 func send_command(command: Dictionary, checksum: String) -> void:
 	if active:
 		_receive_command.rpc_id(_remote_id(), command, checksum)
+
+
+## A campaign message for the opponent (two-player campaign, between battles).
+func send_war(message: Dictionary) -> void:
+	if active:
+		_receive_war.rpc_id(_remote_id(), message)
+
+
+## Takes every campaign message waiting in war_inbox.
+func take_war_messages() -> Array[Dictionary]:
+	var messages := war_inbox.duplicate()
+	war_inbox.clear()
+	return messages
 
 
 ## Waits for the opponent's next command. Returns {} if the session closes first.
@@ -490,6 +512,14 @@ func _receive_command(command: Dictionary, checksum: String) -> void:
 		return
 	_queue.append({"command": command, "checksum": checksum})
 	command_received.emit()
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _receive_war(message: Dictionary) -> void:
+	if not _from_opponent():
+		return
+	war_inbox.append(message)
+	war_message.emit()
 
 
 @rpc("authority", "call_remote", "reliable")

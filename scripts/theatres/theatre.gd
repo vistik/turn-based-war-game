@@ -198,33 +198,6 @@ func village_forces() -> Dictionary:
 	return skirmish_forces(48)
 
 
-## The single-player campaign: its name and missions (see Campaign).
-func campaign_title() -> String:
-	return ""
-
-
-## A line about the campaign for its menu page.
-func campaign_blurb() -> String:
-	return ""
-
-
-## [title, text] shown when the campaign is won.
-func campaign_victory() -> Array:
-	return ["Victory", "The campaign is won."]
-
-
-func campaign_missions() -> Array:
-	return []
-
-
-func campaign_starting_roles() -> Array:
-	return []
-
-
-func campaign_recruit_roles() -> Array:
-	return []
-
-
 ## Names for the maps of a two-player campaign.
 func places() -> Array:
 	return []

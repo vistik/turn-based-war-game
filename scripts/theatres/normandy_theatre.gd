@@ -48,49 +48,6 @@ const WEAPONS := {
 ## Damage each side of a tank's armour stops.
 const TANK_ARMOR := {"front": 3, "side": 1, "rear": 0}
 
-const MISSIONS := [
-	{
-		"name": "Hedgerow Country",
-		"briefing": "D+1. We push inland through the bocage. A thin German screen holds the church, the crossroads and the farm. Take them.",
-		"map": {"seed": 1101, "size": Vector2i(36, 36)},
-		"enemy": ["Officer", "Rifleman", "Rifleman", "SMG", "MG"],
-		"vp_to_win": 8, "max_rounds": 14,
-	},
-	{
-		"name": "The Village",
-		"briefing": "D+3. A full German platoon is dug in around the village crossroads, with a mortar behind the church.",
-		"map": "village",
-		"enemy": ["Officer", "Rifleman", "Rifleman", "Medic", "SMG", "MG", "Sniper", "Mortar"],
-		"vp_to_win": 10, "max_rounds": 16,
-	},
-	{
-		"name": "The Orchard",
-		"briefing": "D+6. Germans are dug in among the orchards with a machine gun and a Panzerschreck team. Work round them and take the ground.",
-		"map": {"seed": 3303, "size": Vector2i(40, 40)},
-		"enemy": ["Officer", "Rifleman", "Rifleman", "Rifleman", "SMG", "MG", "AT"],
-		"vp_to_win": 10, "max_rounds": 16,
-	},
-	{
-		"name": "Counterattack",
-		"briefing": "D+9. The Germans are coming back hard. A machine-gun team has joined us. Hold the ground we took.",
-		"map": {"seed": 4404, "size": Vector2i(40, 40)},
-		"enemy": ["Officer", "Rifleman", "Rifleman", "SMG", "MG", "AT"],
-		"enemy_reinforcements": [{"round": 3, "roster": ["SMG", "Rifleman", "Rifleman"]}, {"round": 6, "roster": ["Rifleman", "SMG"]}],
-		"support": ["MG"],
-		"vp_to_win": 10, "max_rounds": 14,
-	},
-	{
-		"name": "The Road to Caen",
-		"briefing": "D+14. The last ridge before Caen. Everything they have left is waiting for us. This is it.",
-		"map": {"seed": 5505, "size": Vector2i(46, 46)},
-		"enemy": ["Officer", "Rifleman", "Rifleman", "Rifleman", "Medic", "SMG", "MG", "Sniper", "Mortar", "AT", "MG"],
-		"enemy_reinforcements": [{"round": 4, "roster": ["SMG", "Rifleman"]}],
-		"support": ["MG", "Rifleman"],
-		"vp_to_win": 12, "max_rounds": 18,
-	},
-]
-
-
 func _init() -> void:
 	id = "normandy"
 	title = "Normandy 1944"
@@ -205,30 +162,6 @@ func skirmish_forces(size: int) -> Dictionary:
 	for team in 2:
 		waves.append({"round": NormandyScenario.REINFORCEMENT_ROUND, "team": team, "roster": wave})
 	return {"rosters": [roster, roster], "waves": waves, "max_rounds": rounds, "vp_to_win": points}
-
-
-func campaign_title() -> String:
-	return "Normandy campaign"
-
-
-func campaign_blurb() -> String:
-	return "Five missions from the beaches to Caen with one squad. Soldiers gain rank, get hurt and die for good."
-
-
-func campaign_victory() -> Array:
-	return ["Victory in Normandy", "Your squad fought its way to Caen. The campaign is won."]
-
-
-func campaign_missions() -> Array:
-	return MISSIONS
-
-
-func campaign_starting_roles() -> Array:
-	return ["Officer", "Rifleman", "Rifleman", "AT", "Medic", "SMG", "MG", "Sniper"]
-
-
-func campaign_recruit_roles() -> Array:
-	return ["Rifleman", "AT", "Medic", "SMG", "MG", "Sniper", "Mortar", "Officer"]
 
 
 func places() -> Array:

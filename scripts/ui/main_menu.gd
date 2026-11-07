@@ -1,6 +1,6 @@
 extends Control
-## Main menu and campaign screens. Starts campaign missions and skirmishes by handing a Battle to
-## GameSession and switching to the battle scene.
+## Main menu, skirmish setup and the online two-player campaign's screens. Starts battles by handing a Battle
+## to GameSession and switching to the battle scene.
 
 const MUTED := UITheme.PAPER_DIM
 const BAD := Color("ff7a6a")
@@ -42,7 +42,6 @@ var _size_choice: OptionButton
 var _map_preview: MapPreview
 var _map_info: Label
 var _scenario_paths: Array[String] = []
-var _recruit_choice: OptionButton
 ## Per side, the skirmish deployment picked (an index into DEPLOYMENTS), kept while the game runs.
 var _deploy_choices: Array[OptionButton] = []
 static var _last_deployments := [0, 0]
@@ -68,8 +67,13 @@ var _port: LineEdit
 var _password: LineEdit
 ## The password typed last, kept while the game runs so it needn't be typed again.
 static var _last_password := ""
-## The map choice to host with, kept while the waiting page is up.
+## The campaign to host (its setup: {"war", "game_id"}), kept while the waiting page is up.
 var _host_setup := {}
+## The two-player campaign settings picked last, kept while the game runs.
+static var _last_war := {"maps": 3, "supply": WarCampaign.SUPPLY, "income": 0, "min_spend": WarCampaign.MIN_SPEND,
+		"max_spend": WarCampaign.MAX_SPEND, "max_units": 0, "size": 0, "style": ""}
+## Whether the two-player campaign's map page is on screen (so incoming orders can refresh it).
+var _war_page_open := false
 ## The saved online game being hosted to continue (GameSession.online_offer), or {} for a new game.
 var _host_offer := {}
 
@@ -78,26 +82,25 @@ func _ready() -> void:
 	GameSettings.ensure_loaded()
 	Net.peer_joined.connect(_on_peer_joined)
 	Net.setup_received.connect(_start_online)
+	Net.war_message.connect(_on_war_message)
 	Net.connection_failed.connect(_on_connection_failed)
 	UITheme.apply()
 	Net.resume_offered.connect(_on_resume_offered)
 	Net.resume_started.connect(_on_resume_started)
 	Net.resume_declined.connect(_on_resume_declined)
 	Net.desynced.connect(_on_resume_failed)
-	Net.disconnected.connect(_on_resume_failed.bind("The other player left."))
+	Net.disconnected.connect(_on_opponent_left)
 	var background := Control.new()
 	background.set_anchors_preset(Control.PRESET_FULL_RECT)
 	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	background.draw.connect(UITheme.draw_backdrop.bind(background))
 	background.resized.connect(background.queue_redraw)
 	add_child(background)
-	if GameSession.show_campaign and GameSession.war != null:
+	if GameSession.show_campaign and GameSession.war != null and Net.active:
 		GameSession.show_campaign = false
 		_show_war()
-	elif GameSession.show_campaign and GameSession.campaign != null:
-		GameSession.show_campaign = false
-		_show_campaign()
 	else:
+		GameSession.show_campaign = false
 		_show_main()
 
 
@@ -150,10 +153,8 @@ func _show_main() -> void:
 	modes.add_theme_constant_override("v_separation", 10)
 	box.add_child(modes)
 	for spec: Array in [
-			["Campaign", "%d missions, one squad" % theatre.campaign_missions().size(), _show_campaign_menu],
 			["Skirmish", "Your map, deployment and rules", _show_skirmish],
-			["Two players", "Hotseat campaign over 3 to 5 maps", _show_war_setup],
-			["Online", "Play a friend on another computer", _show_online]]:
+			["Two players", "Online campaign against a friend", _show_online]]:
 		_menu_button(modes, spec[0], spec[1], spec[2]).size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_gap(box, 10)
 
@@ -174,22 +175,12 @@ func _show_main() -> void:
 ## [label, action] for each saved game that can be continued.
 func _saved_games() -> Array:
 	var result := []
-	var campaign_save := GameSession.peek("campaign")
-	if not campaign_save.is_empty():
-		var saved := Campaign.from_dict(campaign_save["campaign"])
-		var total := saved.missions().size()
-		result.append(["Continue %s: %s" % [saved.theatre().campaign_title(), "in battle" if not campaign_save["battle"].is_empty() else "mission %d of %d" % [mini(saved.mission_index + 1, total), total]], _continue.bind("campaign")])
-	var war_save := GameSession.peek("war")
-	if not war_save.is_empty():
-		var saved_war := WarCampaign.from_dict(war_save["war"])
-		var where := "in battle" if not war_save["battle"].is_empty() else ("finished" if saved_war.is_over() else "map %d of %d" % [saved_war.current + 1, saved_war.maps.size()])
-		result.append(["Continue two-player campaign (%s): %s" % [saved_war.theatre().title, where], _continue.bind("war")])
 	var skirmish_save := GameSession.peek("skirmish")
 	if not skirmish_save.is_empty():
 		result.append(["Continue skirmish: %s" % skirmish_save["title"], _continue.bind("skirmish")])
 	var online_save := GameSession.peek("online")
 	if not online_save.is_empty():
-		result.append(["Continue online game: %s, round %d" % [online_save["title"], online_save["round"]], _show_online])
+		result.append(["Continue two-player campaign: %s, %s" % [online_save["title"], GameSession.describe_online(online_save)], _show_online])
 	return result
 
 
@@ -210,20 +201,6 @@ func _menu_button(parent: Control, text: String, hint: String, action: Callable,
 		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return button
-
-
-func _show_campaign_menu() -> void:
-	var box := _new_page(480)
-	_title(box, _theatre().campaign_title(), 40)
-	_text(box, _theatre().campaign_blurb(), MUTED, 15, true)
-	_gap(box, 8)
-	var campaign_save := GameSession.peek("campaign")
-	if not campaign_save.is_empty():
-		var saved := Campaign.from_dict(campaign_save["campaign"])
-		_button(box, "Continue " + saved.theatre().campaign_title(), _continue.bind("campaign"), true)
-	_button(box, "New campaign" + (" (replaces the saved one)" if not campaign_save.is_empty() else ""), _new_campaign, campaign_save.is_empty())
-	_gap(box, 8)
-	_button(box, "Back", _show_main)
 
 
 ## The map picker: which map (the theatre's hand-made map, a kind of random map, or a scenario on disk), how
@@ -391,10 +368,12 @@ func _show_skirmish() -> void:
 	_button(buttons, "Back", _show_main)
 
 
+## Two players: the online campaign. Host one with your settings, join a friend's, or continue the saved one.
 func _show_online() -> void:
-	var box := _new_page(520)
-	_title(box, "Online", 40)
-	_text(box, "Play another computer directly, at home or over the internet, no server needed. Both games check after every order that they still agree.", MUTED, 14, true)
+	_war_page_open = false
+	var box := _new_page(620)
+	_title(box, "Two players", 40)
+	_text(box, "A campaign against a friend on another computer, at home or over the internet, no server needed. Each side gets a pool of supply for the whole campaign; before every map both secretly commit some of it, buy units and choose a deployment. Win a map to take its points. Both games check after every order that they still agree.", MUTED, 14, true)
 	_password = LineEdit.new()
 	_password.secret = true
 	_password.text = _last_password
@@ -414,17 +393,18 @@ func _show_online() -> void:
 
 	var online_save := GameSession.peek("online")
 	if not online_save.is_empty():
-		_section(box, "Your saved game")
-		_text(box, "%s, round %d, as %s, against %s. Host it again and your opponent joins as usual, or join them if they host it." % [
-				online_save["title"], online_save["round"], GameSession.side_name(online_save["battle"], online_save["team"]), online_save["opponent"]], MUTED, 14, true)
-		_button(box, "Continue: host the saved game", _host_resume, true)
+		_section(box, "Your saved campaign")
+		_text(box, "%s, %s, as %s, against %s. Host it again and your opponent joins as usual, or join them if they host it." % [
+				online_save["title"], GameSession.describe_online(online_save), WarCampaign.from_dict(online_save["war"]).theatre().team_name(online_save["team"]),
+				online_save["opponent"]], MUTED, 14, true)
+		_button(box, "Continue: host the saved campaign", _host_resume, true)
 
-	_section(box, "Host a new game")
-	_text(box, "You play the %s on the map you pick." % _theatre().team_name(0), MUTED, 14, true)
-	_add_map_choice(box)
-	_button(box, "Host game", _host, online_save.is_empty())
+	_section(box, "Host a new campaign")
+	_text(box, "%s: %s (you) against %s (your friend). Change the theatre on the main menu." % [_theatre().title, _theatre().team_name(0), _theatre().team_name(1)], MUTED, 14, true)
+	_add_war_settings(box)
+	_button(box, "Host campaign", _host, online_save.is_empty())
 
-	_section(box, "Join a game")
+	_section(box, "Join a campaign")
 	_address = LineEdit.new()
 	_address.placeholder_text = "The address the host's game shows"
 	if not online_save.is_empty() and not online_save["hosted"]:
@@ -435,6 +415,7 @@ func _show_online() -> void:
 	_address.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_button(join_row, "Join", _join)
 	_field(box, "Address", join_row)
+	_text(box, "The host's settings are used; you play %s." % _theatre().team_name(1), MUTED, 12, true)
 
 	_gap(box, 8)
 	_field(box, "Port", _port)
@@ -443,24 +424,92 @@ func _show_online() -> void:
 	_button(box, "Back", _show_main)
 
 
+## Map sizes the host can pick: [label, side length (0: a mix of WarCampaign.SIZES)].
+const WAR_SIZES := [["Mixed (36-48)", 0], ["Small (32x32)", 32], ["Standard (44x44)", 44], ["Large (64x64)", 64], ["Huge (84x84)", 84]]
+## Unit caps the host can pick (0: each faction's own limit).
+const WAR_UNIT_CAPS := [0, 6, 8, 10, 12, 14, 16, 20]
+
+
+## The campaign settings, kept in _last_war as they change.
+func _add_war_settings(box: Control) -> void:
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 14)
+	grid.add_theme_constant_override("v_separation", 6)
+	box.add_child(grid)
+	var maps := OptionButton.new()
+	for n: int in WarCampaign.MAP_COUNTS:
+		maps.add_item("%d map%s" % [n, "" if n == 1 else "s"])
+	maps.selected = WarCampaign.MAP_COUNTS.find(_last_war["maps"])
+	maps.item_selected.connect(func(i: int) -> void: _last_war["maps"] = WarCampaign.MAP_COUNTS[i])
+	_setting(grid, "Maps", maps, "A single map is one battle")
+	_setting(grid, "Starting supply", _spin("supply", 10, 500, 10), "Each side's pool for the whole campaign")
+	_setting(grid, "Supply per map", _spin("income", 0, 200, 5), "Added to both pools after every map")
+	_setting(grid, "Least per map", _spin("min_spend", 0, 200, 1), "Each side must commit at least this")
+	_setting(grid, "Most per map", _spin("max_spend", 5, 500, 1), "And may commit at most this")
+	var caps := OptionButton.new()
+	for cap: int in WAR_UNIT_CAPS:
+		caps.add_item("Faction limit" if cap == 0 else "%d units" % cap)
+	caps.selected = maxi(0, WAR_UNIT_CAPS.find(_last_war["max_units"]))
+	caps.item_selected.connect(func(i: int) -> void: _last_war["max_units"] = WAR_UNIT_CAPS[i])
+	_setting(grid, "Units per map", caps, "")
+	var sizes := OptionButton.new()
+	var size_index := 0
+	for i in WAR_SIZES.size():
+		sizes.add_item(WAR_SIZES[i][0])
+		if WAR_SIZES[i][1] == _last_war["size"]:
+			size_index = i
+	sizes.selected = size_index
+	sizes.item_selected.connect(func(i: int) -> void: _last_war["size"] = WAR_SIZES[i][1])
+	_setting(grid, "Map size", sizes, "")
+	var styles := OptionButton.new()
+	var style_ids: Array[String] = [""]
+	styles.add_item("Any kind")
+	for style: Dictionary in _theatre().map_styles():
+		styles.add_item(style["title"])
+		style_ids.append(style["id"])
+	styles.selected = maxi(0, style_ids.find(_last_war["style"]))
+	styles.item_selected.connect(func(i: int) -> void: _last_war["style"] = style_ids[i])
+	_setting(grid, "Map kind", styles, "")
+
+
+func _setting(grid: GridContainer, label: String, control: Control, hint: String) -> void:
+	_text(grid, label, MUTED, 14)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	row.add_child(control)
+	if hint != "":
+		_text(row, hint, MUTED, 12)
+	grid.add_child(row)
+
+
+func _spin(key: String, least: int, most: int, step: int) -> SpinBox:
+	var spin := SpinBox.new()
+	spin.min_value = least
+	spin.max_value = most
+	spin.step = step
+	spin.value = _last_war[key]
+	spin.custom_minimum_size = Vector2(110, 0)
+	spin.value_changed.connect(func(value: float) -> void: _last_war[key] = int(value))
+	return spin
+
+
+## The settings for WarCampaign.create, tidied: the most per map is never below the least.
+static func _war_settings() -> Dictionary:
+	var settings := _last_war.duplicate()
+	settings.erase("maps")
+	settings["max_spend"] = maxi(settings["max_spend"], settings["min_spend"])
+	return settings
+
+
 func _continue(slot: String) -> void:
 	if not GameSession.load_game(slot):
 		_show_main()
 		return
 	if GameSession.battle != null:
 		get_tree().change_scene_to_file(GameSession.BATTLE_SCENE)
-	elif GameSession.war != null:
-		_show_war()
 	else:
-		_show_campaign()
-
-
-func _new_campaign() -> void:
-	GameSession.war = null
-	GameSession.campaign = Campaign.create(randi(), _theatre_id)
-	GameSession.battle = null
-	GameSession.save_game()
-	_show_campaign()
+		_show_main()
 
 
 func _skirmish_setup() -> Dictionary:
@@ -588,7 +637,6 @@ func _start_quick_test() -> void:
 ## Starts a skirmish (GameSession.build_skirmish setup) with the player as team 0 against the AI.
 func _start_vs_ai(setup: Dictionary, title_prefix: String) -> void:
 	var built := GameSession.build_skirmish(setup)
-	GameSession.campaign = null
 	GameSession.war = null
 	GameSession.start_battle(built[0], [false, true], title_prefix + built[1])
 	GameSession.agent_team = -1
@@ -598,7 +646,6 @@ func _start_vs_ai(setup: Dictionary, title_prefix: String) -> void:
 
 func _start_skirmish(mode: int) -> void:
 	var built := GameSession.build_skirmish(_skirmish_setup())
-	GameSession.campaign = null
 	GameSession.war = null
 	GameSession.start_battle(built[0], [SKIRMISH_MODES[mode][1], SKIRMISH_MODES[mode][2]], built[1])
 	GameSession.agent_team = SKIRMISH_MODES[mode][3]
@@ -610,12 +657,13 @@ func _start_skirmish(mode: int) -> void:
 
 func _host() -> void:
 	var port := _port.text.to_int()
-	_host_setup = _skirmish_setup()
-	_host_setup["game_id"] = GameSession.new_game_id()
+	var war := WarCampaign.create(_last_war["maps"], randi() % 1000000 + 1, [false, false], _theatre_id, _war_settings())
+	_host_setup = {"war": war.to_dict(), "game_id": GameSession.new_game_id()}
 	_host_offer = {}
 	if not await _open_game(port, 0):
 		return
-	_show_host_page(_map_choice.get_item_text(_map_choice.selected), port)
+	_show_host_page("%s campaign, %d map%s, %d supply each (+%d per map)." % [war.theatre().title, war.maps.size(), "" if war.maps.size() == 1 else "s",
+			war.supply[0], war.income()], port)
 
 
 ## Hosting: reach the internet (router and STUN), then listen on `port` as `team`. False if it didn't work
@@ -746,7 +794,7 @@ func _show_net_page(title: String, text: String, button: String) -> void:
 func _on_peer_joined() -> void:
 	if not _host_offer.is_empty():
 		Net.send_resume(_host_offer)
-		_show_net_page("Continuing the saved game", "The other player joined and is loading the battle.", "Cancel")
+		_show_net_page("Continuing the saved game", "The other player joined and is loading the campaign.", "Cancel")
 		return
 	Net.send_setup(_host_setup)
 	_start_online(_host_setup)
@@ -759,12 +807,14 @@ func _on_connection_failed() -> void:
 		_show_net_page("Couldn't connect", "The host didn't answer. Check the address and port, and that the host is waiting. Over the internet, the host may need to forward the port or let you in with your internet address.", "Back")
 
 
-## Both players build the same battle from the same setup.
+## Both players start the same campaign from the host's setup.
 func _start_online(setup: Dictionary) -> void:
-	GameSession.war = null
-	var built := GameSession.build_skirmish(setup)
-	GameSession.start_online(built[0], built[1], Net.local_team, setup.get("game_id", GameSession.new_game_id()), Net.opponent, Net.is_host)
-	get_tree().change_scene_to_file(GameSession.BATTLE_SCENE)
+	if not setup.get("war") is Dictionary or setup["war"].is_empty():
+		Net.report_desync("The host's game sent no campaign.")
+		return
+	GameSession.start_online_war(WarCampaign.from_dict(setup["war"]), Net.local_team, setup.get("game_id", GameSession.new_game_id()), Net.opponent, Net.is_host)
+	GameSession.save_online(Net.local_team)
+	_show_war()
 
 
 # --- Continuing a saved online game ---
@@ -779,7 +829,7 @@ func _host_resume() -> void:
 	if not await _open_game(port, offer["team"]):
 		return
 	_host_offer = offer
-	_show_host_page("Continuing %s, round %d, as %s." % [offer["title"], offer["round"], GameSession.side_name(offer["battle"], offer["team"])], port)
+	_show_host_page("Continuing %s, %s, as %s." % [offer["title"], GameSession.describe_online(offer), GameSession.war.theatre().team_name(offer["team"])], port)
 
 
 ## Joiner: the host wants to continue a saved game. Matching saves go straight on; otherwise ask first.
@@ -789,8 +839,8 @@ func _on_resume_offered(offer: Dictionary) -> void:
 		_accept_resume(offer)
 		return
 	var box := _new_page(560)
-	_title(box, "Continue the host's saved game?", 32)
-	_text(box, "%s, playing as %s.\n\n%s\n\nContinuing replaces your saved online game with the host's." % [
+	_title(box, "Continue the host's saved campaign?", 32)
+	_text(box, "%s, playing as %s.\n\n%s\n\nContinuing replaces your saved campaign with the host's." % [
 			offer.get("title", "?"), GameSession.side_name(offer.get("battle", {}), Net.local_team), difference], Color.WHITE, 16, true)
 	_gap(box, 12)
 	_button(box, "Continue from the host's save", _accept_resume.bind(offer), true)
@@ -803,15 +853,17 @@ func _accept_resume(offer: Dictionary) -> void:
 	if not GameSession.resume_online(offer, Net.local_team, Net.opponent, false):
 		Net.report_desync("The host's saved battle doesn't load the same here.")
 		return
-	Net.accept_resume(GameSession.battle.checksum())
-	_show_net_page("Continuing the saved game", "Checking that both games loaded the same battle...", "Cancel")
+	Net.accept_resume(GameSession.online_checksum())
+	_show_net_page("Continuing the saved game", "Checking that both games loaded the same campaign...", "Cancel")
 
 
-## Both games hold the same battle: save it as agreed, and play on.
+## Both games hold the same campaign (and battle): save it as agreed, and play on.
 func _on_resume_started() -> void:
-	GameSession.war = null
 	GameSession.save_online(Net.local_team)
-	get_tree().change_scene_to_file(GameSession.BATTLE_SCENE)
+	if GameSession.battle != null:
+		get_tree().change_scene_to_file(GameSession.BATTLE_SCENE)
+	else:
+		_show_war()
 
 
 func _on_resume_declined() -> void:
@@ -819,10 +871,18 @@ func _on_resume_declined() -> void:
 	_show_net_page("Not continued", "The other player chose not to continue this game. Your save is kept.", "Back")
 
 
-## The connection broke, or the two games didn't load the same battle, while setting up.
+## The two games didn't load the same campaign, or disagree about it.
 func _on_resume_failed(reason: String) -> void:
 	Net.close()
-	_show_net_page("Couldn't continue the game", reason + " Your save is kept.", "Back")
+	_war_page_open = false
+	_show_net_page("The games don't agree", reason + " Your save is kept.", "Back")
+
+
+func _on_opponent_left() -> void:
+	Net.close()
+	_war_page_open = false
+	var saved := " The campaign is saved: host it again from Two players to continue." if GameSession.has_save("online") else ""
+	_show_net_page("The other player left", "The connection to the other player is gone." + saved, "Back")
 
 
 # --- Settings ---
@@ -852,7 +912,7 @@ func _show_replays() -> void:
 	_title(box, "Replays", 40)
 	_text(box, "Every battle is recorded. Watch one again with the fog of war of either side, or the whole map. The last %d finished battles are kept." % Replay.KEEP, MUTED, 14, true)
 	var in_progress := []
-	for slot in ["campaign", "skirmish", "war", "online"]:
+	for slot in ["skirmish", "online"]:
 		var data := GameSession.peek(slot)
 		if not data.get("replay", {}).is_empty():
 			in_progress.append(data["replay"])
@@ -911,105 +971,6 @@ func _watch_replay(data: Dictionary, path: String) -> void:
 
 # --- Campaign screen ---
 
-func _show_campaign() -> void:
-	var campaign := GameSession.campaign
-	var theatre := campaign.theatre()
-	UITheme.use_theatre(theatre.id)
-	var ours := theatre.team_color(0)
-	var theirs := theatre.team_color(1)
-	var box := _new_page(860)
-	var total := campaign.missions().size()
-	if campaign.is_won():
-		var victory := theatre.campaign_victory()
-		_title(box, victory[0], 40)
-		_text(box, victory[1], GOOD, 18, true)
-	elif campaign.is_lost():
-		_title(box, "The company is spent", 40)
-		_text(box, "No soldiers left and no supplies to replace them. The campaign is lost.", BAD, 18, true)
-	else:
-		var mission := campaign.current_mission()
-		_title(box, "Mission %d of %d: %s" % [campaign.mission_index + 1, total, mission["name"]], 32)
-	_text(box, "Supplies: %d   (a replacement costs %d)" % [campaign.supplies, Campaign.RECRUIT_COST], MUTED, 15)
-
-	if not campaign.last_report.is_empty():
-		var report := campaign.last_report
-		_section(box, "After action: %s" % report["mission"])
-		_text(box, "Victory" if report["won"] else "Defeat. The mission can be tried again.", GOOD if report["won"] else BAD, 17)
-		for line: String in report["lines"]:
-			_text(box, "• " + line, Color(UITheme.PAPER, 0.85), 14)
-
-	if not campaign.is_won() and not campaign.is_lost():
-		var mission := campaign.current_mission()
-		_section(box, "Briefing")
-		_text(box, mission["briefing"], UITheme.PAPER, 15, true)
-		_text(box, "Enemy: %s" % _force(mission["enemy"], 1, theatre), theirs, 14, true)
-		if mission.has("enemy_reinforcements"):
-			for wave: Dictionary in mission["enemy_reinforcements"]:
-				_text(box, "   Round %d reinforcements: %s" % [wave["round"], _force(wave["roster"], 1, theatre)], theirs, 14, true)
-		if mission.has("support"):
-			_text(box, "Support: %s" % _force(mission["support"], 0, theatre), ours, 14)
-		_text(box, "Win: first to %d points from the objectives, or wipe them out. %d rounds." % [mission["vp_to_win"] * int(theatre.battle_options().get("points_scale", 1)), mission["max_rounds"]], MUTED, 14, true)
-
-	_section(box, "Your squad")
-	var deploying := {}
-	for soldier in campaign.deployable():
-		deploying[soldier["id"]] = true
-	var grid := GridContainer.new()
-	grid.columns = 7
-	grid.add_theme_constant_override("h_separation", 22)
-	box.add_child(grid)
-	for header in ["Soldier", "Role", "XP", "Kills", "Missions", "Status", ""]:
-		_text(grid, header, MUTED, 13)
-	for soldier in campaign.roster:
-		var dead: bool = soldier["status"] == "dead"
-		var color := Color(UITheme.PAPER, 0.35) if dead else UITheme.PAPER
-		_text(grid, campaign.display_name(soldier), ours if not dead else color, 14)
-		_text(grid, campaign.role_name(soldier["role"]), color, 14)
-		_text(grid, str(soldier["xp"]), color, 14)
-		_text(grid, str(soldier["kills"]), color, 14)
-		_text(grid, str(soldier["missions"]), color, 14)
-		var status: String = {"ready": "Ready", "recovering": "Wounded, sits out", "dead": "Killed in action"}[soldier["status"]]
-		_text(grid, status, BAD if soldier["status"] != "ready" else color, 14)
-		_text(grid, "Deploys" if deploying.has(soldier["id"]) else "", GOOD, 13)
-
-	if not campaign.is_won():
-		var recruit := HBoxContainer.new()
-		recruit.add_theme_constant_override("separation", 8)
-		box.add_child(recruit)
-		_recruit_choice = OptionButton.new()
-		for role: String in campaign.recruit_roles():
-			_recruit_choice.add_item(campaign.role_name(role))
-		recruit.add_child(_recruit_choice)
-		var hire := _button(recruit, "Recruit (%d supply)" % Campaign.RECRUIT_COST, _recruit)
-		hire.disabled = not campaign.can_recruit()
-		_text(recruit, "Up to %d soldiers deploy; officers first." % Campaign.SQUAD_SIZE, MUTED, 13)
-
-	_gap(box, 8)
-	var buttons := HBoxContainer.new()
-	buttons.add_theme_constant_override("separation", 10)
-	box.add_child(buttons)
-	if campaign.is_won() or campaign.is_lost():
-		_button(buttons, "New campaign", _new_campaign, true)
-	else:
-		var start := _button(buttons, "Start mission", _start_mission, true)
-		start.disabled = campaign.deployable().is_empty()
-	_button(buttons, "Main menu", _show_main)
-
-
-func _recruit() -> void:
-	GameSession.campaign.recruit(GameSession.campaign.recruit_roles()[_recruit_choice.selected])
-	GameSession.save_game()
-	_show_campaign()
-
-
-func _start_mission() -> void:
-	var campaign := GameSession.campaign
-	var battle := campaign.build_battle(randi())
-	GameSession.start_battle(battle, [false, true], "Mission %d: %s" % [campaign.mission_index + 1, campaign.current_mission()["name"]])
-	GameSession.save_game()
-	get_tree().change_scene_to_file(GameSession.BATTLE_SCENE)
-
-
 ## "Officer, 2 Rifleman, Tank" from a team's list of roles.
 static func _force(roles: Array, team: int, theatre: Theatre) -> String:
 	var counts := {}
@@ -1035,56 +996,12 @@ func _theatre() -> Theatre:
 
 # --- Two-player campaign ---
 
-func _show_war_setup() -> void:
-	var box := _new_page(560)
-	_title(box, "Two-player campaign", 36)
-	_text(box, "%s: %s against %s." % [_theatre().title, _theatre().team_name(0), _theatre().team_name(1)], MUTED, 15, true)
-	_text(box, ("Each side gets %d supply for the whole campaign. Every map is worth a different number of points (1 to 5). " +
-			"Before each map both sides secretly commit between %d and %d supply, buy units with it and choose a deployment. " +
-			"Supply committed to a map is gone, the rest is kept for later maps. Win a map to take its points; a draw splits them. " +
-			"Most points at the end wins.") % [WarCampaign.SUPPLY, WarCampaign.MIN_SPEND, WarCampaign.MAX_SPEND], UITheme.PAPER, 15, true)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 10)
-	box.add_child(row)
-	_text(row, "Maps", MUTED, 15)
-	var count := OptionButton.new()
-	for n: int in WarCampaign.MAP_COUNTS:
-		count.add_item("%d maps" % n)
-	count.selected = 1
-	row.add_child(count)
-	_text(row, _theatre().team_name(1), MUTED, 15)
-	var opponent := OptionButton.new()
-	opponent.add_item("Second player (hotseat)")
-	opponent.add_item("AI")
-	row.add_child(opponent)
-	_gap(box, 8)
-	var saved := not GameSession.peek("war").is_empty()
-	if saved:
-		var saved_war := WarCampaign.from_dict(GameSession.peek("war")["war"])
-		_button(box, "Continue the saved campaign (%s)" % saved_war.theatre().title, _continue.bind("war"), true)
-	var buttons := HBoxContainer.new()
-	buttons.add_theme_constant_override("separation", 10)
-	box.add_child(buttons)
-	_button(buttons, "Start a new one" + (" (replaces the saved one)" if saved else ""), func() -> void: _new_war(WarCampaign.MAP_COUNTS[count.selected], opponent.selected == 1), not saved)
-	_button(buttons, "Back", _show_main)
-
-
-func _new_war(map_count: int, vs_ai: bool) -> void:
-	GameSession.campaign = null
-	GameSession.battle = null
-	GameSession.war = WarCampaign.create(map_count, randi() % 1000000 + 1, [false, vs_ai], _theatre_id)
-	GameSession.save_game()
-	_show_war()
-
-
 func _show_war() -> void:
 	var war := GameSession.war
+	var me := Net.local_team
 	UITheme.use_theatre(war.theatre().id)
-	# The AI writes its orders on its own, without seeing the other side's.
-	if not war.is_over():
-		for side in 2:
-			if war.ai_sides[side] and not war.has_orders(side):
-				war.set_orders(side, war.ai_orders(side))
+	GameSession.process_war_messages(Net)
+	_war_page_open = true
 	var box := _new_page(760)
 	_title(box, "Two-player campaign", 36)
 	var colors := [war.theatre().team_color(0), war.theatre().team_color(1)]
@@ -1092,8 +1009,11 @@ func _show_war() -> void:
 	score.add_theme_constant_override("separation", 30)
 	box.add_child(score)
 	for side in 2:
-		_text(score, "%s%s: %d points, %d supply left" % [war.theatre().team_name(side), " (AI)" if war.ai_sides[side] else "",
+		_text(score, "%s%s: %d points, %d supply left" % [war.theatre().team_name(side), " (you)" if side == me else "",
 				war.scores[side], war.supply[side]], colors[side], 17)
+	var settings := war.settings
+	_text(box, "Commit %d-%d supply per map, up to %d units%s." % [settings["min_spend"], settings["max_spend"], war.max_units(me),
+			", +%d supply each after every map" % war.income() if war.income() > 0 else ""], MUTED, 13, true)
 
 	_section(box, "Maps")
 	var grid := GridContainer.new()
@@ -1125,11 +1045,7 @@ func _show_war() -> void:
 		_text(box, "A draw." if won == Battle.DRAW else "%s win the campaign, %d to %d." % [war.theatre().team_name(won), war.scores[won], war.scores[1 - won]],
 				colors[won] if won != Battle.DRAW else UITheme.PAPER, 20)
 		_gap(box, 8)
-		var end_buttons := HBoxContainer.new()
-		end_buttons.add_theme_constant_override("separation", 10)
-		box.add_child(end_buttons)
-		_button(end_buttons, "New two-player campaign", _show_war_setup, true)
-		_button(end_buttons, "Main menu", _show_main)
+		_button(box, "Main menu", _leave_war, true)
 		return
 
 	var m := war.current_map()
@@ -1137,25 +1053,49 @@ func _show_war() -> void:
 	var left := 0
 	for i in range(war.current + 1, war.maps.size()):
 		left += war.maps[i]["points"]
-	_text(box, "Still to come after this map: %d point%s over %d map%s." % [left, "" if left == 1 else "s", war.maps.size() - war.current - 1,
-			"" if war.maps.size() - war.current - 1 == 1 else "s"], MUTED, 14)
-	var buttons := HBoxContainer.new()
-	buttons.add_theme_constant_override("separation", 10)
-	box.add_child(buttons)
-	for side in 2:
-		if war.has_orders(side):
-			_text(buttons, "%s: orders sealed" % war.theatre().team_name(side), colors[side], 15)
-		else:
-			_button(buttons, "%s: give orders" % war.theatre().team_name(side), _show_orders.bind(side), true)
+	if war.maps.size() > 1:
+		_text(box, "Still to come after this map: %d point%s over %d map%s." % [left, "" if left == 1 else "s", war.maps.size() - war.current - 1,
+				"" if war.maps.size() - war.current - 1 == 1 else "s"], MUTED, 14)
+	if war.ready_to_fight():
+		for side in 2:
+			var orders: Dictionary = m["orders"][side]
+			_text(box, "%s: %d supply, %s. %s, %s." % [war.theatre().team_name(side), war.cost_of(side, orders["roster"]), _force(orders["roster"], side, war.theatre()),
+					{"balanced": "Balanced", "left": "Left flank", "right": "Right flank"}[orders["flank"]], orders["posture"]], colors[side], 15, true)
+		_gap(box, 6)
+		var fight_row := HBoxContainer.new()
+		fight_row.add_theme_constant_override("separation", 10)
+		box.add_child(fight_row)
+		_button(fight_row, "Fight", _start_war_battle, true)
+		_button(fight_row, "Leave", _leave_war)
+		return
+	var status := HBoxContainer.new()
+	status.add_theme_constant_override("separation", 20)
+	box.add_child(status)
+	if GameSession.orders_sealed():
+		_text(status, "Your orders are sealed.", colors[me], 15)
+	else:
+		_button(status, "Give your orders", _show_orders.bind(me), true)
+	_text(status, "%s: %s" % [war.theatre().team_name(1 - me), "orders sealed" if GameSession.their_orders_sealed() else "choosing..."], colors[1 - me], 15)
+	_text(box, "Sealed orders stay hidden until both sides are in; then both are shown and the battle can start.", MUTED, 13, true)
 	_gap(box, 6)
-	var fight_row := HBoxContainer.new()
-	fight_row.add_theme_constant_override("separation", 10)
-	box.add_child(fight_row)
-	var fight := _button(fight_row, "Reveal orders and fight", _show_reveal, true)
-	fight.disabled = not war.ready_to_fight()
-	_button(fight_row, "Main menu", _show_main)
-	if not war.ai_sides[1]:
-		_text(box, "Hotseat: each player gives orders while the other looks away. Sealed orders stay hidden until both are in.", MUTED, 13, true)
+	_button(box, "Leave", _leave_war)
+
+
+## Leaves the campaign: hangs up (the save is kept) and goes back to the main menu.
+func _leave_war() -> void:
+	_war_page_open = false
+	Net.close()
+	GameSession.war = null
+	GameSession.online = {}
+	_show_main()
+
+
+## Campaign messages from the other player: their sealed orders' hash, then the orders themselves.
+func _on_war_message() -> void:
+	if GameSession.war == null:
+		return
+	if GameSession.process_war_messages(Net) and _war_page_open:
+		_show_war()
 
 
 ## The orders page: buy units within this map's supply limits and choose a deployment.
@@ -1218,6 +1158,7 @@ func _show_orders(side: int) -> void:
 	box.add_child(buttons)
 	_order_seal = _button(buttons, "Seal orders", _seal_orders, true)
 	_button(buttons, "Back", _show_war)
+	_war_page_open = false
 	_update_orders()
 
 
@@ -1245,39 +1186,21 @@ func _update_orders() -> void:
 	_order_seal.disabled = err != ""
 
 
+## Seals our orders: the other player gets only their hash until both sides have sealed.
 func _seal_orders() -> void:
-	if GameSession.war.set_orders(_order_side, _current_orders()) != "":
+	if GameSession.seal_orders(Net, _current_orders()) != "":
 		return
-	GameSession.save_game()
 	_show_war()
 
 
-## Both sides' orders side by side, then the battle.
-func _show_reveal() -> void:
-	var war := GameSession.war
-	var m := war.current_map()
-	var box := _new_page(700)
-	_title(box, "Orders for %s" % m["name"], 32)
-	var colors := [war.theatre().team_color(0), war.theatre().team_color(1)]
-	for side in 2:
-		var orders: Dictionary = m["orders"][side]
-		_section(box, war.theatre().team_name(side))
-		_text(box, "%d supply committed: %s" % [war.cost_of(side, orders["roster"]), _force(orders["roster"], side, war.theatre())], colors[side], 15, true)
-		_text(box, "Deployment: %s, %s." % [{"balanced": "balanced", "left": "left flank", "right": "right flank"}[orders["flank"]], orders["posture"]], UITheme.PAPER, 15)
-	_gap(box, 8)
-	var buttons := HBoxContainer.new()
-	buttons.add_theme_constant_override("separation", 10)
-	box.add_child(buttons)
-	_button(buttons, "Fight", _start_war_battle, true)
-	_button(buttons, "Back", _show_war)
-
-
+## Both players build the same battle from the campaign; each starts it when they click Fight (the other's
+## orders wait for them).
 func _start_war_battle() -> void:
 	var war := GameSession.war
 	var m := war.current_map()
-	GameSession.campaign = null
-	GameSession.start_battle(war.build_battle(), war.ai_sides, "Map %d of %d: %s (%d points)" % [war.current + 1, war.maps.size(), m["name"], m["points"]])
-	GameSession.save_game()
+	_war_page_open = false
+	GameSession.start_online_battle(war.build_battle(), "Map %d of %d: %s (%d points)" % [war.current + 1, war.maps.size(), m["name"], m["points"]])
+	GameSession.save_online(Net.local_team)
 	get_tree().change_scene_to_file(GameSession.BATTLE_SCENE)
 
 

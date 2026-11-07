@@ -29,36 +29,6 @@ const MRAP_ARMOR := {"front": 2, "side": 1, "rear": 0}
 const AIR_STRIKE := {"name": "air strike", "min": 6.0, "max": 999.0, "radius": 2.0, "damage": [4, 7], "scatter": 0.0, "scatter_flat": 0.7,
 	"kinds": ["he"], "still": false, "spotter": "self"}
 
-const MISSIONS := [
-	{
-		"name": "Green Zone Patrol",
-		"briefing": "Helmand, 2009. Clear the compound, the bazaar and the mosque on the main road. The road is a favourite place for IEDs: let the EOD tech lead.",
-		"map": {"seed": 8100, "size": Vector2i(36, 36)},
-		"enemy": ["Commander", "Fighter", "Fighter", "Fighter", "Fighter", "PKM Gunner", "Bomb Maker"],
-		"vp_to_win": 8, "max_rounds": 14,
-	},
-	{
-		"name": "House to House",
-		"briefing": "An Iraqi town, 2004. Insurgents hold the mosque, the market and the police station. Clear them street by street; air support is on call.",
-		"map": {"seed": 8201, "size": Vector2i(40, 40)},
-		"enemy": ["Commander", "Fighter", "Fighter", "Fighter", "Fighter", "Fighter", "PKM Gunner", "RPG", "Sniper", "Bomb Maker"],
-		"enemy_reinforcements": [{"round": 3, "roster": ["Fighter", "Fighter", "RPG"]}],
-		"vp_to_win": 10, "max_rounds": 16,
-	},
-	{
-		"name": "Hold the District Centre",
-		"briefing": "A second SAW team is with us and a quick reaction force flies in on round 4. Everything they have is coming. Hold all three.",
-		"map": {"seed": 8302, "size": Vector2i(44, 44)},
-		"enemy": ["Commander", "Commander", "Fighter", "Fighter", "Fighter", "Fighter", "Fighter", "Fighter", "PKM Gunner", "PKM Gunner",
-			"RPG", "RPG", "Sniper", "Bomb Maker", "Mortar"],
-		"enemy_reinforcements": [{"round": 3, "roster": ["Fighter", "Fighter", "Fighter"]}, {"round": 6, "roster": ["Fighter", "RPG", "PKM Gunner"]}],
-		"support": ["SAW Gunner"],
-		"reinforcements": [{"round": 4, "team": 0, "roster": ["Rifleman", "Rifleman", "SAW Gunner"], "air": true}],
-		"vp_to_win": 12, "max_rounds": 16,
-	},
-]
-
-
 func _init() -> void:
 	id = "modern"
 	title = "Iraq 2004"
@@ -192,30 +162,6 @@ func skirmish_forces(size: int) -> Dictionary:
 ## 4 per objective per round, 7 per kill, four times the usual points to win.
 func battle_options() -> Dictionary:
 	return {"kill_points": [0, 7], "objective_points": [4, 0], "points_scale": 4}
-
-
-func campaign_title() -> String:
-	return "Iraq campaign"
-
-
-func campaign_blurb() -> String:
-	return "Three missions, Helmand and an Iraqi town, with one fire team. Soldiers gain rank, get hurt and die for good."
-
-
-func campaign_victory() -> Array:
-	return ["Mission accomplished", "The district centre held. Your team is going home. The campaign is won."]
-
-
-func campaign_missions() -> Array:
-	return MISSIONS
-
-
-func campaign_starting_roles() -> Array:
-	return ["Team Leader", "Rifleman", "Rifleman", "SAW Gunner", "EOD Tech", "Medic", "JTAC", "Marksman"]
-
-
-func campaign_recruit_roles() -> Array:
-	return ["Rifleman", "SAW Gunner", "EOD Tech", "Medic", "JTAC", "Marksman", "Team Leader"]
 
 
 func places() -> Array:

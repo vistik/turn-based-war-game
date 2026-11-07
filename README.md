@@ -18,7 +18,7 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 - Each theatre has its own colour scheme for menus and the battle screen, so it's plain which one is picked:
   olive and khaki for Normandy, jungle green and bamboo amber for Vietnam, slate and desert sand for Iraq 2004.
 - The engine (movement, shooting, cover, suppression, AI, online, replays) is shared. Each theatre brings its own
-  sides, units, weapons, uniforms and vehicles, maps, campaign and a few rules of its own
+  sides, units, weapons, uniforms and vehicles, maps and a few rules of its own
   (`scripts/theatres/`).
 - **Normandy 1944**: everything below. Allies and Germany field the same kinds of soldier with their own weapons.
 - **Vietnam 1967**: lopsided on purpose.
@@ -226,19 +226,25 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 **Ways to play**
 - **Main menu**: built around one big **Play** button (focused, so Enter works too): one click starts a battle
   against the AI on a fresh standard 44x44 random map, fighting for the objectives, both sides spread out,
-  the AI on a random game plan. Saved games sit in compact Continue rows under it, the other modes (Campaign,
-  Skirmish, Two players, Online) in a grid below, and Quick test, Replays, Map editor, Settings and Quit in
+  the AI on a random game plan. Saved games sit in compact Continue rows under it, the other modes (Skirmish
+  and Two players) below, and Quick test, Replays, Map editor, Settings and Quit in
   a quiet footer.
-- **Campaign**: five missions with one persistent squad. Soldiers gain XP and rank, get wounded and die for
-  good. Supplies buy replacements.
-- **Two-player campaign** (hotseat, or against the AI):
-  - 3 to 5 maps, each worth a different number of points (1–5), and one pool of 100 supply per side for the
-    whole campaign.
-  - Before every map both sides secretly commit 12–45 supply and buy units with it (2 to 8 supply a soldier).
-    Committed supply is gone; the rest carries over to later maps.
-  - Each side also picks a deployment: balanced, left or right flank, and offensive (deployed further
-    forward) or defensive (further back, behind sandbags).
+- **Two players**: a campaign against a friend, always online (see Online below). The host picks the settings,
+  the friend joins and plays the other side:
+  - 1 to 5 maps (one map is a single battle), each worth a different number of points (1–5).
+  - Starting supply per side for the whole campaign (default 100) and supply per map, added to both pools
+    after every map (default none).
+  - The least and most a side may commit to one map (default 12–45), and the most units on one map (default
+    each faction's own limit).
+  - Map size (a mix of 36–48, or small, standard, large or huge) and kind (any, or one of the theatre's).
+  - Before every map both sides secretly commit supply and buy units with it (2 to 8 supply a soldier), and
+    pick a deployment: balanced, left or right flank, and offensive (deployed further forward) or defensive
+    (further back, behind sandbags). Committed supply is gone; the rest carries over to later maps.
+  - Orders stay secret until both are in: a side's game sends only a hash of its sealed orders, and the
+    orders themselves once both have sealed, which must match it (a changed order is caught by both games).
   - Win a map to take its points; a draw splits them. Most points wins.
+  - The campaign is saved between maps and at every agreed turn change, and either player can host it again
+    to continue.
 - **Skirmish** on the hand-made Normandy village, a random map, or your own scenarios.
   - Random maps come in several kinds per theatre, picked by name, in four sizes (small 32x32, standard 44x44,
     large 64x64, huge 84x84 with bigger forces):
@@ -254,12 +260,12 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   maps each side picks a deployment, as in the two-player campaign: spread out along the whole edge, corner
   to corner (the default), grouped at the usual spawns, balanced or massed on the left or right flank, offensive (further forward) or defensive (further back, behind sandbags),
   in contact (a few tiles apart either side of the middle) or random. The minimap shows where each side's soldiers will start (a random deployment only once the
-  battle begins), and changes as you pick. Online, the host picks both.
+  battle begins), and changes as you pick. 
 - **Quick test battle** (main menu footer): one click starts a small 32x32 random map in the chosen theatre, against
   the AI, with both sides already set out in a firing line mid-map: every soldier in cover toward the enemy where
   there is any, and every one (sniper and mortar too) with something to fire at on the first turn. Both sides
   open with their full two actions. The fastest way to try something out.
-- **Online**: two computers connect directly, at home or over the internet, no server needed.
+- **Online** (how Two players connects): two computers connect directly, at home or over the internet, no server needed.
   - Every game has a password. The joiner proves it knows the password before the host lets it in (the
     password itself never travels); wrong guesses are turned away, and a run of them locks the game for a
     minute.
@@ -267,8 +273,8 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
     address. If the router won't, the joiner's game shows *its* internet address, and the host pastes it into
     "Let them in" to punch through the NAT. Finding the address asks a public STUN server (Google or
     Cloudflare) what address it sees.
-  - After every order both games check they hold the identical battle. Online games save at each agreed turn
-    and can be continued later with the same opponent.
+  - After every order both games check they hold the identical battle. The campaign saves at each agreed turn
+    and between maps, and can be continued later with the same opponent.
 - **Map and scenario editor**: paint terrain, cover and walls, ground height, storeys and stairs (the Height
   tool), place units, objectives and reinforcement spawns, and save
   scenarios as JSON. Play or test them with the AI straight away.
@@ -294,9 +300,9 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   a shot, and skip the playback animation.
 
 **Other**
-- **Saves**: a campaign slot and a skirmish slot with autosave, "Save & quit", and exact replay (dice and AI
+- **Saves**: a skirmish slot with autosave and an online campaign slot, "Save & quit", and exact replay (dice and AI
   memory included).
-- **Replays**: every battle is recorded (against the AI, hotseat, AI vs AI, both campaigns, online), including
+- **Replays**: every battle is recorded (against the AI, hotseat, AI vs AI, online), including
   across saves. Watch it from the game-over screen or the main menu's Replays page (the last 20 finished
   battles, plus battles in progress). Play, pause, step one order at a time, skip to the next turn, restart,
   change the speed, and switch the fog of war at any moment between the Allies' view, Germany's view and the
@@ -358,8 +364,8 @@ open it with right-click > Open. The Windows build is one 64-bit `.exe` with the
 SmartScreen asks once (More info > Run anyway).
 
 To try online play on one
-computer, open the app twice (`open -n "build/Normandy 1944.app"`), type the same password in both, host in
-one and join `127.0.0.1` in the other. Players behind the same router always use the "On your network"
+computer, open the app twice (`open -n "build/Normandy 1944.app"`), go to Two players in both, type the same
+password, host in one and join `127.0.0.1` in the other. Players behind the same router always use the "On your network"
 address: most routers won't pass a connection to their own internet address back inside, and the joining
 game says so. Over the internet, join the address the host's waiting page shows. If
 neither the router nor "Let them in" gets you connected (some mobile and office networks block it), forward
@@ -386,18 +392,18 @@ Godot --headless --path . -s tools/balance.gd -- --theatre vietnam --map random 
 Godot --headless --path . -s tools/matchups.gd -- --theatre normandy --games 8 --sizes 1,2 --out matchups.md
 ```
 
-A single online match between two processes, with the AI on both sides:
-`tests/net_match.gd -- host PORT [size]` and `-- join PORT`. See the header of that file for options.
+An online campaign between two processes, with the AI on both sides giving orders and fighting:
+`tests/net_match.gd -- host PORT [size] [maps N]` and `-- join PORT`. See the header of that file for options.
 
 ## Project layout
 
 | Path | Contents |
 |---|---|
-| `scripts/theatres/` | The theatres: each one's sides, units, weapons, looks, skirmish forces, campaign and map generator choice |
+| `scripts/theatres/` | The theatres: each one's sides, units, weapons, looks, skirmish forces and map generator choice |
 | `scripts/combat/` | The rules engine: battle, map, line of sight, pathfinding, units, weapons, AI, map generators, scenarios |
 | `scripts/view/` | Battle scene, isometric projection and procedural painters for terrain, soldiers and tanks |
-| `scripts/ui/` | Main menu and campaign screens, map minimap preview, settings, theme, map editor |
-| `scripts/campaign/` | The campaign |
+| `scripts/ui/` | Main menu, skirmish setup and two-player campaign screens, map minimap preview, settings, theme, map editor |
+| `scripts/campaign/` | The two-player campaign (WarCampaign) |
 | `scripts/replay/` | Recording battles and replay files (the viewer is `scripts/view/replay_controls.gd`) |
 | `scripts/net/` | Online play |
 | `scripts/advisor/`, `scripts/mcp/` | Move suggestions and the agent link |

@@ -228,7 +228,6 @@ func _ready() -> void:
 		GameSession.battle_title = "Replay: %s" % GameSession.watching.title
 	if GameSession.battle == null:
 		# Started straight from the editor: a quick skirmish against the AI.
-		GameSession.campaign = null
 		GameSession.war = null
 		GameSession.start_battle(NormandyScenario.build(), [false, true], "Normandy village")
 	battle = GameSession.battle
@@ -261,7 +260,8 @@ func _ready() -> void:
 			if not battle.started:
 				ai.choose_strategy(GameSession.ai_plans[team])
 			controllers[team] = ai
-	_online = Net.active
+	# Watching a replay between two online campaign battles is no online game, though still connected.
+	_online = Net.active and GameSession.watching == null
 	if _online:
 		controllers[Net.remote_team()] = RemotePlayer.new(battle, Net.remote_team(), Net)
 		Net.desynced.connect(_on_desync)
@@ -321,7 +321,7 @@ func _quit_to_menu() -> void:
 		_save()
 	Net.close()
 	GameSession.battle = null
-	GameSession.show_campaign = GameSession.campaign != null or GameSession.war != null
+	GameSession.show_campaign = false
 	get_tree().change_scene_to_file(GameSession.MENU_SCENE)
 
 
@@ -762,17 +762,17 @@ func _dismiss_overlay() -> void:
 		_overlay.hide()
 		return
 	if _overlay_state == "game_over":
-		Net.close()
-		if GameSession.campaign != null:
-			GameSession.campaign.complete_mission(battle)
-		if GameSession.war != null:
+		if GameSession.war != null and _online:
+			# The two-player campaign goes on: both games score the map the same way and stay connected.
 			GameSession.war.complete_map(battle)
-		GameSession.battle = null
-		if not _online:
-			GameSession.save_game()
+			GameSession.battle = null
+			GameSession.save_online(Net.local_team)
+			GameSession.show_campaign = true
 		else:
-			GameSession.end_online()
-		GameSession.show_campaign = GameSession.campaign != null or GameSession.war != null
+			Net.close()
+			GameSession.battle = null
+			GameSession.save_game()
+			GameSession.show_campaign = false
 		get_tree().change_scene_to_file(GameSession.BATTLE_SCENE if GameSession.watching != null else GameSession.MENU_SCENE)
 		return
 	_overlay_state = ""
@@ -1052,7 +1052,7 @@ func _on_desync(reason: String) -> void:
 
 func _on_net_disconnected() -> void:
 	if battle.winner == -1:
-		var saved := "\n\nThe game is saved from the last turn change: host it again from the main menu to continue." if GameSession.peek("online").get("game_id") == GameSession.online.get("game_id") else ""
+		var saved := "\n\nThe campaign is saved from the last turn change: host it again from Two players to continue." if GameSession.peek("online").get("game_id") == GameSession.online.get("game_id") else ""
 		_show_overlay("net_ended", "The opponent left the game%s\n\nClick or press any key to leave" % saved, NEUTRAL_COLOR)
 
 

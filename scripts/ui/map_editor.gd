@@ -1257,7 +1257,6 @@ func _play(ai_teams: Array) -> void:
 		_flash("Playing despite %d problem(s)" % problems.size())
 	_stop_sim()
 	var battle := _s.build_battle(randi() % 1000000000 + 1)
-	GameSession.campaign = null
 	GameSession.war = null
 	GameSession.start_battle(battle, ai_teams, _s.title)
 	get_tree().change_scene_to_file(GameSession.BATTLE_SCENE)

@@ -1,8 +1,9 @@
 class_name WarCampaign
 extends RefCounted
-## The two-player campaign: a series of 3-5 maps, each worth a different number of campaign points.
-## Each side has one pool of supply for the whole campaign. Before every map both sides secretly decide how
-## much of it to commit (between a minimum and a maximum), buy units with it, and choose a deployment:
+## The two-player campaign, played online: a series of 1-5 maps, each worth a different number of campaign
+## points. Each side has one pool of supply for the whole campaign, topped up by an income after every map.
+## Before every map both sides secretly decide how much of it to commit (between a minimum and a maximum),
+## buy units with it, and choose a deployment:
 ## where to stand (balanced, left or right flank) and how (offensive: deployed further forward; defensive:
 ## further back, behind sandbags). Supply spent on a map is gone; whatever isn't spent stays for
 ## the maps to come. Winning a map scores its points (a draw splits them), and the most points wins.
@@ -12,13 +13,18 @@ extends RefCounted
 ##
 ## Orders are {"roster": Array of role names, "flank": "balanced"|"left"|"right",
 ## "posture": "offensive"|"defensive"}. Left and right are seen from each side's own edge, facing the enemy.
+##
+## The host chooses the settings (DEFAULT_SETTINGS): starting supply, income per map, the least and most a side
+## may commit to one map, the most units on one map (0: the faction's own limit), the map size (0: a mix of
+## SIZES) and the map style ("": each map's seed picks).
 
 const SUPPLY := 100
 ## Supply a side must commit to each map, and may commit at most.
 const MIN_SPEND := 12
 const MAX_SPEND := 45
 const MAX_UNITS := 14
-const MAP_COUNTS := [3, 4, 5]
+const MAP_COUNTS := [1, 2, 3, 4, 5]
+const DEFAULT_SETTINGS := {"supply": SUPPLY, "income": 0, "min_spend": MIN_SPEND, "max_spend": MAX_SPEND, "max_units": 0, "size": 0, "style": ""}
 const FLANKS := ["balanced", "left", "right"]
 const POSTURES := ["offensive", "defensive"]
 const SIZES := [36, 40, 44, 48]
@@ -32,24 +38,29 @@ var scores := [0, 0]
 var current := 0
 ## Per side: whether the AI plays it.
 var ai_sides := [false, true]
+var settings := DEFAULT_SETTINGS.duplicate()
 var _rng := RandomNumberGenerator.new()
 
 
-static func create(map_count: int, seed: int, p_ai_sides := [false, true], p_theatre := Theatres.DEFAULT) -> WarCampaign:
+## `p_settings`: any of DEFAULT_SETTINGS' keys; the rest keep their defaults.
+static func create(map_count: int, seed: int, p_ai_sides := [false, true], p_theatre := Theatres.DEFAULT, p_settings := {}) -> WarCampaign:
 	var war := WarCampaign.new()
 	war.theatre_id = p_theatre
 	war._rng.seed = seed
 	war.ai_sides = p_ai_sides.duplicate()
+	war.settings.merge(p_settings, true)
+	war.supply = [int(war.settings["supply"]), int(war.settings["supply"])]
 	# Every map is worth a different number of points, from 1 up to 5.
 	var values := [1, 2, 3, 4, 5]
 	_shuffle(values, war._rng)
 	var places := war.theatre().places().duplicate()
 	_shuffle(places, war._rng)
 	for i in map_count:
-		war.maps.append({
-			"name": places[i], "seed": war._rng.randi_range(1, 999999), "size": SIZES[war._rng.randi_range(0, SIZES.size() - 1)],
-			"points": values[i], "orders": [{}, {}], "result": {},
-		})
+		var map_seed := war._rng.randi_range(1, 999999)
+		var size: int = SIZES[war._rng.randi_range(0, SIZES.size() - 1)]
+		if int(war.settings["size"]) > 0:
+			size = int(war.settings["size"])
+		war.maps.append({"name": places[i], "seed": map_seed, "size": size, "points": values[i], "orders": [{}, {}], "result": {}})
 	return war
 
 
@@ -81,17 +92,27 @@ func winner() -> int:
 	return Battle.DRAW
 
 
-## [least, most] supply a side may commit to the current map. Enough must be left for the minimum on
-## every map still to come; on the last map the minimum is whatever is left, if that's less.
+## [least, most] supply a side may commit to the current map. Enough must be left (counting the income still
+## to come) for the minimum on every map after this one; on the last map the minimum is whatever is left, if
+## that's less.
 func spend_limits(side: int) -> Array[int]:
 	var left_after := maps.size() - current - 1
-	var most := mini(MAX_SPEND, supply[side] - MIN_SPEND * left_after)
-	var least := mini(MIN_SPEND, supply[side])
+	var min_spend := int(settings["min_spend"])
+	var reserve := maxi(0, (min_spend - income()) * left_after)
+	var most := mini(int(settings["max_spend"]), supply[side] - reserve)
+	var least := mini(min_spend, supply[side])
 	return [least, maxi(least, most)]
+
+
+## Supply each side gains after every map but the last.
+func income() -> int:
+	return int(settings["income"])
 
 
 ## Most units the side may field on one map.
 func max_units(side: int) -> int:
+	if int(settings["max_units"]) > 0:
+		return int(settings["max_units"])
 	return theatre().faction(side).get("max_units", MAX_UNITS)
 
 
@@ -188,7 +209,12 @@ func _fill(side: int, least: int, most: int) -> Array:
 ## The battle for the current map, both sides deployed as ordered.
 func build_battle() -> Battle:
 	var m := current_map()
-	var layout := theatre().generate_map(m["seed"], Vector2i(m["size"], m["size"]))
+	var layout := theatre().generate_map(m["seed"], Vector2i(m["size"], m["size"]), settings["style"])
+	# A small map can lack room for fair objectives; the next seeds (the same in both players' games) will do.
+	var next_seed: int = m["seed"]
+	while not layout.has("map") and next_seed < m["seed"] + 20:
+		next_seed += 1
+		layout = theatre().generate_map(next_seed, Vector2i(m["size"], m["size"]), settings["style"])
 	var deployments: Array = m["orders"]
 	var rosters := deploy(layout, [m["orders"][0]["roster"], m["orders"][1]["roster"]], deployments)
 	var size: int = m["size"]
@@ -303,12 +329,15 @@ func complete_map(battle: Battle) -> Dictionary:
 			scores[side] += floori(m["points"] / 2.0)
 	m["result"] = {"winner": won, "vp": battle.victory_points.duplicate(), "spent": spent}
 	current += 1
+	if not is_over():
+		for side in 2:
+			supply[side] += income()
 	return m["result"]
 
 
 func to_dict() -> Dictionary:
 	return {"theatre": theatre_id, "maps": maps.duplicate(true), "supply": supply.duplicate(), "scores": scores.duplicate(), "current": current,
-			"ai_sides": ai_sides.duplicate(), "rng_seed": _rng.seed, "rng_state": _rng.state}
+			"ai_sides": ai_sides.duplicate(), "settings": settings.duplicate(), "rng_seed": _rng.seed, "rng_state": _rng.state}
 
 
 static func from_dict(data: Dictionary) -> WarCampaign:
@@ -319,9 +348,22 @@ static func from_dict(data: Dictionary) -> WarCampaign:
 	war.scores = data["scores"].duplicate()
 	war.current = data["current"]
 	war.ai_sides = data["ai_sides"].duplicate()
+	war.settings.merge(data.get("settings", {}), true)
 	war._rng.seed = data["rng_seed"]
 	war._rng.state = data["rng_state"]
 	return war
+
+
+## What both players' games compare to know they hold the same campaign.
+func checksum() -> String:
+	return var_to_str(to_dict()).sha256_text()
+
+
+## The commitment a side sends when it seals its orders: a hash of the orders and a secret salt. The orders
+## themselves follow only once both sides have sealed, and must match it, so neither can see the other's
+## first or change its own after.
+static func orders_hash(orders: Dictionary, salt: String) -> String:
+	return (var_to_str(orders) + "|" + salt).sha256_text()
 
 
 static func _shuffle(items: Array, rng: RandomNumberGenerator) -> void:

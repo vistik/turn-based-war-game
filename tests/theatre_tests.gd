@@ -96,11 +96,6 @@ func test_vietnam_battles_build_from_every_entry_point() -> void:
 		check_eq(battle.kill_points, [0, 1], "%d: the VC score for kills" % size)
 		var air := battle.reinforcements.filter(func(w: Dictionary) -> bool: return w["air"])
 		check(not air.is_empty() and air[0]["team"] == 0, "%d: American reinforcements fly in" % size)
-	var campaign := Campaign.create(3, "vietnam")
-	for i in campaign.missions().size():
-		campaign.mission_index = i
-		var battle := campaign.build_battle(i + 1)
-		check_eq(battle.alive_units(1).size(), campaign.missions()[i]["enemy"].size(), "mission %d enemy force" % (i + 1))
 	var war := WarCampaign.create(3, 99, [true, true], "vietnam")
 	for side in 2:
 		var orders := war.ai_orders(side)

@@ -1625,6 +1625,38 @@ func test_save_and_load_round_trip() -> void:
 		check_eq(var_to_str(b), var_to_str(a), "step %d plays out the same after loading" % i)
 
 
+## A two-map online campaign with both sides' orders in for the first map.
+func _online_war() -> WarCampaign:
+	var war := WarCampaign.create(2, 31, [false, false])
+	for side in 2:
+		war.set_orders(side, {"roster": ["Officer", "Rifleman", "Rifleman", "MG"], "flank": "balanced", "posture": "offensive"})
+	return war
+
+
+func test_online_campaign_saves_between_maps() -> void:
+	var saved_dir := GameSession.save_dir
+	GameSession.save_dir = OS.get_temp_dir().path_join("normandy-war-test-%d" % OS.get_process_id())
+	var war := _online_war()
+	GameSession.start_online_war(war, 0, "game-w", "1.2.3.4:24944", true)
+	GameSession.save_online(0)
+	var offer := GameSession.online_offer()
+	check(offer.get("battle", {"x": 1}).is_empty(), "between maps there is no battle in the save")
+	check(GameSession.describe_online(offer).contains("giving orders"), "the save says the players are giving orders")
+	check(GameSession.resume_online(offer, 1, "", false), "the campaign loads from the offer")
+	check_eq(GameSession.war.checksum(), war.checksum(), "the same campaign")
+	check(GameSession.battle == null, "and no battle yet")
+	var fake := Battle.new(TacticalMap.new(4, 4), [] as Array[Unit])
+	fake.winner = 0
+	GameSession.war.complete_map(fake)
+	GameSession.war.current = GameSession.war.maps.size()
+	GameSession.save_online(1)
+	check(not GameSession.has_save("online"), "a finished campaign clears its save")
+	DirAccess.remove_absolute(GameSession.save_dir)
+	GameSession.save_dir = saved_dir
+	GameSession.online = {}
+	GameSession.war = null
+
+
 func test_online_save_continues_identically() -> void:
 	var saved_dir := GameSession.save_dir
 	GameSession.save_dir = OS.get_temp_dir().path_join("normandy-test-%d" % OS.get_process_id())
@@ -1635,10 +1667,12 @@ func test_online_save_continues_identically() -> void:
 		ai.team = battle.current_team
 		battle.execute(ai.decide())
 	# Saved to disk and loaded back, the battle has the same checksum (dictionary order, floats, dice).
-	GameSession.start_online(battle, "Test map", 1, "game-1", "1.2.3.4:24944", false)
+	GameSession.start_online_war(_online_war(), 1, "game-1", "1.2.3.4:24944", false)
+	GameSession.start_online_battle(battle, "Test map")
 	GameSession.save_online(1)
 	var offer := GameSession.online_offer()
-	check_eq(offer.get("checksum"), battle.checksum(), "the online save keeps the checksum")
+	check_eq(offer.get("checksum"), GameSession.online_checksum(), "the online save keeps the checksum")
+	check(str(offer.get("checksum")).ends_with(battle.checksum()), "the battle's included")
 	check_eq(offer.get("team"), 1, "the save knows our side")
 	check_eq(GameSession.compare_online(offer), "", "our own save matches itself")
 	var other := offer.duplicate()
@@ -1647,7 +1681,7 @@ func test_online_save_continues_identically() -> void:
 	var later := offer.duplicate()
 	later["checksum"] = "x"
 	later["turn_index"] = offer["turn_index"] + 2
-	check(GameSession.compare_online(later).contains("older"), "an older save of ours is noticed")
+	check(GameSession.compare_online(later).contains("round"), "a different point in the game is noticed")
 	check(not GameSession.resume_online(later, 0, "", true), "a battle that doesn't match its checksum isn't loaded")
 	check(GameSession.resume_online(offer, 0, "", true), "the offer loads")
 	var copy := GameSession.battle
@@ -1667,13 +1701,15 @@ func test_online_save_continues_identically() -> void:
 	GameSession.on_turn_agreed(copy.turn_index, "not the state", 0)
 	check_eq(GameSession.peek("online")["checksum"], offer["checksum"], "a state the games don't agree on isn't saved")
 	GameSession.on_turn_agreed(copy.turn_index, copy.checksum(), 0)
-	check_eq(GameSession.peek("online")["checksum"], copy.checksum(), "an agreed turn change is saved")
+	check_eq(GameSession.peek("online")["checksum"], GameSession.online_checksum(), "an agreed turn change is saved")
 	copy.winner = 0
 	GameSession.save_online(0)
-	check(not GameSession.has_save("online"), "a finished online battle clears its save")
+	check(GameSession.peek("online").get("battle", {"x": 1}).is_empty(), "once the battle is over the save keeps only the campaign")
+	GameSession.delete_save("online")
 	DirAccess.remove_absolute(GameSession.save_dir)
 	GameSession.save_dir = saved_dir
 	GameSession.online = {}
+	GameSession.war = null
 	GameSession.battle = null
 
 
@@ -1750,7 +1786,6 @@ func test_saved_battles_keep_their_replay() -> void:
 	var built: Array = GameSession.build_skirmish({"map": "random", "size": 44, "seed": 77})
 	var battle: Battle = built[0]
 	battle.max_rounds = 6
-	GameSession.campaign = null
 	GameSession.war = null
 	GameSession.start_battle(battle, [true, true], built[1])
 	GameSession.recording = Replay.begin(battle, built[1], "skirmish", ["AI", "AI"])
@@ -1775,7 +1810,8 @@ func test_saved_battles_keep_their_replay() -> void:
 	check_eq(GameSession.recording.verify(), "", "the replay of a continued battle plays out from the very start")
 	# Online saves keep it too, and continuing our own save picks it up again.
 	var online: Battle = GameSession.build_skirmish({"map": "random", "size": 44, "seed": 78})[0]
-	GameSession.start_online(online, "Online test", 0, "game-r", "1.2.3.4:24944", true)
+	GameSession.start_online_war(_online_war(), 0, "game-r", "1.2.3.4:24944", true)
+	GameSession.start_online_battle(online, "Online test")
 	GameSession.recording = Replay.begin(online, "Online test", "online", ["You", "Opponent online"])
 	GameSession.recording.attach(online)
 	online.start()
@@ -1792,6 +1828,7 @@ func test_saved_battles_keep_their_replay() -> void:
 	DirAccess.remove_absolute(GameSession.save_dir)
 	GameSession.save_dir = saved_dir
 	GameSession.online = {}
+	GameSession.war = null
 	GameSession.battle = null
 	GameSession.recording = null
 
@@ -1823,53 +1860,6 @@ func test_generated_maps_are_lopsided_but_fair_and_connected() -> void:
 
 
 # --- Campaign ---
-
-func test_campaign_mission_updates_the_roster() -> void:
-	var campaign := Campaign.create(5)
-	check_eq(campaign.deployable().size(), 8, "full squad deploys")
-	var battle := campaign.build_battle(11)
-	var ours := battle.alive_units(0)
-	check_eq(ours.size(), 8, "squad on the field")
-	check_eq(ours[0].role, "Officer", "officer leads")
-	ours[1].hp = 0
-	ours[2].kills = 3
-	ours[3].hp = 1
-	battle.winner = 0
-	var report := campaign.complete_mission(battle)
-	check(report["won"], "mission won")
-	check_eq(campaign.mission_index, 1, "on to mission two")
-	check_eq(campaign.supplies, Campaign.STARTING_SUPPLIES + Campaign.WIN_SUPPLIES, "supplies earned")
-	var dead := campaign._soldier(ours[1].record_id)
-	var veteran := campaign._soldier(ours[2].record_id)
-	var hurt := campaign._soldier(ours[3].record_id)
-	check_eq(dead["status"], "dead", "the dead stay dead")
-	check_eq(veteran["xp"], 4, "xp from the mission and kills")
-	check_eq(veteran["rank"], 1, "promoted to corporal")
-	check_eq(hurt["status"], "recovering", "badly wounded sits out")
-	check(not campaign.deployable().has(hurt), "not deployable while recovering")
-	var recruit := campaign.recruit("Mortar")
-	check_eq(recruit["role"], "Mortar", "recruited a replacement")
-	check_eq(campaign.supplies, Campaign.STARTING_SUPPLIES + Campaign.WIN_SUPPLIES - Campaign.RECRUIT_COST, "recruiting costs supplies")
-	var promoted := campaign.build_battle(12).units.filter(func(u: Unit) -> bool: return u.record_id == veteran["id"])
-	check_eq(promoted[0].aim, 65 + Unit.RANK_AIM, "rank improves aim in battle")
-	var restored := Campaign.from_dict(campaign.to_dict())
-	check_eq(restored.to_dict(), campaign.to_dict(), "campaign saves and loads")
-	battle = campaign.build_battle(13)
-	battle.winner = 1
-	campaign.complete_mission(battle)
-	check_eq(hurt["status"], "ready", "back after sitting one out")
-	check_eq(campaign.mission_index, 1, "a lost mission is retried")
-
-
-func test_every_campaign_mission_builds() -> void:
-	var campaign := Campaign.create(3)
-	for i in campaign.missions().size():
-		campaign.mission_index = i
-		var battle := campaign.build_battle(i + 1)
-		var mission: Dictionary = campaign.missions()[i]
-		check_eq(battle.alive_units(1).size(), mission["enemy"].size(), "%s enemy force" % mission["name"])
-		check_eq(battle.objectives.size(), 3, "%s objectives" % mission["name"])
-
 
 # --- Settings ---
 
@@ -2136,6 +2126,36 @@ func test_war_campaign_maps_and_spend_limits() -> void:
 	war.current = 4
 	war.supply[0] = 9
 	check_eq(war.spend_limits(0), [9, 9] as Array[int], "the last map can only use what is left")
+
+
+func test_war_campaign_settings_and_income() -> void:
+	var settings := {"supply": 60, "income": 20, "min_spend": 10, "max_spend": 30, "max_units": 6, "size": 32}
+	var war := WarCampaign.create(3, 55, [false, false], "normandy", settings)
+	check_eq(war.supply, [60, 60], "the host's starting supply")
+	check(war.maps.all(func(m: Dictionary) -> bool: return m["size"] == 32), "every map is the chosen size")
+	check_eq(war.max_units(0), 6, "the host's unit cap")
+	check_eq(war.spend_limits(0), [10, 30] as Array[int], "the host's commit limits")
+	war.supply[0] = 25
+	check_eq(war.spend_limits(0)[1], 25, "income still to come means nothing need be held back")
+	war.supply[0] = 60
+	var roster := ["Rifleman", "Rifleman", "Rifleman"]
+	war.set_orders(0, {"roster": roster, "flank": "left", "posture": "offensive"})
+	war.set_orders(1, {"roster": roster, "flank": "left", "posture": "offensive"})
+	check(war.build_battle().map.width == 32, "the battle is on the chosen map size")
+	var fake := Battle.new(TacticalMap.new(4, 4), [] as Array[Unit])
+	fake.winner = 0
+	war.complete_map(fake)
+	check_eq(war.supply[0], 60 - war.cost_of(0, roster) + 20, "income arrives after the map")
+	var copy := WarCampaign.from_dict(war.to_dict())
+	check_eq(copy.settings["income"], 20, "settings are saved")
+	check_eq(copy.checksum(), war.checksum(), "and load the same campaign")
+	var single := WarCampaign.create(1, 9, [false, false])
+	check_eq(single.maps.size(), 1, "a one-map campaign is a single battle")
+	var orders := {"roster": roster, "flank": "right", "posture": "defensive"}
+	var hash := WarCampaign.orders_hash(orders, "salt1")
+	check_eq(WarCampaign.orders_hash(orders.duplicate(true), "salt1"), hash, "sealed orders check out when revealed")
+	check(WarCampaign.orders_hash({"roster": roster, "flank": "left", "posture": "defensive"}, "salt1") != hash, "changed orders don't")
+	check(WarCampaign.orders_hash(orders, "salt2") != hash, "nor another salt")
 
 
 func test_war_campaign_ai_orders_are_valid() -> void:

@@ -136,7 +136,10 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   - AT with Bazooka or Panzerschreck. Like the mortar it can fire at any tile in sight, enemy or not (Shoot,
     then click a tile): +20 to hit a patch of ground, a miss lands short or long. It bursts there, breaking
     walls and cover, maybe starting a fire, and hits anyone hidden on the tile with the full warhead. A rocket
-    or MG burst can be aimed at the wall in front of a tile, and fired blind into smoke or dust
+    or MG burst can be aimed at the wall in front of a tile, and fired blind into smoke or dust.
+    Every rocket throws a backblast onto the tile behind the gunner: in dry crops or tall grass it may set it
+    alight, and it burns and shakes anyone standing there. With a wall, hedge or rock right behind him, or
+    firing from inside a room, it bounces back and shakes the gunner himself
   - Sherman and Panzer IV tanks: switched off for now (no roster, wave, shop or editor offers them), as are
     Vietnam's M113 and Iraq's MRAP. Their rules are kept for when they come back.
 - Tanks have front, side and rear armour. They turn slowly (each 45° costs movement) and can back up. A tank's
@@ -253,7 +256,9 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   in contact (a few tiles apart either side of the middle) or random. The minimap shows where each side's soldiers will start (a random deployment only once the
   battle begins), and changes as you pick. Online, the host picks both.
 - **Quick test battle** (main menu footer): one click starts a small 32x32 random map in the chosen theatre, against
-  the AI, with both sides already in contact mid-map: the fastest way to try something out.
+  the AI, with both sides already set out in a firing line mid-map: every soldier in cover toward the enemy where
+  there is any, and every one (sniper and mortar too) with something to fire at on the first turn. Both sides
+  open with their full two actions. The fastest way to try something out.
 - **Online**: two computers connect directly, at home or over the internet, no server needed.
   - Every game has a password. The joiner proves it knows the password before the host lets it in (the
     password itself never travels); wrong guesses are turned away, and a run of them locks the game for a

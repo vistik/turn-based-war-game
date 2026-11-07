@@ -617,6 +617,34 @@ func test_shells_burst_in_trees_and_bring_them_down() -> void:
 	check(logs > 10 and shattered > 10, "trees come down as trunks or splintered scrub (%d trunks, %d splintered)" % [logs, shattered])
 
 
+func test_rocket_backblast() -> void:
+	var battle := make_battle([["AT", 0, Vector2i(5, 5)], ["Rifleman", 0, Vector2i(4, 5)], ["Rifleman", 1, Vector2i(11, 5)], ["Rifleman", 0, Vector2i(0, 15)]])
+	var at := battle.units[0]
+	var mate := battle.units[1]
+	check_eq(battle.backblast_tile(at, Vector2i(11, 5)), Vector2i(4, 5), "the backblast goes straight back")
+	var hp := mate.hp
+	var events := battle.execute({"cmd": "fire_at", "unit": at.id, "tile": Vector2i(11, 7)})
+	check_eq(events_of(events, "backblast").size(), 1, "firing a rocket throws a backblast")
+	check(mate.hp < hp and mate.suppression >= CombatRules.BACKBLAST_SUPPRESSION, "and burns and shakes a friend standing behind")
+	var walled := make_battle([["AT", 0, Vector2i(5, 5)], ["Rifleman", 1, Vector2i(11, 5)], ["Rifleman", 0, Vector2i(0, 15)]])
+	walled.map.set_edge(Vector2i(4, 5), Vector2i(5, 5), Cover.FULL, "wall")
+	var bounce := walled.execute({"cmd": "fire_at", "unit": walled.units[0].id, "tile": Vector2i(11, 7)})
+	check(events_of(bounce, "backblast")[0].get("bounced", false), "a wall right behind throws it back")
+	check(walled.units[0].suppression >= CombatRules.BACKBLAST_BOUNCE_SUPPRESSION, "and shakes the gunner")
+	var fires := 0
+	for seed in 10:
+		var units: Array[Unit] = [Unit.create(0, "U0", "AT", 0, Vector2i(5, 5)), Unit.create(1, "U1", "Rifleman", 1, Vector2i(11, 5)), Unit.create(2, "U2", "Rifleman", 0, Vector2i(0, 15))]
+		var b := Battle.new(TacticalMap.new(16, 16), units, seed)
+		b.start()
+		b.map.set_terrain(Vector2i(4, 5), TacticalMap.Terrain.WHEAT)
+		b.execute({"cmd": "fire_at", "unit": units[0].id, "tile": Vector2i(11, 7)})
+		if b.map.has_fire(Vector2i(4, 5)):
+			fires += 1
+	check(fires >= 2 and fires <= 8, "in dry wheat the backblast sometimes starts a fire (%d of 10)" % fires)
+	var rifle := make_battle([["Rifleman", 0, Vector2i(5, 5)], ["Rifleman", 1, Vector2i(11, 5)]])
+	check(events_of(rifle.execute({"cmd": "shoot", "unit": rifle.units[0].id, "target": rifle.units[1].id}), "backblast").is_empty(), "a rifle has none")
+
+
 func test_hold_ends_a_soldiers_turn() -> void:
 	var battle := make_battle([["Rifleman", 0, Vector2i(2, 2)], ["Rifleman", 0, Vector2i(2, 4)], ["Rifleman", 1, Vector2i(13, 13)]])
 	var a := battle.units[0]
@@ -2211,12 +2239,28 @@ func test_overwatch_holds_fire_on_targets_it_cannot_hurt() -> void:
 func test_quick_test_battle_starts_in_contact() -> void:
 	var contact := {"flank": "contact", "posture": "normal"}
 	for theatre: String in ["normandy", "vietnam", "modern"]:
-		var battle: Battle = GameSession.build_skirmish({"theatre": theatre, "map": "random", "size": 32, "seed": 4242, "deployment": [contact, contact]})[0]
+		var setup := {"theatre": theatre, "map": "random", "size": 32, "seed": 4242, "deployment": [contact, contact], "quick_test": true}
+		var battle: Battle = GameSession.build_skirmish(setup)[0]
 		check_eq(battle.map.width, 32, "%s: the quick test map is small" % theatre)
+		check_eq(battle.checksum(), GameSession.build_skirmish(setup)[0].checksum(), "%s: the same setup sets out the same line" % theatre)
 		var xs := [battle.alive_units(0).map(func(u: Unit) -> int: return u.pos.x), battle.alive_units(1).map(func(u: Unit) -> int: return u.pos.x)]
 		check(xs[0].max() < 16 and xs[1].min() >= 16, "%s: each side stays on its own half" % theatre)
-		check(xs[1].min() - xs[0].max() <= 10, "%s: the two sides start close (gap %d)" % [theatre, xs[1].min() - xs[0].max()])
 		check(xs[0].min() >= 4 and xs[1].max() <= 27, "%s: nobody starts back at the edge" % theatre)
+		var covered := 0
+		for u in battle.units:
+			check(BattleFactory.opening_targets(battle, u) > 0, "%s: the %s has something to fire at" % [theatre, u.role])
+			var nearest: Unit = null
+			for e in battle.alive_units(1 - u.team):
+				if nearest == null or Vector2(u.pos).distance_to(Vector2(e.pos)) < Vector2(u.pos).distance_to(Vector2(nearest.pos)):
+					nearest = e
+			if battle.map.cover_against(u.pos, nearest.pos) > Cover.NONE:
+				covered += 1
+		check(covered * 4 >= battle.units.size() * 3, "%s: most start in cover from the nearest enemy (%d of %d)" % [theatre, covered, battle.units.size()])
+		battle.start()
+		for u in battle.alive_units(battle.current_team):
+			var can := battle.alive_units(1 - u.team).any(func(e: Unit) -> bool:
+				return battle.can_shoot(u, e) == "" or (not u.indirect.is_empty() and battle.can_fire_mortar(u, e.pos, u.indirect["kinds"][0]) == ""))
+			check(can, "%s: the %s can open fire on the first turn" % [theatre, u.role])
 
 
 func test_skirmish_deployments() -> void:

@@ -73,6 +73,128 @@ static func create(layout: Dictionary, rosters: Array, seed := 0, options := {})
 	return battle
 
 
+## Quick test: both sides set out in a firing line in the middle of a small map, every soldier on a tile in
+## his own half with cover toward the enemy where there is any, and with something to fire at from where he
+## stands: an enemy in sight (and not hopelessly out of range) for a rifle, an enemy in range his side can spot
+## (or he can see himself, for a forward observer; anywhere in range for a mortar firing blind) for a mortar or radio. Placed in turns, a soldier from each
+## side at a time, so each side's spots answer the other's; a couple of passes fix anyone left without a target.
+## Both sides open with all their actions, so a sniper or mortar can fire on the first turn. Works on a battle
+## not yet started; the same battle always comes out the same.
+static func arrange_firing_line(battle: Battle) -> void:
+	battle.opening_actions = Unit.ACTIONS_PER_TURN
+	var map := battle.map
+	var mid := map.width / 2
+	var zones := [Vector2i(mid - 9, mid - 2), Vector2i(mid + 1, mid + 8)]
+	var rows := Vector2i(roundi(map.height * 0.18), roundi(map.height * 0.82))
+	var reachable := _connected(map, battle.units[0].pos)
+	var candidates := [[], []]
+	for team in 2:
+		for y in range(rows.x, rows.y + 1):
+			for x in range(zones[team].x, zones[team].y + 1):
+				var p := Vector2i(x, y)
+				if reachable.has(p) and not map.has_mine(p):
+					candidates[team].append(p)
+	var order: Array[Unit] = []
+	var sides := [battle.alive_units(0), battle.alive_units(1)]
+	for team in 2:
+		# Spotters and gunners first, mortars and radios last: they fire at what the others find.
+		sides[team].sort_custom(func(a: Unit, b: Unit) -> bool: return (0 if a.indirect.is_empty() else 1) < (0 if b.indirect.is_empty() else 1) or ((0 if a.indirect.is_empty() else 1) == (0 if b.indirect.is_empty() else 1) and a.id < b.id))
+	for i in maxi(sides[0].size(), sides[1].size()):
+		for team in 2:
+			if i < sides[team].size():
+				order.append(sides[team][i])
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(battle.checksum())
+	for pass_index in 3:
+		for u in order:
+			if pass_index > 0 and opening_targets(battle, u) > 0:
+				continue
+			var best := u.pos
+			var best_score := -INF
+			for p: Vector2i in candidates[u.team]:
+				if p != u.pos and battle.unit_at(p) != null:
+					continue
+				var score := _firing_spot_score(battle, u, p) + rng.randf() * 2.0
+				if score > best_score:
+					best_score = score
+					best = p
+			u.pos = best
+	for u in battle.units:
+		u.facing = Vector2i(1, 0) if u.team == 0 else Vector2i(-1, 0)
+
+
+## How many enemies u could open fire on from where he stands (see arrange_firing_line).
+static func opening_targets(battle: Battle, u: Unit) -> int:
+	var count := 0
+	var spec := u.indirect
+	var spotted := {}
+	if not spec.is_empty() and spec.get("spotter", "team") == "team":
+		spotted = battle.team_visible_tiles(u.team)
+	for e in battle.alive_units(1 - u.team):
+		var distance := Vector2(u.pos).distance_to(Vector2(e.pos))
+		if spec.is_empty():
+			if u.weapon.range_modifier(distance) > -30 and battle.can_see(u, e):
+				count += 1
+		elif distance >= spec["min"] + 0.5 and distance <= spec["max"]:
+			match spec.get("spotter", "team"):
+				"self":
+					if battle.can_see(u, e):
+						count += 1
+				"team":
+					if spotted.has(e.pos):
+						count += 1
+				_:
+					# Fires on any tile in range; it still wants one its side can see, so the round lands close.
+					count += 1
+	return count
+
+
+static func _firing_spot_score(battle: Battle, u: Unit, p: Vector2i) -> float:
+	var old := u.pos
+	u.pos = p
+	var targets := opening_targets(battle, u)
+	var score := 0.0
+	if targets > 0:
+		score += 100.0 + minf(targets, 3) * 4.0
+	var nearest := INF
+	var cover := 0.0
+	var seen := 0
+	for e in battle.alive_units(1 - u.team):
+		var d := Vector2(p).distance_to(Vector2(e.pos))
+		nearest = minf(nearest, d)
+		if d <= 14.0:
+			cover += battle.map.cover_against(p, e.pos)
+			seen += 1
+	if seen > 0:
+		score += cover / seen * 25.0
+	if nearest < 4.0:
+		score -= 40.0
+	# Mortars and snipers hang back; everyone else keeps a few tiles from the enemy, not on top of him.
+	if not u.indirect.is_empty() or u.weapon.kind == "sniper":
+		score += minf(nearest, 14.0) * 1.5
+	else:
+		score -= absf(nearest - 8.0) * 1.0
+	for f in battle.alive_units(u.team):
+		if f != u and maxi(absi(f.pos.x - p.x), absi(f.pos.y - p.y)) <= 1:
+			score -= 8.0
+	u.pos = old
+	return score
+
+
+## Tiles reachable on foot from `from` (any number of steps).
+static func _connected(map: TacticalMap, from: Vector2i) -> Dictionary:
+	var seen := {from: true}
+	var queue: Array[Vector2i] = [from]
+	while not queue.is_empty():
+		var a: Vector2i = queue.pop_back()
+		for d: Vector2i in TacticalMap.DIRS4:
+			var b: Vector2i = a + d
+			if not seen.has(b) and map.in_bounds(b) and map.is_passable(b) and map.step_cost(a, b, 0, 0) < INF:
+				seen[b] = true
+				queue.append(b)
+	return seen
+
+
 static func _make_unit(id: int, entry: Variant, team: int, pos: Vector2i, names: _NameBook, theatre_id: String) -> Unit:
 	var spec: Dictionary = entry if entry is Dictionary else {"role": entry}
 	var role: String = spec["role"]

@@ -4,7 +4,7 @@ extends RefCounted
 ## Commands validate, change state and return event dictionaries for the view to play back.
 ## Event types: move, pivot, shot, throw, damage, death, explosion, smoke, smoke_clear, mortar_fire, strike,
 ## suppression, status, heal, objective, score, reinforcements, turn, game_over, stance,
-## detonation, fire, fire_out, mine, mines_spotted, object_shot, ground_shot, area_fire, mine_cleared, dust (brick dust from a breached
+## detonation, fire, fire_out, mine, mines_spotted, object_shot, ground_shot, area_fire, backblast, mine_cleared, dust (brick dust from a breached
 ## wall or a collapse; it fills its tiles with smoke),
 ## and in Vietnam: tunnel, tunnels_spotted, tunnel_collapsed, trap_laid, napalm, kill_points; in Afghanistan
 ## and Iraq: ied (an IED set off by the bomb maker; one stepped on is a "mine" event of kind "ied").
@@ -1061,6 +1061,7 @@ func shoot_object(u: Unit, tile: Vector2i) -> Array:
 	var events: Array = [{"type": "object_shot", "unit": u.id, "tile": tile, "kind": kind, "chance": chance, "hit": hit}]
 	if hit:
 		events.append_array(_detonate(u, tile, kind))
+	events.append_array(_backblast(u, tile))
 	events.append_array(_after_action())
 	return events
 
@@ -1095,6 +1096,7 @@ func fire_at_tile(u: Unit, tile: Vector2i) -> Array:
 		events.append_array(_damage(victim, damage, 0, u))
 		if victim.is_alive():
 			events.append_array(_suppress(victim, CombatRules.HIT_SUPPRESSION_BONUS))
+	events.append_array(_backblast(u, tile))
 	events.append_array(_after_action())
 	return events
 
@@ -2376,6 +2378,43 @@ func _fire(shooter: Unit, target: Unit, reaction: bool, steady := false) -> Arra
 		for ally in alive_units(target.team):
 			if ally != target and Vector2(ally.pos).distance_to(Vector2(target.pos)) <= CombatRules.MG_AREA_RADIUS:
 				events.append_array(_suppress(ally, int(shooter.weapon.suppression / 2.0)))
+	events.append_array(_backblast(shooter, target.pos))
+	return events
+
+
+## The tile right behind u, firing toward `toward` (the nearest of the eight directions straight back).
+func backblast_tile(u: Unit, toward: Vector2i) -> Vector2i:
+	var dir := Vector2(toward - u.pos).normalized()
+	return u.pos - Vector2i(roundi(dir.x), roundi(dir.y))
+
+
+## A rocket's backblast (see CombatRules.BACKBLAST_FIRE_CHANCE): onto the tile behind the gunner, or back at
+## him off a wall, hedge, rock or the room he fires from.
+func _backblast(u: Unit, toward: Vector2i) -> Array:
+	if u.weapon.kind != "at" or u.vehicle or toward == u.pos:
+		return []
+	var behind := backblast_tile(u, toward)
+	var event := {"type": "backblast", "unit": u.id, "tile": behind}
+	var events: Array = [event]
+	var step := behind - u.pos
+	var walled := not map.in_bounds(behind) or map.get_object(behind) == Cover.FULL or map.is_indoors(u.pos, u.level) \
+			or (step.x == 0 or step.y == 0) and map.get_edge(u.pos, behind) == Cover.FULL
+	if walled:
+		event["bounced"] = true
+		events.append({"type": "status", "unit": u.id, "text": "Backblast off the wall!"})
+		events.append_array(_suppress(u, CombatRules.BACKBLAST_BOUNCE_SUPPRESSION))
+		return events
+	var there := unit_at(behind)
+	if there != null and not there.vehicle and there.level == u.level:
+		events.append({"type": "status", "unit": there.id, "text": "Caught in the backblast!"})
+		events.append_array(_damage(there, rng.randi_range(CombatRules.BACKBLAST_DAMAGE[0], CombatRules.BACKBLAST_DAMAGE[1]), 0, u))
+		if there.is_alive():
+			events.append_array(_suppress(there, CombatRules.BACKBLAST_SUPPRESSION))
+	if u.level == 0 and _can_burn(behind) and map.get_terrain(behind) in TacticalMap.LONG_BURNING \
+			and rng.randf() < CombatRules.BACKBLAST_FIRE_CHANCE * _under_unit_share(behind):
+		_ignite(behind)
+		event["fire"] = true
+		events.append({"type": "fire", "tiles": [behind]})
 	return events
 
 

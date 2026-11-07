@@ -143,6 +143,14 @@ const TREE_BURST_REACH := 1.0
 const TREE_BURST_RADIUS := 0.5
 const TREE_BURST_DAMAGE := 1
 const TREE_FELL_CHANCE := 0.5
+## Backblast: a bazooka, Panzerschreck or RPG throws a jet of flame out of the back of the tube, onto the tile
+## behind the gunner. In dry crops or tall grass it may set it alight (BACKBLAST_FIRE_CHANCE); anyone standing
+## there is burnt and shaken. A wall, hedge, rock or room right behind him throws it back at him instead
+## (BACKBLAST_BOUNCE_SUPPRESSION): never fire with your back to a wall.
+const BACKBLAST_FIRE_CHANCE := 0.4
+const BACKBLAST_DAMAGE := [1, 2]
+const BACKBLAST_SUPPRESSION := 30
+const BACKBLAST_BOUNCE_SUPPRESSION := 25
 ## A mine hits whoever steps on it and the tiles beside it. Explosions still lose EXPLOSION_VS_ARMOR against tanks.
 const MINE_RADIUS := 1.0
 const MINE_DAMAGE_MIN := 4

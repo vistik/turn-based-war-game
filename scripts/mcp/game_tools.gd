@@ -919,6 +919,11 @@ func _event_line(e: Dictionary, side: int) -> String:
 			return "A %s between %s and %s was hit (%s)." % [e["kind"], _tile(e["tiles"][0]), _tile(e["tiles"][1]), ["whole", "damaged", "breached, half cover", "gone"][mini(e["damage"], 3)]]
 		"collapse":
 			return "The building at %s collapsed into rubble." % str(_tile(e["center"]))
+		"backblast":
+			if e.get("bounced", false) and mine:
+				return "%s's backblast bounced off the wall behind him (fire rockets with open ground behind)." % _who(u)
+			if e.get("fire", false) and (mine or visible):
+				return "%s's backblast set %s alight." % [_who(u), _tile(e["tile"])]
 		"dust":
 			return "Dust (blocks sight) fills %d tile%s around %s." % [e["tiles"].size(), "" if e["tiles"].size() == 1 else "s", _tile(e["center"])]
 		"window_broken":

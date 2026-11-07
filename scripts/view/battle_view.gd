@@ -1322,6 +1322,13 @@ func _play_event(e: Dictionary) -> void:
 				_log_line("[color=#ff9b6b]A stray round sets off the %s![/color]" % _object_name(e["kind"]).to_lower())
 			else:
 				_log_line("[color=#ff9b6b]The %s %s![/color]" % [_object_name(e["kind"]).to_lower(), "go up" if e["kind"] == "fuel" else "goes up"])
+		"backblast":
+			var gunner := battle.get_unit(e["unit"])
+			var at: Vector2 = _center(e["tile"]) if not e.get("bounced", false) else _display_pos[gunner.id]
+			if _view_team() == -1 or gunner.team == _view_team() or _seen_units.has(gunner.id) or _visible_tiles.has(e["tile"]):
+				_effects.append({"kind": "puff_burst", "at": at, "age": 0.0, "life": 0.6, "lift": _lift_at(at)})
+				if e.get("fire", false):
+					_log_line("[color=#ffb84d]%s's backblast sets the grass behind him alight.[/color]" % gunner.name)
 		"dust":
 			_hold_layout = false
 			var at := _center(e["center"])

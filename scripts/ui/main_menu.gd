@@ -582,7 +582,7 @@ func _start_play() -> void:
 func _start_quick_test() -> void:
 	var contact := {"flank": "contact", "posture": "normal"}
 	_start_vs_ai({"theatre": _theatre_id, "map": "random", "size": QUICK_TEST_SIZE, "seed": randi() % 1000000000 + 1,
-			"deployment": [contact, contact]}, "Quick test: ")
+			"deployment": [contact, contact], "quick_test": true}, "Quick test: ")
 
 
 ## Starts a skirmish (GameSession.build_skirmish setup) with the player as team 0 against the AI.

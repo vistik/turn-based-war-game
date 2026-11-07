@@ -52,7 +52,8 @@ static func start_battle(p_battle: Battle, p_ai_teams: Array, title: String) -> 
 
 ## A skirmish from a setup {"theatre": id (Normandy if left out), "map": "village" or "random", "size": side
 ## length, "style": a Theatre.map_styles() id ("" or left out: the seed picks), "seed": int}, or {"map": "scenario", "scenario": Scenario.to_data(), "seed": int}: the same setup
-## always builds the same battle, which is how both online players start identical games.
+## always builds the same battle, which is how both online players start identical games. "quick_test": true
+## sets both sides out in a firing line (BattleFactory.arrange_firing_line).
 ## Bigger maps bring bigger forces, need more points to win and allow more rounds. Returns [battle, title].
 ## The default deployment: each side spread out along its whole edge (see WarCampaign.deployment_tiles).
 const SPREAD_OUT := {"flank": "wide", "posture": "normal"}
@@ -87,6 +88,8 @@ static func build_skirmish(setup: Dictionary) -> Array:
 	var options := {"theatre": theatre.id, "reinforcements": forces["waves"], "max_rounds": forces["max_rounds"], "vp_to_win": forces["vp_to_win"]}
 	options.merge(theatre.battle_options())
 	var battle := BattleFactory.create(layout, WarCampaign.deploy(layout, forces["rosters"], deployments), seed, options)
+	if setup.get("quick_test", false):
+		BattleFactory.arrange_firing_line(battle)
 	return [battle, title]
 
 

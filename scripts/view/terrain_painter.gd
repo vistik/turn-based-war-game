@@ -386,6 +386,8 @@ static func _draw_object_shadow(c: Object, proj: ViewProjection, map: TacticalMa
 			draw_shadow(c, proj, rect_poly(Rect2(Vector2(p), Vector2.ONE).grow(-0.12)), _rock_height(p))
 		"oil_tank":
 			draw_shadow(c, proj, rect_poly(Rect2(Vector2(p), Vector2.ONE).grow(-0.08)), 1.3)
+		"log":
+			draw_shadow(c, proj, _log_poly(p, center, 0.13), 0.26)
 		_:
 			draw_shadow(c, proj, rect_poly(Rect2(Vector2(p), Vector2.ONE).grow(-0.2)), 0.45)
 
@@ -528,6 +530,8 @@ static func _draw_object(c: Object, proj: ViewProjection, map: TacticalMap, p: V
 			_draw_rice_sacks(c, proj, p, center, BURLAP.darkened(tint), alpha)
 		"sandbags":
 			_draw_sandbags(c, proj, p, center, SANDBAG.darkened(tint), alpha)
+		"log":
+			_draw_log(c, proj, p, center, tint, alpha)
 		"hay":
 			var color := HAY.darkened(tint)
 			prism(c, proj, blob_poly(center, 0.34, p, 0.0), 0.0, 0.5, color, alpha)
@@ -587,6 +591,28 @@ static func _draw_tree(c: Object, proj: ViewProjection, p: Vector2i, center: Vec
 		var puff: Array = puffs[i]
 		var color: Color = LEAVES[mini(2, int(i * 3.0 / puffs.size()))]
 		c.draw_circle(proj.project(puff[0], puff[1]), puff[2], Color(color.darkened(tint), alpha))
+
+
+## A fallen trunk lying across the tile at an angle of its own, the stump of its crown's branches at one end.
+static func _log_poly(p: Vector2i, center: Vector2, half_width: float) -> PackedVector2Array:
+	var along := Vector2.from_angle(noise(p, 51) * PI) * 0.46
+	var across := along.orthogonal().normalized() * half_width
+	return PackedVector2Array([center - along - across, center + along - across, center + along + across, center - along + across])
+
+
+static func _draw_log(c: Object, proj: ViewProjection, p: Vector2i, center: Vector2, tint: float, alpha: float) -> void:
+	var along := Vector2.from_angle(noise(p, 51) * PI) * 0.46
+	var crown := center + along * 0.95
+	for i in 4:
+		var offset := Vector2.from_angle(TAU * i / 4.0 + noise(p, i + 60)) * 0.14
+		c.draw_circle(proj.project(crown + offset, 0.18), 5.0 + noise(p, i + 70) * 3.0, Color(LEAVES[i % 3].darkened(tint + 0.25), alpha))
+	var bark := TRUNK.darkened(tint)
+	var faces := prism(c, proj, _log_poly(p, center, 0.12), 0.0, 0.24, bark, alpha)
+	var butt := proj.project(center - along, 0.12)
+	c.draw_circle(butt, 4.0, Color(WOOD.lightened(0.25).darkened(tint), alpha))
+	c.draw_arc(butt, 2.0, 0.0, TAU, 8, Color(WOOD.darkened(0.2 + tint), alpha), 1.0)
+	for q: Array in faces:
+		c.draw_line(q[0].lerp(q[3], 0.5), q[1].lerp(q[2], 0.5), Color(bark.darkened(0.3), alpha), 1.0)
 
 
 static func _draw_sandbags(c: Object, proj: ViewProjection, p: Vector2i, center: Vector2, color: Color, alpha: float) -> void:

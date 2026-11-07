@@ -114,6 +114,35 @@ const FIRE_SPREAD_CHANCE := {
 	TacticalMap.Terrain.ROUGH: 0.08, TacticalMap.Terrain.FLOOR: 0.04, TacticalMap.Terrain.JUNGLE: 0.08,
 }
 const FIRE_COOK_OFF := 0.25
+## A mine or IED sets the ground round it alight: each tile in its blast that can burn (not water, roads,
+## rubble, trenches or indoors) catches at MINE_FIRE_CHANCE (a soldier's tile only in crops or tall grass, at
+## FIRE_UNDER_UNIT_SHARE), and where any tile can burn at least one always does.
+const MINE_FIRE_CHANCE := 0.6
+## A wall knocked down to a breach or gone throws up brick dust on both sides: smoke (blocking sight) for
+## DUST_TURNS, so it hangs through the other side's reply.
+const DUST_TURNS := 2
+## A building coming down buries its tiles and the ring round them in dust for COLLAPSE_DUST_TURNS.
+const COLLAPSE_DUST_TURNS := 4
+## Hay bales and crates burn. The chance a blast over one ("blast") or a fire beside it ("spread") sets it
+## alight; it burns away (and its cover with it), hay for LONG_BURN_TURNS, a crate for BLAST_FIRE_TURNS.
+const OBJECT_BURN_CHANCE := {"hay": {"blast": 0.7, "spread": 0.35}, "crate": {"blast": 0.3, "spread": 0.1}}
+## A missed rifle, pistol or SMG round that ends in a car or oil tank may set it off.
+const STRAY_COOK_OFF := {"car": 0.15, "oil_tank": 0.1, "fuel": 0.25}
+## Blast concussion: an explosion shatters the glass of every window within its radius plus
+## WINDOW_SHATTER_REACH (the frame stays, half cover as before).
+const WINDOW_SHATTER_REACH := 2.0
+## Rubble: a brick, stone or mud wall breached or brought down spills rubble (slow ground) onto the open
+## tile on its far side from the blast or gun. A collapsing building spills onto each open tile round it at
+## COLLAPSE_SPILL_CHANCE.
+const COLLAPSE_SPILL_CHANCE := 0.6
+## Tree bursts: a mortar or artillery shell landing among trees (one within TREE_BURST_REACH of where it
+## comes down) bursts in the branches and rains splinters: TREE_BURST_RADIUS wider and TREE_BURST_DAMAGE
+## more. Trees a blast catches are shattered to splintered scrub, or (off the centre, at TREE_FELL_CHANCE)
+## brought down as a fallen trunk: half cover that blocks the way.
+const TREE_BURST_REACH := 1.0
+const TREE_BURST_RADIUS := 0.5
+const TREE_BURST_DAMAGE := 1
+const TREE_FELL_CHANCE := 0.5
 ## A mine hits whoever steps on it and the tiles beside it. Explosions still lose EXPLOSION_VS_ARMOR against tanks.
 const MINE_RADIUS := 1.0
 const MINE_DAMAGE_MIN := 4
@@ -259,6 +288,24 @@ static func misses_fly_on(weapon: Weapon) -> bool:
 
 
 ## Chance (0-100) to hit an explosive object of `kind` on `tile` from `from`.
+## A bazooka, Panzerschreck or RPG can be fired at any tile its gunner can see, enemy or not: a still patch of
+## ground is easier to hit than a man (GROUND_SHOT_BONUS). A miss lands near it, like any stray rocket.
+const GROUND_SHOT_BONUS := 20
+
+
+static func fires_at_ground(weapon: Weapon) -> bool:
+	return weapon.anti_tank
+
+
+static func ground_odds(shooter: Unit, from: Vector2i, tile: Vector2i) -> int:
+	var hit: int = shooter.aim + shooter.weapon.range_modifier(Vector2(from).distance_to(Vector2(tile))) + GROUND_SHOT_BONUS
+	if shooter.is_pinned():
+		hit -= PINNED_AIM_PENALTY
+	elif shooter.is_suppressed():
+		hit -= SUPPRESSED_AIM_PENALTY
+	return clampi(hit, 0, 100)
+
+
 static func object_odds(shooter: Unit, from: Vector2i, tile: Vector2i, kind: String) -> int:
 	var hit: int = shooter.aim + shooter.weapon.range_modifier(Vector2(from).distance_to(Vector2(tile))) + OBJECT_SHOT_BONUS.get(kind, 0)
 	if shooter.is_pinned():

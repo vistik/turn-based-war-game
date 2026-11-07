@@ -549,6 +549,14 @@ func _on_click(tile: Vector2i) -> void:
 					_command({"cmd": "shoot_object", "unit": selected.id, "tile": tile})
 			elif own:
 				_select(u)
+			elif _shot_cmd == "suppress" and _area_fire(tile):
+				err = battle.can_suppress_tile(selected, tile)
+				if err == "":
+					_command({"cmd": "suppress_area", "unit": selected.id, "tile": tile})
+			elif _shot_cmd == "shoot" and _ground_fire(tile):
+				err = battle.can_fire_at_tile(selected, tile)
+				if err == "":
+					_command({"cmd": "fire_at", "unit": selected.id, "tile": tile})
 		Mode.CLEAR_MINE:
 			err = battle.can_clear_mine(selected, tile)
 			if err == "":
@@ -653,7 +661,8 @@ func _on_action(action: String) -> void:
 				err = "Only machine gunners lay down suppressive fire"
 			if err == "" and action == "suppress" and selected.ammo < CombatRules.SUPPRESSIVE_FIRE_AMMO:
 				err = "Needs %d rounds, reload first" % CombatRules.SUPPRESSIVE_FIRE_AMMO
-			if err == "" and battle.visible_enemies(selected).is_empty() and (action != "shoot" or _explosives_in_sight(selected).is_empty()):
+			var anywhere := (action == "shoot" and CombatRules.fires_at_ground(selected.weapon)) or action == "suppress"
+			if err == "" and not anywhere and battle.visible_enemies(selected).is_empty() and (action != "shoot" or _explosives_in_sight(selected).is_empty()):
 				err = "No enemies in line of sight"
 			if err == "":
 				_shot_cmd = action
@@ -1287,6 +1296,19 @@ func _play_event(e: Dictionary) -> void:
 			_effects.append({"kind": "explosion", "at": _center(e["center"]), "radius": e["radius"] + 0.5, "age": 0.0, "life": 1.4,
 					"lift": TerrainPainter.floor_lift(battle.map, e["center"], e.get("level", 0))})
 			_log_line("Explosion: %d pieces of cover damaged or destroyed." % e["destroyed"])
+			if e.get("tree_burst", false):
+				_float(_center(e["center"]) + Vector2(0, -0.6), "TREE BURST!", Color("d8f0a0"))
+				_log_line("[color=#d8f0a0]The shell bursts in the treetops: splinters rain down.[/color]")
+			if e.has("felled"):
+				var trunks: int = e["felled"].size()
+				_log_line("%d tree%s come%s down." % [trunks, "" if trunks == 1 else "s", "s" if trunks == 1 else ""])
+			for pair: Array in e.get("windows", []).slice(0, 6):
+				var glass: Vector2 = (_center(pair[0]) + _center(pair[1])) * 0.5
+				_effects.append({"kind": "puff_burst", "at": glass, "age": 0.0, "life": 0.4})
+			if not e.get("windows", []).is_empty():
+				var panes: int = e["windows"].size()
+				_float(_center(e["center"]) + Vector2(0, 0.6), "CRASH", Color("cfe6f5"))
+				_log_line("[color=#cfe6f5]The blast blows in %d window%s.[/color]" % [panes, "" if panes == 1 else "s"])
 			await _wait(0.6)
 		"smoke":
 			_effects.append({"kind": "puff_burst", "at": _center(e["center"]), "age": 0.0, "life": 0.8, "lift": _lift_at(_center(e["center"]))})
@@ -1296,7 +1318,19 @@ func _play_event(e: Dictionary) -> void:
 			_log_line("[color=#999]The smoke clears.[/color]")
 		"detonation":
 			_float(_center(e["tile"]), "KABOOM!", Color("ff8a3d"))
-			_log_line("[color=#ff9b6b]The %s %s![/color]" % [_object_name(e["kind"]).to_lower(), "go up" if e["kind"] == "fuel" else "goes up"])
+			if e.get("stray", false):
+				_log_line("[color=#ff9b6b]A stray round sets off the %s![/color]" % _object_name(e["kind"]).to_lower())
+			else:
+				_log_line("[color=#ff9b6b]The %s %s![/color]" % [_object_name(e["kind"]).to_lower(), "go up" if e["kind"] == "fuel" else "goes up"])
+		"dust":
+			_hold_layout = false
+			var at := _center(e["center"])
+			_effects.append({"kind": "puff_burst", "at": at, "age": 0.0, "life": 1.2 if e.get("collapse", false) else 0.8, "lift": _lift_at(at)})
+			if e.get("collapse", false):
+				_log_line("[color=#c8b89a]A cloud of dust rolls out of the ruins.[/color]")
+			else:
+				_float(at, "Dust", Color("c8b89a"))
+				_log_line("[color=#c8b89a]Brick dust hangs in the breach%s.[/color]" % (" and rubble spills out" if not e.get("rubble", []).is_empty() else ""))
 		"fire":
 			var count: int = e["tiles"].size()
 			if e.get("spread", false):
@@ -1383,6 +1417,10 @@ func _play_event(e: Dictionary) -> void:
 			await _wait(0.3)
 		"object_shot":
 			await _play_object_shot(e)
+		"ground_shot":
+			await _play_ground_shot(e)
+		"area_fire":
+			await _play_area_fire(e)
 		"mortar_fire":
 			await _play_mortar_fire(e)
 		"strike":
@@ -1705,6 +1743,57 @@ func _play_object_shot(e: Dictionary) -> void:
 		_float(to, "MISS (%d%%)" % e["chance"], Color.WHITE)
 	_log_line("%s shoots at the %s: %s (%d%%)" % [u.name, _object_name(e["kind"]).to_lower(), "hit" if e["hit"] else "miss", e["chance"]])
 	await _wait(0.2)
+
+
+## Whether a click on `tile` in shooting mode fires the selected rocket at the ground there: anywhere but on
+## a soldier the player can see (an enemy he can see is shot at as usual).
+func _ground_fire(tile: Vector2i) -> bool:
+	if selected == null or not CombatRules.fires_at_ground(selected.weapon):
+		return false
+	var u := battle.unit_at(tile)
+	return u == null or (u.team != selected.team and not _seen_units.has(u.id))
+
+
+## Whether a click on `tile` in suppressive-fire mode sprays the area there: anywhere but on a soldier the
+## player can see.
+func _area_fire(tile: Vector2i) -> bool:
+	if selected == null or not Battle.can_lay_suppressive_fire(selected):
+		return false
+	var u := battle.unit_at(tile)
+	return u == null or (u.team != selected.team and not _seen_units.has(u.id))
+
+
+func _play_area_fire(e: Dictionary) -> void:
+	var u := battle.get_unit(e["unit"])
+	var at := _center(e["tile"])
+	_revealed[u.id] = true
+	_facing[u.id] = (at - _display_pos[u.id]).normalized()
+	await _frame_exchange(u, at)
+	for i in 5:
+		var from := _unit_point(u, 0.7)
+		var spot := at + Vector2(randf_range(-0.6, 0.6), randf_range(-0.6, 0.6))
+		_effects.append({"kind": "muzzle", "at": from, "age": 0.0, "life": 0.08})
+		_effects.append({"kind": "tracer", "from": from, "to": _proj.project(spot, 0.3 + _lift_at(spot)), "age": 0.0, "life": 0.15})
+		await _wait(0.07)
+	_log_line("%s rakes the area with the %s." % [u.name, u.weapon.name])
+	await _wait(0.15)
+
+
+func _play_ground_shot(e: Dictionary) -> void:
+	var u := battle.get_unit(e["unit"])
+	var to := _center(e["landing"])
+	_revealed[u.id] = true
+	_facing[u.id] = (_center(e["tile"]) - _display_pos[u.id]).normalized()
+	if _follows(u.team):
+		await _frame_exchange(u, to)
+	var from := _unit_point(u, 0.7)
+	_effects.append({"kind": "muzzle", "at": from, "age": 0.0, "life": 0.15})
+	_effects.append({"kind": "tracer", "from": from, "to": _proj.project(to, 0.3 + _lift_at(to)), "age": 0.0, "life": 0.35})
+	await _wait(0.35)
+	if not e["hit"]:
+		_float(_center(e["tile"]), "WIDE (%d%%)" % e["chance"], Color.WHITE)
+	_log_line("%s fires the %s at the ground: %s (%d%%)" % [u.name, u.weapon.name, "on target" if e["hit"] else "it goes wide", e["chance"]])
+	await _wait(0.15)
 
 
 static func _object_name(kind: String) -> String:
@@ -2065,10 +2154,11 @@ func _describe_unit(u: Unit) -> String:
 	lines.append("   ".join(status))
 	match mode:
 		Mode.SHOOT when _shot_cmd == "suppress":
-			lines.append("[color=#ffb84d]Suppressive fire (%d rounds, no damage): click a target. Right click cancels.[/color]" % CombatRules.SUPPRESSIVE_FIRE_AMMO)
+			lines.append("[color=#ffb84d]Suppressive fire (%d rounds, no damage): click a target, or any tile in sight to rake it (breaks walls). Right click cancels.[/color]" % CombatRules.SUPPRESSIVE_FIRE_AMMO)
 		Mode.SHOOT:
 			var steady := " Steady shot: +%d aim." % CombatRules.STEADY_SHOT_BONUS if Battle.is_steady(selected) else ""
-			lines.append("[color=#ff9b8a]Shooting: click a target, or fuel drums / an oil tank to blow them up.%s Right click cancels.[/color]" % steady)
+			var ground := " Or click any tile in sight to fire the rocket there." if CombatRules.fires_at_ground(selected.weapon) else ""
+			lines.append("[color=#ff9b8a]Shooting: click a target, or fuel drums / an oil tank to blow them up.%s%s Right click cancels.[/color]" % [ground, steady])
 		Mode.CLEAR_MINE:
 			lines.append("[color=#e7d9a8]Clear mine: click a spotted mine, or an enemy tunnel entrance to blow it in, next to the soldier (1 action). Right click cancels.[/color]")
 		Mode.TUNNEL:
@@ -2105,6 +2195,15 @@ func _update_target_info() -> void:
 				text = "[b]%s[/b]  %d%% to hit\nBlows up: %d-%d damage within %.1f tiles, sets the ground alight, destroys cover.\nEnds the turn." % [
 					_object_name(kind), CombatRules.object_odds(selected, selected.pos, hover, kind), spec["damage_min"], spec["damage_max"], spec["radius"]]
 				text += _error_line(battle.can_shoot_object(selected, hover))
+			Mode.SHOOT when _shot_cmd == "suppress" and _area_fire(hover):
+				text = "[b]Suppressive fire here[/b]  %d rounds\nPins whoever is there, shakes enemies within %.1f.\nChews the wall facing the gun down a stage (brick too). Ends the turn." % [
+					CombatRules.SUPPRESSIVE_FIRE_AMMO, CombatRules.SUPPRESSIVE_FIRE_RADIUS]
+				text += _error_line(battle.can_suppress_tile(selected, hover))
+			Mode.SHOOT when _shot_cmd == "shoot" and _ground_fire(hover):
+				var radius := maxf(selected.weapon.blast_radius, CombatRules.ROCKET_BLAST_RADIUS)
+				text = "[b]Fire the %s here[/b]  %d%% on target\nBursts on the tile: %d-%d damage within %.1f, breaks walls and cover, may start a fire.\nA miss lands short or long. Ends the turn." % [
+					selected.weapon.name, CombatRules.ground_odds(selected, selected.pos, hover), CombatRules.SPLASH_DAMAGE_MIN, CombatRules.SPLASH_DAMAGE_MAX, radius]
+				text += _error_line(battle.can_fire_at_tile(selected, hover))
 			Mode.MOVE, Mode.SHOOT:
 				if target != null and target.team != selected.team and _seen_units.has(target.id) and battle.can_see(selected, target):
 					if mode == Mode.SHOOT and _shot_cmd == "suppress":

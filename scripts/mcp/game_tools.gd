@@ -25,7 +25,7 @@ const MAX_BATCH := 20
 const TERRAIN_GLYPHS := [".", ",", ";", "_", "=", "\"", "o", "~", "x", "&", "%", "'"]
 const LEGEND := {
 	"tiles": ". grass  , rough ground  ; rubble  _ indoor floor  = road  \" wheat (hides you beyond 4 tiles; trampled when walked through)  ~ trampled wheat  x barbed wire (slow on foot)  o shell crater (half cover all round)  & jungle (slow, hides anyone in it beyond 3 tiles, sight only reaches 1 tile into it)  % rice paddy (slow, no cover)  ' elephant grass (hides prone soldiers beyond 3 tiles)",
-	"objects": "T tree (full cover)  # rock or other full cover  W burning wreck (full cover)  + crate/sandbags/hay (half cover)  F fuel drums (half cover, explode)  O oil tank (full cover, big explosion). Objects block movement. Shoot drums/tanks with shoot_object",
+	"objects": "T tree (full cover)  # rock or other full cover  W burning wreck (full cover)  + crate/sandbags/hay/fallen tree (half cover)  F fuel drums (half cover, explode)  O oil tank (full cover, big explosion). Objects block movement. Shoot drums/tanks with shoot_object",
 	"hazards": "^ fire (impassable, burns whoever stands in it)  M a mine or punji trap your side knows of (clear it with clear_mine from next to it). Unspotted mines are hidden  U a tunnel entrance your side knows of",
 	"units": "A-Z your units, a-z enemies in sight (see the unit lists for which is which), ? where an enemy was last seen",
 	"smoke": "* smoke (blocks sight)",
@@ -36,7 +36,7 @@ const COMMAND_HELP := "Commands: {\"cmd\": \"move\", \"unit\": id, \"tile\": [x,
 		+ "{\"cmd\": \"overwatch\"|\"reload\"|\"rally\", \"unit\": id} | {\"cmd\": \"grenade\"|\"smoke\", \"unit\": id, \"tile\": [x, y]} | " \
 		+ "{\"cmd\": \"mortar\", \"unit\": id, \"tile\": [x, y], \"kind\": \"he\"|\"napalm\"} | {\"cmd\": \"tunnel\"|\"trap\"|\"detonate\", \"unit\": id, \"tile\": [x, y]} | {\"cmd\": \"medkit\", \"unit\": id, \"target\": ally id} | " \
 		+ "{\"cmd\": \"suppress\", \"unit\": machine gunner id, \"target\": enemy id} | {\"cmd\": \"stance\", \"unit\": id, \"stance\": 0 stand, 2 prone} | " \
-		+ "{\"cmd\": \"shoot_object\"|\"clear_mine\", \"unit\": id, \"tile\": [x, y]} | {\"cmd\": \"end_turn\"}"
+		+ "{\"cmd\": \"shoot_object\"|\"clear_mine\", \"unit\": id, \"tile\": [x, y]} | {\"cmd\": \"fire_at\", \"unit\": rocket gunner id, \"tile\": [x, y] any tile in sight, enemy or not} | {\"cmd\": \"suppress_area\", \"unit\": machine gunner id, \"tile\": [x, y] any tile in sight (pins enemies round it, breaks the wall facing the gun)} | {\"cmd\": \"end_turn\"}"
 
 var battle: Battle
 var host: Object
@@ -110,7 +110,7 @@ func tool_list() -> Array:
 	var command_arg := {
 		"type": "object", "description": COMMAND_HELP,
 		"properties": {
-			"cmd": {"type": "string", "enum": ["move", "shoot", "suppress", "stance", "shoot_object", "clear_mine", "overwatch", "reload", "hold", "rally", "grenade", "smoke", "mortar", "medkit", "tunnel", "trap", "detonate", "end_turn"]},
+			"cmd": {"type": "string", "enum": ["move", "shoot", "suppress", "stance", "shoot_object", "fire_at", "suppress_area", "clear_mine", "overwatch", "reload", "hold", "rally", "grenade", "smoke", "mortar", "medkit", "tunnel", "trap", "detonate", "end_turn"]},
 			"unit": {"type": "integer"}, "target": {"type": "integer"}, "tile": tile_arg, "kind": {"type": "string", "enum": ["he", "napalm"]},
 			"stance": {"type": "integer", "enum": [0, 2], "description": "0 stand, 2 prone"},
 			"facing": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2, "description": "move, tanks only: the heading to end on, e.g. [1, 0] or [1, -1]"},
@@ -532,6 +532,9 @@ func unit_options(id: int, all_tiles := false, filters := {}) -> Dictionary:
 		actions["stance"] = battle.can_act(u)
 	if Battle.can_lay_suppressive_fire(u):
 		actions["suppress"] = actions["shoot"]
+		actions["suppress_area"] = battle.can_fire(u)
+	if CombatRules.fires_at_ground(u.weapon):
+		actions["fire_at"] = battle.can_fire(u)
 	var allowed := []
 	var blocked := {}
 	for action: String in actions:
@@ -904,11 +907,20 @@ func _event_line(e: Dictionary, side: int) -> String:
 			if mine or visible:
 				return "%s threw a %s; it landed at %s." % [_who(u), e["kind"], _tile(e["center"])]
 		"explosion":
-			return "Explosion at %s." % str(_tile(e["center"]))
+			var extra := ""
+			if e.get("tree_burst", false):
+				extra += " It burst in the treetops."
+			if e.has("felled"):
+				extra += " %d tree(s) came down as fallen trunks (half cover)." % e["felled"].size()
+			if e.has("windows"):
+				extra += " %d window(s) blown in." % e["windows"].size()
+			return "Explosion at %s.%s" % [str(_tile(e["center"])), extra]
 		"wall_hit":
 			return "A %s between %s and %s was hit (%s)." % [e["kind"], _tile(e["tiles"][0]), _tile(e["tiles"][1]), ["whole", "damaged", "breached, half cover", "gone"][mini(e["damage"], 3)]]
 		"collapse":
 			return "The building at %s collapsed into rubble." % str(_tile(e["center"]))
+		"dust":
+			return "Dust (blocks sight) fills %d tile%s around %s." % [e["tiles"].size(), "" if e["tiles"].size() == 1 else "s", _tile(e["center"])]
 		"window_broken":
 			if e.get("shot", false):
 				return "A stray round shattered the window between %s and %s." % [_tile(e["tiles"][0]), _tile(e["tiles"][1])]
@@ -997,7 +1009,7 @@ func validate(command: Dictionary) -> String:
 		return "No such unit on your side"
 	var tile: Vector2i = command.get("tile", Vector2i(-1, -1))
 	var target := battle.get_unit(command.get("target", -1))
-	if cmd in ["move", "grenade", "smoke", "mortar", "shoot_object", "clear_mine", "tunnel", "trap", "detonate"] and not command.has("tile"):
+	if cmd in ["move", "grenade", "smoke", "mortar", "shoot_object", "fire_at", "suppress_area", "clear_mine", "tunnel", "trap", "detonate"] and not command.has("tile"):
 		return "%s needs a tile" % cmd
 	match cmd:
 		"move":
@@ -1026,6 +1038,10 @@ func validate(command: Dictionary) -> String:
 			return battle.can_use_medkit(u, target)
 		"shoot_object":
 			return battle.can_shoot_object(u, tile)
+		"fire_at":
+			return battle.can_fire_at_tile(u, tile)
+		"suppress_area":
+			return battle.can_suppress_tile(u, tile)
 		"clear_mine":
 			return battle.can_clear_mine(u, tile)
 		"tunnel":

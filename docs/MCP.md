@@ -117,6 +117,8 @@ time, and checks a list of orders with `fast` on its first turn.
 Tiles are `[x, y]` (x east, y south). Commands use the engine's format (`Battle.execute`) with tiles as `[x, y]`:
 `{"cmd": "move", "unit": 3, "tile": [12, 30]}`, `{"cmd": "shoot", "unit": 3, "target": 11}`,
 `{"cmd": "overwatch" | "reload" | "rally", "unit": 3}`, `{"cmd": "suppress", "unit": 5, "target": 11}` (machine gunners),
+`{"cmd": "suppress_area", "unit": 5, "tile": [x, y]}` (machine gunners: rake any tile in sight, breaks the wall facing the gun),
+`{"cmd": "fire_at", "unit": 6, "tile": [x, y]}` (rocket gunners: fire at any tile in sight, enemy or not),
 `{"cmd": "stance", "unit": 3, "stance": 0 | 2}` (stand / prone),
 `{"cmd": "grenade" | "smoke", "unit": 3, "tile": [x, y]}`, `{"cmd": "mortar", "unit": 7, "tile": [x, y], "kind": "he" | "napalm"}`,
 `{"cmd": "medkit", "unit": 3, "target": 4}`, `{"cmd": "move", "unit": 9, "tile": [12, 30], "facing": [1, -1]}` (tanks: the heading to end on;

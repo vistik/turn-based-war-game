@@ -45,6 +45,8 @@ const CONCEALMENT := {
 const JUNGLE_SIGHT_TILES := 1
 ## Objects a tank can knock down and drive through (at TREE_COST).
 const FELLABLE_KINDS := ["tree", "palm", "bamboo"]
+## Trees whose canopy makes shells burst overhead, and which a blast may bring down as a fallen trunk ("log").
+const CANOPY_KINDS := ["tree", "palm"]
 ## Objects that blow up when shot, caught in a blast or run over: fuel drums (half cover) and oil tanks (full).
 const EXPLOSIVE_KINDS := ["fuel", "oil_tank", "car"]
 const DIAGONAL_FACTOR := 1.5
@@ -64,6 +66,10 @@ const FULL_EDGE_KINDS := ["wall", "hedge", "bamboo_wall", "mud_wall"]
 ## Light edges a machine gun can shoot to pieces; it only chips stone, brick and mud walls.
 ## Ground that burns long and can catch even under a soldier (CombatRules.LONG_BURN_TURNS).
 const LONG_BURNING := [Terrain.WHEAT, Terrain.TALL_GRASS, Terrain.TRAMPLED]
+## Ground that never burns: water, roads, rubble, trenches and indoors.
+const NEVER_BURNS := [Terrain.INDOOR, Terrain.ROAD, Terrain.PADDY, Terrain.RUBBLE, Terrain.TRENCH]
+## Edges of brick, stone or mud that throw up dust when they're breached or brought down.
+const DUSTY_EDGES := ["wall", "mud_wall", "stone", "dyke", "window", "broken_window", "mud_window"]
 const FLIMSY_EDGES := ["fence", "hedge", "bamboo_wall", "bamboo_window", "window", "broken_window"]
 ## Hedges are only leaves and twigs: every hit on one knocks this many times the stages off (see damage_edge).
 const HEDGE_DAMAGE_FACTOR := 2
@@ -379,6 +385,10 @@ func get_edges() -> Dictionary:
 ## How damaged the edge is: 0 whole, 1 damaged, 2 breached, 3 gone (see damage_edge).
 func edge_damage(key: Vector3i) -> int:
 	return _edge_damage.get(key, 0)
+
+
+func get_edge_kinds() -> Dictionary:
+	return _edge_kinds
 
 
 func get_edge_damage() -> Dictionary:
@@ -699,7 +709,7 @@ func is_jungle(p: Vector2i) -> bool:
 
 
 ## Cover a unit standing on p gets on the side facing direction dir.
-## A crater covers every side; a tank alongside counts as half cover; a bank of higher ground is full cover.
+## A crater or a heap of rubble covers every side (half); a tank alongside counts as half cover; a bank of higher ground is full cover.
 ## A trench is full cover on every side except where it runs on into more trench.
 ## Upstairs, only the building's walls and windows count (an open doorway below is wall up there); on a
 ## roof, the parapet is half cover and a taller building alongside full cover.
@@ -725,7 +735,7 @@ func cover_toward(p: Vector2i, dir: Vector2i, level := 0, prone := false) -> int
 	var cover := maxi(edge, get_object(q))
 	if _vehicles.has(q):
 		cover = maxi(cover, Cover.HALF)
-	if get_terrain(p) == Terrain.CRATER:
+	if get_terrain(p) in [Terrain.CRATER, Terrain.RUBBLE]:
 		cover = maxi(cover, Cover.HALF)
 	elif get_terrain(p) == Terrain.TRENCH and get_terrain(q) != Terrain.TRENCH:
 		cover = Cover.FULL

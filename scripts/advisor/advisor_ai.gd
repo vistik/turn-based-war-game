@@ -267,6 +267,8 @@ func _cover_name(tile: Vector2i) -> String:
 			name = map.get_object_kind(tile + d)
 		elif map.get_terrain(tile) == TacticalMap.Terrain.CRATER:
 			name = "crater"
+		elif map.get_terrain(tile) == TacticalMap.Terrain.RUBBLE:
+			name = "rubble"
 		elif map.get_terrain(tile) == TacticalMap.Terrain.TRENCH:
 			name = "trench"
 		else:

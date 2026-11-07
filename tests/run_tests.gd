@@ -445,6 +445,178 @@ func test_upper_floor_blasts_weaken_a_building() -> void:
 	check(battle._collapse_share([Vector2i(4, 4)] as Array[Vector2i]) < CombatRules.COLLAPSE_SHARE, "a three-storey building needs fewer broken walls")
 
 
+func test_a_mine_sets_the_ground_alight() -> void:
+	for seed in 6:
+		var units: Array[Unit] = [Unit.create(0, "U0", "Rifleman", 0, Vector2i(5, 5)), Unit.create(1, "U1", "Rifleman", 1, Vector2i(14, 14))]
+		var battle := Battle.new(TacticalMap.new(16, 16), units, seed)
+		battle.start()
+		units[0].hp = 100
+		battle.map.set_mine(Vector2i(6, 5), true)
+		var events := battle._trigger_mine(units[0], Vector2i(6, 5))
+		var lit := battle.map.tiles_in_radius(Vector2i(6, 5), CombatRules.MINE_RADIUS).filter(func(p: Vector2i) -> bool: return battle.map.has_fire(p))
+		check(not lit.is_empty() and not events_of(events, "fire").is_empty(), "a mine always starts a fire on open ground (seed %d)" % seed)
+		check(not battle.map.has_fire(units[0].pos), "but not under the soldier on grass")
+	var road := make_battle([["Rifleman", 0, Vector2i(5, 5)], ["Rifleman", 1, Vector2i(14, 14)]])
+	for p in road.map.tiles_in_radius(Vector2i(6, 5), 1.5):
+		road.map.set_terrain(p, TacticalMap.Terrain.ROAD)
+	road.units[0].hp = 100
+	road.map.set_mine(Vector2i(6, 5), true)
+	road._trigger_mine(road.units[0], Vector2i(6, 5))
+	check(road.map.get_fires().is_empty(), "a road doesn't burn")
+
+
+func test_breached_walls_and_collapses_raise_dust() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(1, 1)], ["Rifleman", 1, Vector2i(14, 14)]])
+	var map := battle.map
+	map.set_edge(Vector2i(8, 8), Vector2i(9, 8), Cover.FULL, "wall")
+	map.set_edge(Vector2i(8, 10), Vector2i(9, 10), Cover.HALF, "fence")
+	var events := battle._explode(null, Vector2i(8, 8), 0.5, 1, 1, 0, null, CombatRules.EXPLOSION_VS_ARMOR, 0, CombatRules.WALL_HITS["shell"])
+	check(map.edge_damage(TacticalMap.edge_key(Vector2i(8, 8), Vector2i(9, 8))) >= 2, "the shell breaches the wall")
+	check(map.has_smoke(Vector2i(9, 8)), "brick dust fills the far side")
+	check_eq(map.get_smoke()[Vector2i(9, 8)], battle.turn_index + CombatRules.DUST_TURNS, "for a short while")
+	check_eq(events_of(events, "dust").size(), 1, "one dust cloud")
+	var fence := battle._explode(null, Vector2i(8, 10), 0.5, 1, 1, 0, null, CombatRules.EXPLOSION_VS_ARMOR, 0, CombatRules.WALL_HITS["shell"])
+	check(events_of(fence, "dust").is_empty(), "a fence knocked down throws up no dust")
+	var tiles: Array[Vector2i] = [Vector2i(3, 12), Vector2i(4, 12)]
+	var collapse := battle._collapse(tiles)
+	check(map.has_smoke(Vector2i(3, 12)) and map.has_smoke(Vector2i(5, 13)), "a collapse buries the ruins and the ground round them in dust")
+	check(events_of(collapse, "dust").size() == 1 and events_of(collapse, "dust")[0].get("collapse", false), "and says so")
+
+
+func test_hay_and_crates_burn() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(1, 1)], ["Rifleman", 1, Vector2i(14, 14)]])
+	var map := battle.map
+	map.set_object(Vector2i(6, 6), Cover.HALF, "hay")
+	battle._ignite(Vector2i(6, 6))
+	check_eq(map.get_object(Vector2i(6, 6)), Cover.NONE, "a burning hay bale is gone, its cover with it")
+	check_eq(map.get_fires()[Vector2i(6, 6)], battle.turn_index + CombatRules.LONG_BURN_TURNS, "hay burns long")
+	var caught := 0
+	for seed in 10:
+		var units: Array[Unit] = [Unit.create(0, "U0", "Rifleman", 0, Vector2i(1, 1)), Unit.create(1, "U1", "Rifleman", 1, Vector2i(14, 14))]
+		var b := Battle.new(TacticalMap.new(16, 16), units, seed)
+		b.start()
+		b.map.set_object(Vector2i(7, 7), Cover.HALF, "hay")
+		b.map.set_terrain(Vector2i(6, 7), TacticalMap.Terrain.ROAD)
+		b.map.add_fire(Vector2i(6, 7), b.turn_index + 10)
+		for i in 4:
+			b._spread_fires()
+		if b.map.has_fire(Vector2i(7, 7)):
+			caught += 1
+	check(caught >= 5, "fire next door sets hay alight (%d of 10)" % caught)
+	map.set_object(Vector2i(10, 10), Cover.HALF, "hay")
+	var blasts := 0
+	for i in 10:
+		map.set_object(Vector2i(10, 10), Cover.HALF, "hay")
+		map.clear_fires(battle.turn_index + 100)
+		battle._explode(null, Vector2i(10, 10), 1.0, 0, 0, 0)
+		if map.has_fire(Vector2i(10, 10)):
+			blasts += 1
+	check(blasts >= 4, "a blast over a hay bale usually sets it burning (%d of 10)" % blasts)
+
+
+func test_rockets_fire_at_any_tile() -> void:
+	var battle := make_battle([["AT", 0, Vector2i(2, 5)], ["Rifleman", 0, Vector2i(2, 9)], ["Rifleman", 1, Vector2i(9, 5)]], Vector2i(24, 16))
+	var at := battle.units[0]
+	var rifle := battle.units[1]
+	var hidden := battle.units[2]
+	check_eq(battle.can_fire_at_tile(at, Vector2i(8, 9)), "", "a rocket can be fired at an empty tile")
+	check(battle.can_fire_at_tile(rifle, Vector2i(8, 9)) != "", "a rifle can't")
+	check(battle.can_fire_at_tile(at, Vector2i(3, 5)) != "", "not right next to him")
+	at.aim = 200
+	hidden.hp = 100
+	battle.map.set_edge(Vector2i(8, 5), Vector2i(9, 5), Cover.FULL, "wall")
+	var events := battle.execute({"cmd": "fire_at", "unit": at.id, "tile": Vector2i(9, 5)})
+	check_eq(events_of(events, "ground_shot").size(), 1, "it fires")
+	check(events_of(events, "ground_shot")[0]["hit"], "and with that aim lands on target")
+	check(hidden.hp <= 100 - at.weapon.damage_min, "whoever is there takes the warhead")
+	check(battle.map.edge_damage(TacticalMap.edge_key(Vector2i(8, 5), Vector2i(9, 5))) >= 2, "and the wall beside him is breached")
+	check_eq(at.ammo, 0, "it uses the round")
+
+
+func test_machine_gun_rakes_a_tile_and_breaks_walls() -> void:
+	var battle := make_battle([["MG", 0, Vector2i(2, 5)], ["Rifleman", 1, Vector2i(9, 6)], ["Rifleman", 1, Vector2i(15, 15)], ["Rifleman", 0, Vector2i(0, 15)]])
+	var mg := battle.units[0]
+	var near := battle.units[1]
+	var key := TacticalMap.edge_key(Vector2i(8, 5), Vector2i(9, 5))
+	battle.map.set_edge(Vector2i(8, 5), Vector2i(9, 5), Cover.FULL, "wall")
+	check_eq(battle.can_suppress_tile(mg, Vector2i(9, 5)), "", "a machine gun can rake an empty tile")
+	var events := battle.execute({"cmd": "suppress_area", "unit": mg.id, "tile": Vector2i(9, 5)})
+	check_eq(events_of(events, "area_fire").size(), 1, "it fires")
+	check(near.suppression >= mg.weapon.suppression, "an enemy beside the tile is shaken")
+	check_eq(battle.map.edge_damage(key), 1, "the wall facing the gun takes a stage")
+	for i in 2:
+		mg.actions = Unit.ACTIONS_PER_TURN
+		mg.ammo = mg.weapon.clip_size
+		battle.execute({"cmd": "suppress_area", "unit": mg.id, "tile": Vector2i(9, 5)})
+	check(not battle.map.get_edges().has(key), "three bursts bring a brick wall down")
+	var rifle := make_battle([["Rifleman", 0, Vector2i(2, 5)], ["Rifleman", 1, Vector2i(15, 15)]])
+	check(rifle.can_suppress_tile(rifle.units[0], Vector2i(9, 5)) != "", "a rifleman can't")
+
+
+func test_blasts_blow_in_windows_nearby() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(1, 1)], ["Rifleman", 1, Vector2i(14, 14)]])
+	var map := battle.map
+	map.set_edge(Vector2i(8, 6), Vector2i(8, 7), Cover.HALF, "window")
+	map.set_edge(Vector2i(12, 6), Vector2i(12, 7), Cover.HALF, "window")
+	var near := TacticalMap.edge_key(Vector2i(8, 6), Vector2i(8, 7))
+	var far := TacticalMap.edge_key(Vector2i(12, 6), Vector2i(12, 7))
+	var events := battle._explode(null, Vector2i(6, 6), 1.0, 0, 0, 0)
+	check_eq(map.edge_kind(near), "broken_window", "a window a couple of tiles from the blast loses its glass")
+	check_eq(map.get_edge(Vector2i(8, 6), Vector2i(8, 7)), Cover.HALF, "the frame is still half cover")
+	check_eq(map.edge_kind(far), "window", "one further off is spared")
+	check_eq(events_of(events, "explosion")[0].get("windows", []).size(), 1, "the explosion lists the window it blew in")
+
+
+func test_broken_walls_and_collapses_spill_rubble() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(1, 1)], ["Rifleman", 1, Vector2i(14, 14)]])
+	var map := battle.map
+	map.set_edge(Vector2i(8, 8), Vector2i(9, 8), Cover.FULL, "wall")
+	var events := battle._explode(null, Vector2i(8, 8), 0.5, 0, 0, 0, null, CombatRules.EXPLOSION_VS_ARMOR, 0, CombatRules.WALL_HITS["shell"])
+	check_eq(map.get_terrain(Vector2i(9, 8)), TacticalMap.Terrain.RUBBLE, "the wall spills rubble on the side away from the blast")
+	check_eq(events_of(events, "dust")[0].get("rubble", []), [Vector2i(9, 8)], "and the dust event says where")
+	check_eq(map.cover_toward(Vector2i(9, 8), Vector2i(0, -1)), Cover.HALF, "rubble is half cover on every side")
+	var tiles: Array[Vector2i] = []
+	for y in range(3, 5):
+		for x in range(3, 5):
+			tiles.append(Vector2i(x, y))
+			map.set_terrain(Vector2i(x, y), TacticalMap.Terrain.INDOOR)
+	var collapse := battle._collapse(tiles)
+	var spilled: Array = events_of(collapse, "dust")[0]["rubble"]
+	check(not spilled.is_empty(), "a collapse spills rubble round the ruins (%d tiles)" % spilled.size())
+	for p: Vector2i in spilled:
+		check(not tiles.has(p) and map.get_terrain(p) == TacticalMap.Terrain.RUBBLE, "onto the ground outside it")
+
+
+func test_shells_burst_in_trees_and_bring_them_down() -> void:
+	var battle := make_battle([["Mortar", 0, Vector2i(1, 1)], ["Rifleman", 1, Vector2i(14, 14)], ["Rifleman", 1, Vector2i(9, 3)]])
+	var map := battle.map
+	map.set_object(Vector2i(9, 9), Cover.FULL, "tree")
+	check(battle.tree_burst_at(Vector2i(9, 8)), "a shell beside a tree bursts in its branches")
+	check(not battle.tree_burst_at(Vector2i(4, 4)), "not out in the open")
+	var events := battle._land_strike({"unit": battle.units[0].id, "target": Vector2i(9, 8), "scatter": 0.0, "kind": "he"})
+	var blast: Dictionary = events_of(events, "explosion")[0]
+	check(blast.get("tree_burst", false), "the strike is a tree burst")
+	check_eq(blast["radius"], battle.units[0].indirect["radius"] + CombatRules.TREE_BURST_RADIUS, "and reaches further")
+	var logs := 0
+	var shattered := 0
+	for seed in 8:
+		var units: Array[Unit] = [Unit.create(0, "U0", "Rifleman", 0, Vector2i(1, 1)), Unit.create(1, "U1", "Rifleman", 1, Vector2i(14, 14))]
+		var b := Battle.new(TacticalMap.new(16, 16), units, seed)
+		b.start()
+		for y in range(6, 11):
+			for x in range(6, 11):
+				b.map.set_object(Vector2i(x, y), Cover.FULL, "tree")
+		b._explode(null, Vector2i(8, 8), 1.5, 0, 0, 0)
+		check_eq(b.map.get_object(Vector2i(8, 8)), Cover.NONE, "the tree it lands on is shattered")
+		for p in b.map.tiles_in_radius(Vector2i(8, 8), 1.5):
+			if b.map.get_object_kind(p) == "log":
+				logs += 1
+				check_eq(b.map.get_object(p), Cover.HALF, "a fallen trunk is half cover")
+			elif b.map.get_terrain(p) == TacticalMap.Terrain.ROUGH and b.map.get_object(p) == Cover.NONE:
+				shattered += 1
+	check(logs > 10 and shattered > 10, "trees come down as trunks or splintered scrub (%d trunks, %d splintered)" % [logs, shattered])
+
+
 func test_hold_ends_a_soldiers_turn() -> void:
 	var battle := make_battle([["Rifleman", 0, Vector2i(2, 2)], ["Rifleman", 0, Vector2i(2, 4)], ["Rifleman", 1, Vector2i(13, 13)]])
 	var a := battle.units[0]
@@ -546,7 +718,7 @@ func test_blasts_set_crops_alight() -> void:
 		battle.throw_grenade(units[0], Vector2i(7, 8))
 		for p: Vector2i in battle.map.get_fires():
 			lit += 1
-			check(battle.map.get_terrain(p) == TacticalMap.Terrain.ROUGH, "the wheat burns away")
+			check(battle.map.get_terrain(p) in [TacticalMap.Terrain.ROUGH, TacticalMap.Terrain.CRATER], "the wheat burns away (or the crater burns)")
 		if battle.map.has_fire(units[1].pos):
 			under_soldier += 1
 	check(lit > 12, "grenades in a wheat field start fires (%d tiles)" % lit)

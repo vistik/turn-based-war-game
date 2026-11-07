@@ -80,7 +80,15 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   and shoot through), gone. Windows, low walls and fences go in two. Tank shells, AT rockets and mortar rounds
   knock two stages off the walls round where they land (one further out); a grenade one. A tank shell or
   rocket fired at someone behind a wall breaches it. Machine guns shoot fences, hedges, bamboo and windows
-  apart a stage a burst, but only chip stone, brick and mud.
+  apart a stage a burst, but an aimed shot only chips stone, brick and mud; suppressive fire knocks even a
+  brick wall a stage further every burst (three and it's gone).
+- Brick, stone and mud walls throw up dust when they're breached or brought down: both sides of the gap fill
+  with dust (blocking sight like smoke) through the other side's reply, and rubble (slow ground, but half
+  cover on every side for whoever crouches in it, like a crater) spills onto
+  the open tile on the far side from the blast or gun. A collapsing building buries its ruins and the ground
+  round them in a dust cloud for two rounds, and spills rubble into the street round it.
+- Blast concussion blows in windows: every glazed window within two tiles of an explosion's reach loses its
+  glass (the frame stays half cover).
 - Hits on soldiers upstairs strike the wall in front of them, and a blast on an upper floor knocks a stage off
   that room's outer walls. A building of two storeys collapses once 40% of its outer walls (doorways not
   counted) are breached or gone, a taller one sooner (5% less per storey, at least a quarter): it becomes a heap of rubble inside broken stumps of wall. Everyone in it is hurt and shaken, those
@@ -120,11 +128,15 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
   - Medic, with medkits: each heals 5, treats a wound and takes 40 off the patient's suppression (a shaken man
     can be treated even unhurt)
   - MG, the only role that lays down suppressive fire (from where it set up); it pins and shakes everyone
-    round the target
+    round the target. It can also rake any tile in sight, enemy or not (Fire suppressive, then click a
+    tile): it shakes every enemy round it and chews down the wall on the near side
   - Mortar, with scattering high explosive shells that land at once, without ranging shots (the target
     circle shows where a round may come down). It is indirect fire: it can shell a tile nobody on your side
     sees, but that round scatters 1.5 times as far
-  - AT with Bazooka or Panzerschreck
+  - AT with Bazooka or Panzerschreck. Like the mortar it can fire at any tile in sight, enemy or not (Shoot,
+    then click a tile): +20 to hit a patch of ground, a miss lands short or long. It bursts there, breaking
+    walls and cover, maybe starting a fire, and hits anyone hidden on the tile with the full warhead. A rocket
+    or MG burst can be aimed at the wall in front of a tile, and fired blind into smoke or dust
   - Sherman and Panzer IV tanks: switched off for now (no roster, wave, shop or editor offers them), as are
     Vietnam's M113 and Iraq's MRAP. Their rules are kept for when they come back.
 - Tanks have front, side and rear armour. They turn slowly (each 45° costs movement) and can back up. A tank's
@@ -178,9 +190,18 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
     one in five for wheat and tall grass, less for trampled crops, scrub and jungle, rarely over bare grass,
     never across roads, rubble, water, walls or hedges, nor under a tank (under a soldier only in crops or
     tall grass, at half the chance). A fuel drum or oil tank
-    next to a fire may cook off. Burnt crops turn to scrub, which rarely catches, so fires die out once the crops are gone.
+    next to a fire may cook off, and a hay bale catches (about one in three; a crate one in ten). Burnt crops turn to scrub, which rarely catches, so fires die out once the crops are gone.
   - **Mines:** hidden. Soldiers may spot them as they walk past (tank crews never do), clear spotted ones
-    from next to them, and blasts set them off.
+    from next to them, and blasts set them off. A mine or IED going off sets the ground round it alight
+    (never roads, rubble, water or indoors): at least one tile always burns where any can.
+  - **Tree bursts:** a mortar or artillery shell that comes down among trees bursts in the branches and rains
+    splinters: a wider blast that hurts more, so woods are no shelter from shellfire. Trees a blast catches are
+    splintered to scrub or, away from where it lands, brought down as a fallen trunk: half cover that blocks
+    the way.
+  - **Hay and crates burn:** a blast over a hay bale usually sets it burning (a crate less often), and so can a
+    fire next door. It burns away with its cover, hay for four turns.
+  - **Stray rounds:** a missed rifle, pistol or SMG round that ends in a car, oil tank or fuel drums may set
+    it off.
   - **Wheat:** trampled flat when soldiers walk through it (crawling leaves it standing), so it stops hiding
     anyone.
   - **Barbed wire:** slow going on foot; tanks and explosions flatten it.

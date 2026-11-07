@@ -37,37 +37,6 @@ const APC_ARMOR := {"front": 2, "side": 1, "rear": 0}
 const ARTILLERY := {"name": "artillery", "min": 4.0, "max": 999.0, "radius": 2.0, "damage": [3, 6], "scatter": 0.0, "scatter_flat": 1.0,
 	"kinds": ["he", "napalm"], "still": false, "spotter": "self"}
 
-const MISSIONS := [
-	{
-		"name": "Search and Destroy",
-		"briefing": "Quang Ngai province, 1967. A VC cell is using the hamlet, the trail crossing and the old landing zone. Sweep through and clear them. Watch where you step.",
-		"map": {"seed": 7101, "size": Vector2i(36, 36)},
-		"enemy": ["Cadre", "Guerrilla", "Guerrilla", "Guerrilla", "Guerrilla", "Assault", "Assault", "Sapper"],
-		"vp_to_win": 8, "max_rounds": 14,
-	},
-	{
-		"name": "Ambush on the Trail",
-		"briefing": "Intelligence says a VC company moves supplies down the trail at night. They know we're coming. Expect them to come up out of the ground.",
-		"map": {"seed": 7202, "size": Vector2i(40, 40)},
-		"enemy": ["Cadre", "Guerrilla", "Guerrilla", "Guerrilla", "Guerrilla", "Assault", "Assault", "RPD Gunner", "RPG", "Mortar"],
-		"enemy_reinforcements": [{"round": 3, "roster": ["Guerrilla", "Guerrilla", "Assault", "Assault"], "tunnels": true}],
-		"vp_to_win": 10, "max_rounds": 16,
-	},
-	{
-		"name": "Hold the LZ",
-		"briefing": "We're the blocking force. A second M60 team is with us and more men are coming in by Huey in round 4. Hold the landing zone, the crossing and the hamlet against everything they throw.",
-		"map": {"seed": 7303, "size": Vector2i(44, 44)},
-		"enemy": ["Cadre", "Cadre", "Guerrilla", "Guerrilla", "Guerrilla", "Guerrilla", "Guerrilla", "Assault", "Assault", "Assault",
-			"RPD Gunner", "RPG", "RPG", "Mortar", "Sapper"],
-		"enemy_reinforcements": [{"round": 3, "roster": ["Guerrilla", "Guerrilla", "Assault"], "tunnels": true},
-			{"round": 6, "roster": ["Guerrilla", "Guerrilla", "RPG"], "tunnels": true}],
-		"support": ["M60 Gunner"],
-		"reinforcements": [{"round": 4, "team": 0, "roster": ["Rifleman", "Rifleman", "M60 Gunner"], "air": true}],
-		"vp_to_win": 12, "max_rounds": 16,
-	},
-]
-
-
 func _init() -> void:
 	id = "vietnam"
 	title = "Vietnam 1967"
@@ -203,30 +172,6 @@ func skirmish_forces(size: int) -> Dictionary:
 ## counts double) and hold ground only to deny it.
 func battle_options() -> Dictionary:
 	return {"kill_points": [0, 1], "objective_points": [1, 0]}
-
-
-func campaign_title() -> String:
-	return "Vietnam campaign"
-
-
-func campaign_blurb() -> String:
-	return "Three missions in Quang Ngai province with one rifle squad. Soldiers gain rank, get hurt and die for good."
-
-
-func campaign_victory() -> Array:
-	return ["Tour completed", "Your squad held the landing zone. The campaign is won."]
-
-
-func campaign_missions() -> Array:
-	return MISSIONS
-
-
-func campaign_starting_roles() -> Array:
-	return ["Squad Leader", "Rifleman", "Rifleman", "Rifleman", "M60 Gunner", "Grenadier", "Medic", "RTO"]
-
-
-func campaign_recruit_roles() -> Array:
-	return ["Rifleman", "Grenadier", "M60 Gunner", "Medic", "RTO", "Sniper", "Squad Leader"]
 
 
 func places() -> Array:

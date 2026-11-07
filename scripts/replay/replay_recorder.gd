@@ -47,7 +47,7 @@ func _process(_delta: float) -> void:
 
 ## Leaves the battle as usual (campaign results, saves) and watches its replay instead of the menu.
 func _watch() -> void:
-	ReplayControls.return_to_campaign = GameSession.campaign != null or GameSession.war != null
+	ReplayControls.return_to_campaign = GameSession.war != null and not GameSession.online.is_empty()
 	GameSession.watching = replay
 	view._dismiss_overlay()
 
@@ -55,9 +55,7 @@ func _watch() -> void:
 static func _mode() -> String:
 	if not GameSession.online.is_empty():
 		return "online"
-	if GameSession.war != null:
-		return "war"
-	return "campaign" if GameSession.campaign != null else "skirmish"
+	return "skirmish"
 
 
 func _side(team: int) -> String:

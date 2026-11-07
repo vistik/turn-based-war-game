@@ -1,12 +1,12 @@
 class_name GameSession
 extends RefCounted
 ## What the battle scene should play, plus saving and loading. Static so it survives scene changes.
-## There are two save slots: the campaign (with any battle in progress) and a skirmish battle, plus a third
-## for the online game in progress, saved at every turn change both players agreed on. Each save of a battle in
+## There are two save slots: a skirmish battle, and the online two-player campaign (with any battle in progress),
+## saved between maps and at every turn change both players agreed on. Each save of a battle in
 ## progress also holds its replay so far (`recording`); finished replays are files of their own (Replay).
 
-const SLOTS := {"campaign": "user://campaign.sav", "skirmish": "user://skirmish.sav", "online": "user://online.sav", "war": "user://war.sav"}
-const SAVE_VERSION := 1
+const SLOTS := {"skirmish": "user://skirmish.sav", "online": "user://online.sav"}
+const SAVE_VERSION := 2
 const MENU_SCENE := "res://scenes/main_menu.tscn"
 const BATTLE_SCENE := "res://scenes/battle.tscn"
 
@@ -21,13 +21,14 @@ static var ai_states := [{}, {}]
 ## let it pick. Only read when a battle starts.
 static var ai_plans := ["", ""]
 static var battle_title := ""
-## The running campaign, or null in skirmish.
-static var campaign: Campaign
-## The running two-player campaign (supply and maps), or null.
+## The running two-player campaign (supply and maps), played online, or null.
 static var war: WarCampaign
-## Ask the main menu to open the campaign screen.
+## Ask the main menu to open the two-player campaign screen.
 static var show_campaign := false
-## The online game being played: {"game_id", "title", "opponent", "hosted"}, or {} when offline.
+## The online game being played: {"game_id", "title", "opponent", "hosted"}, or {} when offline. While the
+## players give orders it also holds this side's sealed orders until both have sealed ("sealed": {"map",
+## "orders", "salt"}), the other side's commitment ("their_hash": {"map", "hash"}), and the map whose orders
+## were sent ("revealed").
 static var online := {}
 ## The battle being played as recorded so far (ReplayRecorder), or null. Saved with the battle, so the replay
 ## of a continued game is complete.
@@ -48,6 +49,7 @@ static func start_battle(p_battle: Battle, p_ai_teams: Array, title: String) -> 
 	battle_title = title
 	recording = null
 	watching = null
+	online = {}
 
 
 ## A skirmish from a setup {"theatre": id (Normandy if left out), "map": "village" or "random", "size": side
@@ -102,9 +104,7 @@ static func style_title(theatre: Theatre, style: String) -> String:
 
 
 static func current_slot() -> String:
-	if war != null:
-		return "war"
-	return "campaign" if campaign != null else "skirmish"
+	return "skirmish"
 
 
 static func slot_path(slot: String) -> String:
@@ -122,19 +122,19 @@ static func has_save(slot: String) -> bool:
 	return FileAccess.file_exists(slot_path(slot))
 
 
-## Saves the current slot: the campaign (if any) and the battle in progress (if any).
-## A skirmish with no battle left to continue just clears its slot.
+## Saves the skirmish in progress. A skirmish with no battle left to continue just clears its slot. (The
+## online two-player campaign is saved by save_online.)
 static func save_game() -> void:
+	if not online.is_empty():
+		return
 	var slot := current_slot()
 	var running := battle != null and battle.winner == -1
-	if slot == "skirmish" and not running:
+	if not running:
 		delete_save(slot)
 		return
 	var data := {
 		"version": SAVE_VERSION,
-		"campaign": campaign.to_dict() if campaign != null else {},
-		"war": war.to_dict() if war != null else {},
-		"battle": battle.to_dict() if running else {},
+		"battle": battle.to_dict(),
 		"ai_teams": ai_teams, "agent_team": agent_team, "ai_states": ai_states, "title": battle_title,
 		"replay": recording.to_dict() if running and recording != null else {},
 	}
@@ -155,8 +155,8 @@ static func load_game(slot: String) -> bool:
 	var data := peek(slot)
 	if data.is_empty():
 		return false
-	campaign = Campaign.from_dict(data["campaign"]) if not data["campaign"].is_empty() else null
-	war = WarCampaign.from_dict(data["war"]) if not data.get("war", {}).is_empty() else null
+	war = null
+	online = {}
 	battle = Battle.from_dict(data["battle"]) if not data["battle"].is_empty() else null
 	ai_teams = data["ai_teams"]
 	agent_team = data.get("agent_team", -1)
@@ -196,27 +196,114 @@ static func new_game_id() -> String:
 	return "%08x%08x" % [randi(), randi()]
 
 
-## Starts playing an online battle. `title` is the map's name, `team` the side played on this computer,
-## `opponent` a hint for finding them again (the address used) and `hosted` whether this computer hosts.
-static func start_online(p_battle: Battle, title: String, team: int, game_id: String, opponent: String, hosted: bool) -> void:
-	campaign = null
-	start_battle(p_battle, [false, false], "%s, online as %s" % [title, p_battle.team_name(team)])
-	online = {"game_id": game_id, "title": title, "opponent": opponent, "hosted": hosted}
+## Starts (or resumes) an online two-player campaign between maps: `team` is the side played on this
+## computer, `opponent` a hint for finding them again (the address used) and `hosted` whether this computer hosts.
+static func start_online_war(p_war: WarCampaign, team: int, game_id: String, opponent: String, hosted: bool) -> void:
+	war = p_war
+	battle = null
+	recording = null
+	watching = null
+	online = {"game_id": game_id, "title": "%s, %d map%s" % [p_war.theatre().title, p_war.maps.size(), "" if p_war.maps.size() == 1 else "s"],
+			"opponent": opponent, "hosted": hosted, "team": team}
 
 
-## Saves the online battle as it is now, or clears its slot once the battle is over.
+## Starts playing the campaign's current map online (both players build the same battle from the campaign).
+static func start_online_battle(p_battle: Battle, title: String) -> void:
+	var keep := online.duplicate()
+	start_battle(p_battle, [false, false], "%s, online as %s" % [title, p_battle.team_name(int(keep.get("team", 0)))])
+	online = keep
+	online.erase("sealed")
+	online.erase("their_hash")
+	online.erase("revealed")
+
+
+## Our orders for the current map are sealed: kept here with a secret salt, and only their hash goes to the
+## other player (`net`: the Net autoload). They follow once both sides have sealed (process_war_messages).
+static func seal_orders(net: Node, orders: Dictionary) -> String:
+	var err := war.check_orders(int(online["team"]), orders)
+	if err != "":
+		return err
+	var salt := "%08x%08x%08x" % [randi(), randi(), randi()]
+	online["sealed"] = {"map": war.current, "orders": orders.duplicate(true), "salt": salt}
+	net.send_war({"kind": "sealed", "map": war.current, "hash": WarCampaign.orders_hash(orders, salt)})
+	process_war_messages(net)
+	return ""
+
+
+static func orders_sealed() -> bool:
+	return war != null and online.get("sealed", {}).get("map", -1) == war.current
+
+
+static func their_orders_sealed() -> bool:
+	return war != null and online.get("their_hash", {}).get("map", -1) == war.current
+
+
+## Handles the other player's campaign messages waiting in net.war_inbox for the current map (later maps'
+## wait their turn): their sealed hash, then their orders, which must match it and the campaign's rules (or
+## the games are out of step: net.report_desync). Sends ours once both have sealed. Saves once both sides'
+## orders are in. Returns whether anything changed.
+static func process_war_messages(net: Node) -> bool:
+	if war == null or war.is_over() or online.is_empty():
+		return false
+	var team := int(online["team"])
+	var changed := false
+	var later: Array[Dictionary] = []
+	for message: Dictionary in net.take_war_messages():
+		var map_index := int(message.get("map", -1))
+		if map_index > war.current:
+			later.append(message)
+			continue
+		if map_index < war.current:
+			continue
+		match message.get("kind", ""):
+			"sealed":
+				online["their_hash"] = {"map": map_index, "hash": str(message.get("hash", ""))}
+				changed = true
+			"reveal":
+				var orders: Variant = message.get("orders")
+				var salt: Variant = message.get("salt")
+				if not orders is Dictionary or not salt is String or not their_orders_sealed() \
+						or WarCampaign.orders_hash(orders, salt) != online["their_hash"]["hash"]:
+					net.report_desync("The other side's orders don't match what they sealed.")
+					return false
+				var err := war.set_orders(1 - team, orders)
+				if err != "":
+					net.report_desync("The other side's orders break the campaign's rules (%s)." % err)
+					return false
+				changed = true
+	net.war_inbox.append_array(later)
+	if orders_sealed() and their_orders_sealed() and online.get("revealed", -1) != war.current:
+		var sealed: Dictionary = online["sealed"]
+		online["revealed"] = war.current
+		net.send_war({"kind": "reveal", "map": war.current, "orders": sealed["orders"], "salt": sealed["salt"]})
+		war.set_orders(team, sealed["orders"])
+		changed = true
+	if changed and war.ready_to_fight():
+		save_online(team)
+	return changed
+
+
+## The checksum both players' games compare: the campaign's, and the battle's if one is being fought.
+static func online_checksum() -> String:
+	var running := battle != null and battle.winner == -1
+	return (war.checksum() if war != null else "") + ":" + (battle.checksum() if running else "")
+
+
+## Saves the online campaign as it is now (with the battle being fought, if any), or clears its slot once the
+## campaign is over.
 static func save_online(team: int) -> void:
-	if battle == null or online.is_empty():
+	if war == null or online.is_empty():
 		return
-	if battle.winner != -1:
+	if war.is_over():
 		end_online()
 		return
+	var running := battle != null and battle.winner == -1
 	_write("online", {
 		"version": SAVE_VERSION, "game_id": online["game_id"], "team": team, "title": online["title"],
-		"opponent": online["opponent"], "hosted": online["hosted"], "battle": battle.to_dict(),
-		"checksum": battle.checksum(), "round": battle.round_number, "turn_index": battle.turn_index,
-		"current_team": battle.current_team, "saved_at": int(Time.get_unix_time_from_system()),
-		"replay": recording.to_dict() if recording != null else {},
+		"opponent": online["opponent"], "hosted": online["hosted"], "war": war.to_dict(), "battle": battle.to_dict() if running else {},
+		"checksum": online_checksum(), "map": war.current, "round": battle.round_number if running else 0,
+		"turn_index": battle.turn_index if running else -1, "current_team": battle.current_team if running else 0,
+		"saved_at": int(Time.get_unix_time_from_system()), "replay": recording.to_dict() if running and recording != null else {},
 	})
 
 
@@ -226,64 +313,77 @@ static func on_turn_agreed(turn_index: int, checksum: String, team: int) -> void
 		save_online(team)
 
 
-## The online battle is over: clear its save (but not a different game's).
+## The online campaign is over: clear its save (but not a different game's).
 static func end_online() -> void:
 	if not online.is_empty() and peek("online").get("game_id") == online["game_id"]:
 		delete_save("online")
 
 
-## The saved online game as an offer for the other player: everything they need to continue it, battle
+## The saved online campaign as an offer for the other player: everything they need to continue it, battle
 ## state included. Returns {} if there is none or it doesn't reproduce its own checksum.
 static func online_offer() -> Dictionary:
 	var data := peek("online")
 	if data.is_empty():
 		return {}
-	if Battle.from_dict(data["battle"]).checksum() != data["checksum"]:
+	if _saved_checksum(data["war"], data["battle"]) != data["checksum"]:
 		push_error("The online save doesn't load identically.")
 		return {}
 	var offer := {}
-	for key in ["game_id", "team", "title", "battle", "checksum", "round", "turn_index", "current_team"]:
+	for key in ["game_id", "team", "title", "war", "battle", "checksum", "map", "round", "turn_index", "current_team"]:
 		offer[key] = data[key]
 	return offer
 
 
-## How the host's offer differs from our own online save, for the joining player to confirm: "" when the
-## two are identical.
+static func _saved_checksum(war_data: Dictionary, battle_data: Dictionary) -> String:
+	return WarCampaign.from_dict(war_data).checksum() + ":" + (Battle.from_dict(battle_data).checksum() if not battle_data.is_empty() else "")
+
+
+## Where a saved online campaign stands, in words: "map 2 of 4, round 3" or "map 2 of 4, giving orders".
+static func describe_online(data: Dictionary) -> String:
+	var maps: int = data.get("war", {}).get("maps", []).size()
+	var where := "map %d of %d" % [int(data.get("map", 0)) + 1, maps]
+	if data.get("battle", {}).is_empty():
+		return where + ", giving orders"
+	return where + ", round %d, %s to move" % [int(data.get("round", 0)), side_name(data.get("battle", {}), clampi(int(data.get("current_team", 0)), 0, 1))]
+
+
 ## A side's name in a saved battle (Battle.to_dict()), whichever theatre it is from.
 static func side_name(battle_data: Variant, team: int) -> String:
 	var theatre_id: String = battle_data.get("theatre", Theatres.DEFAULT) if battle_data is Dictionary else Theatres.DEFAULT
 	return Theatres.get_theatre(theatre_id).team_name(team)
 
 
+## How the host's offer differs from our own online save, for the joining player to confirm: "" when the
+## two are identical.
 static func compare_online(offer: Dictionary) -> String:
 	var own := peek("online")
-	var theirs := "The host's save is from round %d, %s to move." % [int(offer.get("round", 0)), side_name(offer.get("battle", {}), clampi(int(offer.get("current_team", 0)), 0, 1))]
+	var theirs := "The host's save is at %s." % describe_online(offer)
 	if own.is_empty():
-		return "You have no saved online game. " + theirs
+		return "You have no saved online campaign. " + theirs
 	if own["game_id"] != offer.get("game_id"):
-		return "Your saved online game is a different one (%s). " % own["title"] + theirs
+		return "Your saved online campaign is a different one (%s). " % own["title"] + theirs
 	if own["checksum"] == offer.get("checksum"):
 		return ""
-	if own["turn_index"] == offer.get("turn_index"):
-		return "Both saves are from round %d, but they differ." % own["round"]
-	var when := "older" if own["turn_index"] < int(offer.get("turn_index", 0)) else "newer"
-	return "Your save is %s: round %d, %s to move. " % [when, own["round"], side_name(own["battle"], own["current_team"])] + theirs
+	return "Your save is at %s. " % describe_online(own) + theirs
 
 
-## Loads an offered online battle to play as `team`. Returns false (and loads nothing) if the offer is
-## malformed or its battle doesn't reproduce the offered checksum.
+## Loads an offered online campaign (and its battle, if one was being fought) to play as `team`. Returns false
+## (and loads nothing) if the offer is malformed or doesn't reproduce the offered checksum.
 static func resume_online(offer: Dictionary, team: int, opponent: String, hosted: bool) -> bool:
-	for key in ["game_id", "title", "battle", "checksum"]:
+	for key in ["game_id", "war", "battle", "checksum"]:
 		if not offer.has(key):
 			return false
-	if not offer["battle"] is Dictionary or not offer["checksum"] is String:
+	if not offer["war"] is Dictionary or not offer["battle"] is Dictionary or not offer["checksum"] is String or offer["war"].is_empty():
 		return false
-	var loaded := Battle.from_dict(offer["battle"])
-	if loaded.checksum() != offer["checksum"]:
+	if _saved_checksum(offer["war"], offer["battle"]) != offer["checksum"]:
 		return false
-	start_online(loaded, offer["title"], team, offer["game_id"], opponent, hosted)
-	# Our own recording leads to exactly this state if our save is the one being continued.
-	var own := peek("online")
-	if own.get("game_id") == offer["game_id"] and own.get("checksum") == offer["checksum"] and not own.get("replay", {}).is_empty():
-		recording = Replay.from_dict(own["replay"])
+	var loaded_war := WarCampaign.from_dict(offer["war"])
+	start_online_war(loaded_war, team, offer["game_id"], opponent, hosted)
+	if not offer["battle"].is_empty():
+		var m := loaded_war.current_map()
+		start_online_battle(Battle.from_dict(offer["battle"]), "Map %d of %d: %s" % [loaded_war.current + 1, loaded_war.maps.size(), m["name"]])
+		# Our own recording leads to exactly this state if our save is the one being continued.
+		var own := peek("online")
+		if own.get("game_id") == offer["game_id"] and own.get("checksum") == offer["checksum"] and not own.get("replay", {}).is_empty():
+			recording = Replay.from_dict(own["replay"])
 	return true

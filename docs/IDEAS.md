@@ -1,31 +1,30 @@
 # Where this could go
 
-Saved from a design discussion; nothing here is decided.
+A roadmap in the loosest sense: nothing here is decided, and the order is not a promise.
 
-## Directions
+## Done
 
-1. **WW2 campaign with a persistent squad** (favourite). One platoon from D-Day inland through Normandy.
-   Soldiers keep experience, traits and promotions; the dead stay dead; bad wounds sit out a mission.
-   Between battles: spend supplies on replacements, ammo, mortar shells, later tanks; pick the next sector.
-   Mission types: hold a bridge, take a village, raid an artillery position, escort a wounded officer out.
-2. **Asynchronous online multiplayer.** The engine is deterministic from a seed and every action is a command
-   producing events, so a turn can be sent as a few commands and replayed exactly. Replays and spectating come
-   almost free. Needs a small backend to relay turns.
-3. **Scenario editor and skirmish generator.** In-game map editor plus a generator for Normandy terrain
-   (bocage fields, villages, roads). Cheapest route to lots of content.
-4. **Roguelite run.** 8-10 procedurally generated battles in a row with events and upgrades until the squad falls.
-5. **Platforms.** Godot exports to Windows, macOS, Linux, web, iPad/Android and Steam Deck. Turn-based suits
-   touch and handhelds once the controls get a touch pass.
+- Normandy 1944 points battles against the AI, hotseat, or AI vs AI, on a hand-made village or generated maps
+  with hills and multi-storey buildings
+- An online two-player campaign over a direct connection (password, NAT help, desync checks, saves both sides
+  can continue)
+- Save/load, recorded replays, a map and scenario editor, move suggestions, and an agent link (MCP) so an AI
+  agent can play or advise
+- Height, destructible cover, fire, smoke, mines and battlefield chain reactions
+- macOS and Windows builds
 
-## Needed whichever way
+## Open
 
-- Real art (sprites or simple 3D), sound and music
-- Tanks and height levels (done)
-- Save/load (straightforward: all state lives in plain engine objects)
-- Better AI: smoke, falling back, coordinated flanking
-
-## Suggested order
-
-1. Save/load and a map generator (useful for every direction)
-2. A small 5-mission campaign with persistent soldiers, to test the loop
-3. Tanks
+- **Bring back what is switched off.** Vehicles (`Theatre.VEHICLES_ENABLED`), missions beyond points battles,
+  and the Vietnam 1967 and Iraq 2004 theatres (`Theatres.PLAYABLE`) still live in the code but are not offered.
+  Each needs a balance pass before it comes back.
+- **Real art and sound.** Soldiers, terrain and vehicles are drawn procedurally and the music is synthesised;
+  real sprites or simple 3D, and recorded sound, would lift the whole game.
+- **More platforms.** Linux, Steam Deck and web exports, and a touch pass on the controls for tablets and
+  handhelds. Turn-based play suits them.
+- **Asynchronous online play.** The engine is deterministic and every action is a command, so a turn can be sent
+  as a few commands. A small relay would let players take turns hours apart and reach each other behind any NAT.
+- **Better AI.** Path choice around overwatch, coordinated flanking, falling back, difficulty levels, and its
+  thinking moved off the main thread.
+- **Signed and notarised builds**, so macOS and Windows stop warning on first launch.
+- **A translation pass**: the interface text is English only.

@@ -556,10 +556,13 @@ func patchwork(spacing: float, dress: Callable, accept := Callable()) -> Array:
 		if gateways:
 			# Gates two tiles wide, spread along the border away from its ends, so the hedge runs unbroken
 			# between them.
+			# Which way the border runs is decided once, before sorting: the comparator must not look at
+			# `line` itself, which is half shuffled while it sorts (that made the order inconsistent).
+			var wide := _wide(line)
 			line.sort_custom(func(a: Array, b: Array) -> bool:
 				var ma: Vector2i = a[0] + a[1]
 				var mb: Vector2i = b[0] + b[1]
-				return ma.x + ma.y * 1000 < mb.x + mb.y * 1000 if _wide(line) else ma.y + ma.x * 1000 < mb.y + mb.x * 1000)
+				return ma.x + ma.y * 1000 < mb.x + mb.y * 1000 if wide else ma.y + ma.x * 1000 < mb.y + mb.x * 1000)
 			var count := 1 + int(line.size() >= 16) + int(chosen.get("gaps", 0))
 			for g in count:
 				var at := clampi(int(line.size() * (g + 0.5) / count + rng.randi_range(-2, 2)), 0, line.size() - 1)

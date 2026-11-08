@@ -5,10 +5,11 @@
 #   tools/release.sh --build-only  build the macOS disk image and Windows zip into build/release/, publish nothing
 #   tools/release.sh --draft       create the release as a draft, to look over before publishing
 #
-# The version comes from application/config/version in project.godot; bump it there (and commit) before
-# releasing. The release is tagged v<version> at the current commit, which has to be pushed already.
-# Needs Godot 4.7 (found as $GODOT, ~/Downloads/Godot.app, /Applications/Godot.app or `godot` on the PATH)
-# and, to publish, the GitHub CLI (`gh`) logged in. Missing export templates are downloaded once.
+# The version comes from application/config/version in project.godot. Before releasing, bump it there, move
+# CHANGELOG.md's Unreleased notes under "## [<version>] - <date>" (they open the release notes), commit and push;
+# the release is tagged v<version> at the current commit. Needs Godot 4.7 (found as $GODOT, ~/Downloads/Godot.app,
+# /Applications/Godot.app or `godot` on the PATH) and, to publish, the GitHub CLI (`gh`) logged in. Missing
+# export templates are downloaded once.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -19,12 +20,27 @@ for arg in "$@"; do
 	case "$arg" in
 		--build-only) BUILD_ONLY=1 ;;
 		--draft) DRAFT=(--draft) ;;
-		-h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) echo "Unknown option: $arg (try --help)" >&2; exit 1 ;;
 	esac
 done
 
 fail() { echo "error: $*" >&2; exit 1; }
+
+# The body of CHANGELOG.md's "## [<version>]" section: everything up to the next "## " header or the end of
+# the file, with blank lines trimmed from both ends. Prints nothing if there is no such section.
+changelog_section() {
+	[[ -f CHANGELOG.md ]] || return 0
+	awk -v version="$1" '
+		/^## / { if (found) exit; found = index($0, "## [" version "]") == 1; next }
+		found && /^\[[^]]+\]: / { next }
+		found { lines[++n] = $0 }
+		END {
+			first = 1; while (first <= n && lines[first] ~ /^[[:space:]]*$/) first++
+			last = n; while (last >= first && lines[last] ~ /^[[:space:]]*$/) last--
+			for (i = first; i <= last; i++) print lines[i]
+		}' CHANGELOG.md
+}
 
 # --- Godot and its export templates ---
 
@@ -79,6 +95,8 @@ if (( ! BUILD_ONLY )); then
 	fi
 	COMMIT="$(git rev-parse HEAD)"
 	[[ -n "$(git branch -r --contains "$COMMIT")" ]] || fail "The current commit isn't pushed; push it first"
+	CHANGES="$(changelog_section "$VERSION")"
+	[[ -n "$CHANGES" ]] || fail "CHANGELOG.md has no notes under '## [$VERSION]'; move Unreleased to [$VERSION] - $(date +%Y-%m-%d) first"
 fi
 
 # --- Build ---
@@ -120,7 +138,10 @@ fi
 
 # --- Publish ---
 
+# The hand-written changelog notes, then the downloads; --generate-notes appends the merged pull requests.
 NOTES="$(cat <<EOF
+$CHANGES
+
 ## Download
 
 - **macOS** (Apple silicon and Intel, macOS 11+): \`$(basename "$MAC_DMG")\`. Open the disk image and drag *Normandy 1944* into Applications. It isn't notarized, so the first time right-click the app and choose **Open**.

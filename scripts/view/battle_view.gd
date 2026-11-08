@@ -171,7 +171,7 @@ var _move_visibility := {}
 var _floaters := []
 var _effects := []
 var _overlay_state := ""
-## Cursor height, XCOM-style: the floor the cursor aims at (0 ground, 1 the first floor up, ..., a building's
+## Cursor height: the floor the cursor aims at (0 ground, 1 the first floor up, ..., a building's
 ## roof at its storeys), set with Ctrl/Cmd + mouse wheel and starting at the selected soldier's floor. Only the
 ## building under the cursor is drawn cut open at that floor (its floors above hidden); every other building
 ## keeps its roof on (ALL_FLOORS). Picking treats every building as cut at the cursor's floor, so what is
@@ -3343,7 +3343,7 @@ func _draw_heading(c: CanvasItem, tile: Vector2i, dir: Vector2i, color: Color) -
 	_proj.lift = 0.0
 
 
-## Outlines the boundary of a set of tiles, like XCOM's move range border.
+## Outlines the boundary of a set of tiles (the move range's border).
 func _draw_region_border(c: CanvasItem, tiles: Dictionary, color: Color) -> void:
 	for p: Vector2i in tiles:
 		_draw_tile_border(c, p, tiles, color)

@@ -164,7 +164,7 @@ func _show_main() -> void:
 	box.add_child(footer)
 	for spec: Array in [["Quick test", _start_quick_test], ["Replays", _show_replays],
 			["Map editor", func() -> void: get_tree().change_scene_to_file("res://scenes/editor.tscn")],
-			["Settings", _show_settings], ["Quit", get_tree().quit]]:
+			["Settings", _show_settings], ["Credits", _show_credits], ["Quit", get_tree().quit]]:
 		var link := _button(footer, spec[0], spec[1])
 		link.flat = true
 		link.custom_minimum_size = Vector2(0, 32)
@@ -902,6 +902,56 @@ func _show_settings() -> void:
 		GameSettings.save_settings()
 		GameSettings.apply_window()
 		_show_settings())
+
+
+# --- Credits ---
+
+## The game's own copyright, Godot's MIT license and the notices of the third-party code built into the engine,
+## which the engine's license asks every shipped game to show.
+func _show_credits() -> void:
+	var box := _new_page(700)
+	_title(box, "Credits", 40)
+	var version: String = ProjectSettings.get_setting("application/config/version", "")
+	_text(box, "Normandy 1944" + (" " + version if version != "" else ""), Color.WHITE, 18)
+	_text(box, "© 2026 Visti Kløft, MIT License", MUTED, 14)
+	_section(box, "Made with Godot Engine")
+	_text(box, "godotengine.org", MUTED, 14)
+	_notices(box, Engine.get_license_text(), 200)
+	_section(box, "Third-party notices")
+	_text(box, "Godot Engine includes the following third-party code, under these licenses.", MUTED, 14, true)
+	_notices(box, _third_party_notices(), 360)
+	_gap(box, 12)
+	_button(box, "Back", _show_main, true)
+
+
+## A read-only, scrollable box of license text.
+func _notices(parent: Control, text: String, height: float) -> void:
+	var notices := TextEdit.new()
+	notices.text = text
+	notices.editable = false
+	notices.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	notices.custom_minimum_size = Vector2(0, height)
+	notices.add_theme_font_size_override("font_size", 12)
+	notices.add_theme_color_override("font_readonly_color", UITheme.PAPER)
+	parent.add_child(notices)
+
+
+## Each third-party component's copyright lines and license, then the full text of each license.
+static func _third_party_notices() -> String:
+	var lines := PackedStringArray()
+	for component: Dictionary in Engine.get_copyright_info():
+		lines.append(component["name"])
+		for part: Dictionary in component["parts"]:
+			for holder: String in part["copyright"]:
+				lines.append("  Copyright " + holder)
+			lines.append("  License: " + part["license"])
+		lines.append("")
+	var licenses := Engine.get_license_info()
+	for license: String in licenses:
+		lines.append("--- " + license + " ---")
+		lines.append(licenses[license])
+		lines.append("")
+	return "\n".join(lines)
 
 
 # --- Replays ---

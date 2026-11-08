@@ -93,13 +93,13 @@ const RULES := "Rules in brief: 2 actions per turn; a move within the unit's mob
 
 func instructions() -> String:
 	if host != null and host.agent_plays():
-		return "You are playing %s in %s, a turn-based squad tactics game (like XCOM) on a square grid, against an opponent. " % [battle.team_name(player_team()), battle.theatre().title] \
+		return "You are playing %s in %s, a turn-based squad tactics game on a square grid (two actions per soldier, cover and overwatch), against an opponent. " % [battle.team_name(player_team()), battle.theatre().title] \
 			+ "Loop until the battle ends: call wait_for_turn, which returns the battle state once it's your turn; weigh moves with get_unit_options (its filters find tiles in an objective, " \
 			+ "in cover from an enemy, or with a shot at a target) and preview (suggest_move gives the game's own AI opinion). " \
 			+ "Then give your orders with execute_command: send several at once as a commands list; it plays them in order and stops early if something unexpected happens " \
 			+ "(one of your units is shot at or hurt, or a new enemy comes into sight), so you can rethink. Set fast to skip the playback. " \
 			+ "End your turn with {\"cmd\": \"end_turn\"} (it also ends once no unit can act). " + RULES + (HEIGHT_RULES if battle.map.has_height() else "")
-	return "You are helping a player of Normandy 1944, a turn-based WW2 squad tactics game (like XCOM) on a square grid. " \
+	return "You are helping a player of Normandy 1944, a turn-based WW2 squad tactics game on a square grid (two actions per soldier, cover and overwatch). " \
 		+ "Call get_state first, then get_unit_options or preview to weigh moves, suggest_move for the game's own AI opinion, " \
 		+ "and propose_move to put your recommendation on the player's screen; the player decides whether to accept it. " + RULES + (HEIGHT_RULES if battle.map.has_height() else "")
 

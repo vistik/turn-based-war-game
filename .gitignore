@@ -6,6 +6,24 @@
 /build/
 /.claude/worktrees/
 
-# Your own music: anything in here joins the playlist, but stays out of git
+# Music tracks: not redistributable, kept local only. The game reads any
+# mp3/ogg/wav in music/ and falls back to music composed in code without them.
+/music/*.mp3
+/music/*.ogg
+/music/*.wav
+/music/*.mp3.import
+/music/*.ogg.import
+/music/*.wav.import
+
+# Outputs of the balance and preview commands in the README
+/results.csv
+/matchups.md
+/out.png
+
+# OS and log clutter
+.DS_Store
+*.log
+
+# Your own music: anything in here replaces the playlist, but stays out of git
 /local_music/*
 !/local_music/.gdignore

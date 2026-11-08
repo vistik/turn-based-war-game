@@ -1,0 +1,74 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GODOT_VERSION: 4.7.2-stable
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: ~/godot
+          key: godot-${{ env.GODOT_VERSION }}-linux-x86_64
+
+      - name: Download Godot ${{ env.GODOT_VERSION }}
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/godot
+          curl -fsSL --retry 3 -o /tmp/godot.zip \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip"
+          unzip -q /tmp/godot.zip -d ~/godot
+          mv ~/godot/Godot_v${GODOT_VERSION}_linux.x86_64 ~/godot/godot
+          chmod +x ~/godot/godot
+
+      - name: Godot version
+        run: ~/godot/godot --headless --version
+
+      # Builds .godot/ (class_name cache, imported resources) so the test scripts can resolve classes.
+      - name: Import project
+        run: ~/godot/godot --headless --path . --import
+
+      # Each suite prints "FAIL: ..." and quits with code 1 on a failed check, and ends with
+      # "N checks, 0 failures". A parse or script error can still exit 0 (the suite just stops or skips),
+      # so the log must also be free of script errors and end with the summary line.
+      - name: Run test suites
+        shell: bash
+        run: |
+          failed=0
+          for suite in run_tests advisor_tests terrain_tests theatre_tests height_tests; do
+            echo "::group::tests/${suite}.gd"
+            start=$SECONDS
+            set +e
+            ~/godot/godot --headless --path . -s "tests/${suite}.gd" 2>&1 | tee "/tmp/${suite}.log"
+            code=${PIPESTATUS[0]}
+            set -e
+            echo "::endgroup::"
+            errors=$(grep -cE '^(SCRIPT ERROR|Parse Error)|^FAIL' "/tmp/${suite}.log" || true)
+            echo "tests/${suite}.gd: exit ${code}, ${errors} failures/script errors, $((SECONDS - start))s"
+            summary=0
+            grep -qE '^[0-9]+ checks, 0 failures$' "/tmp/${suite}.log" && summary=1
+            if [ "$code" -ne 0 ] || [ "$errors" -ne 0 ] || [ "$summary" -ne 1 ]; then
+              echo "::error title=tests/${suite}.gd failed::exit code ${code}, ${errors} failures or script errors, summary line found: ${summary}"
+              failed=1
+            fi
+          done
+          exit $failed

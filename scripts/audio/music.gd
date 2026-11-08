@@ -4,6 +4,10 @@ extends Node
 ## The recorded tracks in res://music/ (and any the player adds to user://music/) play as one playlist that
 ## loops round all of them, in name order, carrying on through menus and battles alike.
 ##
+## Anything dropped into the git-ignored local_music/ folder (in the project, or next to an exported game)
+## replaces that playlist: when it holds any tracks, only those play. It is read straight from disk,
+## subfolders included, and holds a .gdignore so Godot never imports or exports it.
+##
 ## Without any tracks it falls back to the themes composed in code (MusicComposer): the theatre's battle
 ## theme in a battle and its menu theme everywhere else, crossfading when that changes.
 ##
@@ -12,6 +16,8 @@ extends Node
 const FADE := 1.5
 const BATTLE_SCENE := "res://scenes/battle.tscn"
 const FOLDERS := ["res://music/", "user://music/"]
+## Git-ignored folder for the player's own music, loaded raw from disk.
+const LOCAL_FOLDER := "local_music"
 const EXTENSIONS := ["mp3", "ogg", "wav"]
 
 ## The theatre the main menu has picked; its menu theme plays outside battles (composed themes only).
@@ -43,8 +49,11 @@ func _ready() -> void:
 
 
 ## The recorded tracks in the music folders, in name order (as res:// or user:// paths).
+## Music in local_music/ takes over: when it has any tracks, only those play.
 static func find_tracks() -> Array[String]:
-	var found: Array[String] = []
+	var found := _local_tracks()
+	if not found.is_empty():
+		return found
 	for folder: String in FOLDERS:
 		if not DirAccess.dir_exists_absolute(folder):
 			continue
@@ -58,6 +67,35 @@ static func find_tracks() -> Array[String]:
 		for name: String in names:
 			found.append(folder + name)
 	return found
+
+
+## The tracks in local_music/: the project's copy when running from source, the one beside the executable
+## in an exported game. Subfolders are searched too, in name order.
+static func _local_tracks() -> Array[String]:
+	var folder := ProjectSettings.globalize_path("res://" + LOCAL_FOLDER)
+	if OS.has_feature("template"):
+		var base := OS.get_executable_path().get_base_dir()
+		# On macOS the executable sits in <name>.app/Contents/MacOS/; look beside the .app instead.
+		if base.ends_with(".app/Contents/MacOS"):
+			base = base.get_base_dir().get_base_dir().get_base_dir()
+		folder = base.path_join(LOCAL_FOLDER)
+	var found: Array[String] = []
+	_scan(folder, found)
+	return found
+
+
+static func _scan(folder: String, found: Array[String]) -> void:
+	if not DirAccess.dir_exists_absolute(folder):
+		return
+	var files := Array(DirAccess.get_files_at(folder))
+	files.sort()
+	for file: String in files:
+		if EXTENSIONS.has(file.get_extension().to_lower()):
+			found.append(folder.path_join(file))
+	var dirs := Array(DirAccess.get_directories_at(folder))
+	dirs.sort()
+	for dir: String in dirs:
+		_scan(folder.path_join(dir), found)
 
 
 func _process(delta: float) -> void:
@@ -106,15 +144,19 @@ func _load(path: String) -> AudioStream:
 	if path.begins_with("res://"):
 		stream = load(path) as AudioStream
 	else:
-		match path.get_extension():
+		match path.get_extension().to_lower():
 			"mp3":
 				stream = AudioStreamMP3.load_from_file(path)
 			"ogg":
 				stream = AudioStreamOggVorbis.load_from_file(path)
+			"wav":
+				stream = AudioStreamWAV.load_from_file(path)
 	if stream is AudioStreamMP3:
 		(stream as AudioStreamMP3).loop = false
 	elif stream is AudioStreamOggVorbis:
 		(stream as AudioStreamOggVorbis).loop = false
+	elif stream is AudioStreamWAV:
+		(stream as AudioStreamWAV).loop_mode = AudioStreamWAV.LOOP_DISABLED
 	_cache[path] = stream
 	return stream
 

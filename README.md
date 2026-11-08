@@ -48,6 +48,9 @@ and ideas for later in [docs/IDEAS.md](docs/IDEAS.md).
 **Music**
 - The tracks in `music/` (MP3, OGG or WAV) play as one playlist, in name order, looping round all of them
   through menus and battles. Tracks added to the save folder's `music/` join the playlist.
+- Drop any of your own MP3, OGG or WAV files (subfolders too) into `local_music/` in the project — or a
+  `local_music/` folder next to the exported game (beside the `.app` on macOS) — and only those play, replacing the built-in tracks. The
+  folder is git-ignored and Godot never imports or exports it, so your music stays on your machine.
 - Turn it off with M in battle, or set the volume in Settings.
 - With no tracks at all, the game falls back to themes composed in code for each theatre (a menu and a battle
   theme each).

@@ -5,3 +5,7 @@
 # Exported builds
 /build/
 /.claude/worktrees/
+
+# Your own music: anything in here joins the playlist, but stays out of git
+/local_music/*
+!/local_music/.gdignore

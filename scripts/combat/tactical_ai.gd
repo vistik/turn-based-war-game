@@ -183,10 +183,15 @@ var _round := -1
 var _aggression := 0.0
 ## 0 while level or ahead on points, growing as the enemy pulls ahead: objectives then outweigh caution.
 var _urgency := 0.0
-## Per-act cache of tile-to-tile sight, keyed by Vector4i(from, to).
+## Cache of tile-to-tile sight, keyed by Vector4i(from, to); sight depends only on the map, so it is kept
+## from one decision to the next until the map changes (its revision moves on: walls fall, smoke drifts...).
 var _sight_cache := {}
+var _sight_revision := -1
 ## Per decision: where each seen enemy is likely to step next (_likely_steps), by unit id.
 var _step_cache := {}
+## While a decision is being worked out, the enemies we see (_seen_enemies), so scoring thousands of shots
+## doesn't look them up again for each one; null otherwise.
+var _seen_now: Variant = null
 ## The floor the unit being judged would stand on at the tile being judged (-1: its own floor at its own
 ## tile, else the ground).
 var _at_level := -1
@@ -265,7 +270,9 @@ func act() -> Array:
 func decide() -> Dictionary:
 	if battle.winner != -1 or battle.current_team != team:
 		return {"cmd": "end_turn"}
-	_sight_cache.clear()
+	if _sight_revision != battle.map.revision:
+		_sight_cache.clear()
+		_sight_revision = battle.map.revision
 	_step_cache.clear()
 	_plan_goals.clear()
 	_remember()
@@ -289,12 +296,14 @@ func decide() -> Dictionary:
 	if _searching and seen.is_empty() and _last_seen.is_empty():
 		_search_goal = _fog_center()
 	var best := {}
+	_seen_now = seen
 	for u in battle.alive_units(team):
 		if u.actions <= 0:
 			continue
 		var plan := _best_plan(u, seen)
 		if not plan.is_empty() and (best.is_empty() or plan["value"] > best["value"]):
 			best = plan
+	_seen_now = null
 	if best.is_empty():
 		return {"cmd": "end_turn"}
 	return _command(best)
@@ -783,7 +792,7 @@ func _shot_value(u: Unit, from: Vector2i, target: Unit, steady := false) -> floa
 		if battle.map.has_cover(target.pos, target.level):
 			value += 6.0
 	if u.weapon.anti_tank or u.weapon.blast_radius > 0.0:
-		value += _collapse_bonus(target.pos, _seen_enemies())
+		value += _collapse_bonus(target.pos, _seen_now if _seen_now != null else _seen_enemies())
 	if u.weapon.heavy:
 		for ally in battle.alive_units(target.team):
 			if ally != target and Vector2(ally.pos).distance_to(Vector2(target.pos)) <= CombatRules.MG_AREA_RADIUS:

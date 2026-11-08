@@ -29,7 +29,8 @@ What changed in each release of Normandy 1944, written for players. The format f
   would bring into sight. Steps of a planned move that a visible enemy would spot turn orange, with an eye
   where he would first see you.
 - **Quick test battle**: a small map with both sides already in a firing line, in cover and with a target on
-  the first turn.
+  the first turn. Its page lets you pick the map kind and size, how the sides start (firing line, in contact
+  or spread out) and who plays (you vs the AI, AI vs AI or hotseat).
 - **Music**, composed in code, with an on/off switch on the main menu, M in battle and a volume setting. You
   can add your own MP3, OGG or WAV tracks to the `music` folder in the game's save folder.
 - **Credits screen** on the main menu, with the game's license and those of Godot and the code it is built on.
@@ -39,6 +40,8 @@ What changed in each release of Normandy 1944, written for players. The format f
   hold for the turn, and the wheel zooms.
 
 ### Changed
+- **The AI thinks faster when many enemies are in sight**, up to twice as fast in big battles at close
+  quarters, so the game stalls far less between its moves. It still makes exactly the same moves.
 - **A simpler main menu.** One big Play button starts a battle against the AI on a fresh random map. Saved
   games sit just below it as Continue rows. Normandy is the only theatre on the menu for now.
 - **Two players is now an online campaign.** The host picks the number of maps (1 to 5), starting supply,

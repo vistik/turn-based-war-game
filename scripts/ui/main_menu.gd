@@ -7,8 +7,14 @@ const BAD := Color("ff7a6a")
 const GOOD := Color("8fe08a")
 ## [label, size] of random maps; bigger ones bring bigger forces.
 const RANDOM_MAPS := [["Small", 32], ["Standard", 44], ["Large", 64], ["Huge", 84]]
-## Side length of the quick test battle's map.
-const QUICK_TEST_SIZE := 32
+## [label, quick test setup flag, deployment flank] for how a quick test's two sides start.
+const QUICK_TEST_STARTS := [
+	["Firing line (everyone has a target)", true, "contact"],
+	["In contact (mid-map, as deployed)", false, "contact"],
+	["Spread out (a normal battle's start)", false, "wide"],
+]
+## Indices into SKIRMISH_MODES a quick test can be played in.
+const QUICK_TEST_MODES := [0, 2, 1]
 ## Side length of the map Play starts on (the "Standard" random map).
 const PLAY_SIZE := 44
 ## [label, flank, posture] for a skirmish side's deployment; "" flank keeps the map's usual spawns.
@@ -54,6 +60,9 @@ static var _last_mode := 0
 ## Per side, the AI's game plan picked (a key of TacticalAI.STRATEGIES, "" for random), kept while the game runs.
 static var _last_plans := ["", ""]
 static var _last_port := Net.DEFAULT_PORT
+## The quick test options picked last ({"map": index into the quick test's map list, "size": index into
+## RANDOM_MAPS, "start": index into QUICK_TEST_STARTS, "mode": index into QUICK_TEST_MODES}), kept while the game runs.
+static var _last_quick := {"map": 0, "size": 0, "start": 0, "mode": 0}
 ## The orders being written on the two-player campaign's orders page.
 var _order_side := 0
 var _order_counts := {}
@@ -162,7 +171,7 @@ func _show_main() -> void:
 	footer.alignment = BoxContainer.ALIGNMENT_CENTER
 	footer.add_theme_constant_override("separation", 4)
 	box.add_child(footer)
-	for spec: Array in [["Quick test", _start_quick_test], ["Replays", _show_replays],
+	for spec: Array in [["Quick test", _show_quick_test], ["Replays", _show_replays],
 			["Map editor", func() -> void: get_tree().change_scene_to_file("res://scenes/editor.tscn")],
 			["Settings", _show_settings], ["Credits", _show_credits], ["Quit", get_tree().quit]]:
 		var link := _button(footer, spec[0], spec[1])
@@ -366,6 +375,70 @@ func _show_skirmish() -> void:
 	box.add_child(buttons)
 	_button(buttons, "Start", func() -> void: _start_skirmish(opponent.selected), true).size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_button(buttons, "Back", _show_main)
+
+
+## Quick test: a battle that starts with the shooting, for trying things out. Small, random and against the AI
+## unless changed here; Start (or Enter) goes straight in. The choices are kept for the next quick test.
+func _show_quick_test() -> void:
+	var theatre := _theatre()
+	var box := _new_page(460)
+	_title(box, "Quick test", 40)
+	# [label, setup "map", style]: random maps of any kind or a chosen one, then the hand-made map if any.
+	var maps := [["Random: any kind", "random", ""]]
+	for style: Dictionary in theatre.map_styles():
+		maps.append(["Random: " + style["title"], "random", style["id"]])
+	if not theatre.village_layout().is_empty():
+		maps.append(["%s (48x48)" % theatre.village_title(), "village", ""])
+	var map_choice := _quick_choice(box, "Map", maps.map(func(m: Array) -> String: return m[0]), "map")
+	var sizes := RANDOM_MAPS.map(func(r: Array) -> String:
+		return "%s, %dx%d (%s)" % [r[0], r[1], r[1], _force_size(theatre.skirmish_forces(r[1]))])
+	var size_choice := _quick_choice(box, "Size", sizes, "size")
+	var start_choice := _quick_choice(box, "Start", QUICK_TEST_STARTS.map(func(s: Array) -> String: return s[0]), "start")
+	var mode_choice := _quick_choice(box, "Mode", QUICK_TEST_MODES.map(func(m: int) -> String: return SKIRMISH_MODES[m][0]), "mode")
+	var hint := _text(box, "", MUTED, 13, true)
+	var describe := func() -> void:
+		size_choice.disabled = maps[map_choice.selected][1] != "random"
+		var lines := PackedStringArray()
+		match _last_quick["start"]:
+			0: lines.append("Both sides set out in a line across the middle, in cover where there is any, every soldier with an enemy to fire at. Both open with all their actions.")
+			1: lines.append("Both sides deployed a few tiles apart mid-map, where the deployment puts them; some may have nothing to shoot at yet.")
+			_: lines.append("Each side spread out along its own edge, as in a normal battle.")
+		var hint_text: String = SKIRMISH_MODE_HINTS[QUICK_TEST_MODES[_last_quick["mode"]]]
+		lines.append(hint_text % theatre.team_name(0) if hint_text.contains("%s") else hint_text)
+		hint.text = "\n".join(lines)
+	for choice: OptionButton in [map_choice, size_choice, start_choice, mode_choice]:
+		choice.item_selected.connect(describe.unbind(1))
+	describe.call()
+	_gap(box, 8)
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 10)
+	box.add_child(buttons)
+	var start := _button(buttons, "Start", func() -> void: _start_quick_test(maps[map_choice.selected]), true)
+	start.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	start.call_deferred("grab_focus")
+	_button(buttons, "Back", _show_main)
+
+
+## An option row on the quick test page whose pick is kept in _last_quick[key].
+func _quick_choice(box: Control, label: String, items: Array, key: String) -> OptionButton:
+	var choice := OptionButton.new()
+	for item: String in items:
+		choice.add_item(item)
+	choice.selected = clampi(_last_quick[key], 0, items.size() - 1)
+	_last_quick[key] = choice.selected
+	choice.item_selected.connect(func(index: int) -> void: _last_quick[key] = index)
+	_field(box, label, choice)
+	return choice
+
+
+## Starts a quick test on `map` ([label, setup "map", style]) with the options on the quick test page.
+func _start_quick_test(map: Array) -> void:
+	var start: Array = QUICK_TEST_STARTS[_last_quick["start"]]
+	var deployment := {"flank": start[2], "posture": "normal"}
+	var mode: Array = SKIRMISH_MODES[QUICK_TEST_MODES[_last_quick["mode"]]]
+	_start_vs_ai({"theatre": _theatre_id, "map": map[1], "style": map[2], "size": RANDOM_MAPS[_last_quick["size"]][1],
+			"seed": randi() % 1000000000 + 1, "deployment": [deployment, deployment], "quick_test": start[1]},
+			"Quick test: ", [mode[1], mode[2]])
 
 
 ## Two players: the online campaign. Host one with your settings, join a friend's, or continue the saved one.
@@ -620,25 +693,18 @@ func _chosen_deployments() -> Array:
 	return result
 
 
-## A small random map with both sides already face to face mid-map, against the AI: the fastest way to try
-## things out.
 ## Play, the one-click game: you against the AI on a fresh standard-size random map of any kind, a fight for
 ## the objectives, both sides spread out, the AI on a random game plan.
 func _start_play() -> void:
 	_start_vs_ai({"theatre": _theatre_id, "map": "random", "size": PLAY_SIZE, "seed": randi() % 1000000000 + 1}, "")
 
 
-func _start_quick_test() -> void:
-	var contact := {"flank": "contact", "posture": "normal"}
-	_start_vs_ai({"theatre": _theatre_id, "map": "random", "size": QUICK_TEST_SIZE, "seed": randi() % 1000000000 + 1,
-			"deployment": [contact, contact], "quick_test": true}, "Quick test: ")
-
-
-## Starts a skirmish (GameSession.build_skirmish setup) with the player as team 0 against the AI.
-func _start_vs_ai(setup: Dictionary, title_prefix: String) -> void:
+## Starts a skirmish (GameSession.build_skirmish setup) with the player as team 0 against the AI, or with the
+## sides played by the AI as `ai` says.
+func _start_vs_ai(setup: Dictionary, title_prefix: String, ai := [false, true]) -> void:
 	var built := GameSession.build_skirmish(setup)
 	GameSession.war = null
-	GameSession.start_battle(built[0], [false, true], title_prefix + built[1])
+	GameSession.start_battle(built[0], ai, title_prefix + built[1])
 	GameSession.agent_team = -1
 	GameSession.ai_plans = ["", ""]
 	get_tree().change_scene_to_file(GameSession.BATTLE_SCENE)

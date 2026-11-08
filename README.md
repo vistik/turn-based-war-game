@@ -26,7 +26,8 @@ Get the latest build from the [Releases page](https://github.com/vistik/turn-bas
 ## Features
 
 - **One click to play**: Play starts a battle against the AI on a fresh random map; Quick test drops both sides
-  into a firing line on a small map.
+  into a firing line on a small map, or on the map kind and size you pick, played vs the AI, AI vs AI or
+  hotseat.
 - **Skirmish**: the hand-made Normandy village or a random map (bocage crossroads, hedgerow hamlets, a shelled
   market town, a forest edge) in four sizes, with a minimap of the very map you'll play. Play the AI, hotseat,
   or watch AI vs AI.

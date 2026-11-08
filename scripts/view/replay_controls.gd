@@ -37,6 +37,7 @@ var _until_turn := -1
 var _play_button: Button
 var _view_buttons: Array[Button] = []
 var _status: Label
+var _report: BattleReportPanel
 
 
 func _init(p_view: Node2D, p_replay: Replay) -> void:
@@ -120,6 +121,14 @@ func restart() -> void:
 	get_tree().reload_current_scene()
 
 
+## The after-action report of the whole recording (shots, odds, luck, cover, losses), over the battle.
+func show_report() -> void:
+	if _report != null and is_instance_valid(_report):
+		_report.queue_free()
+		return
+	_report = BattleReportPanel.open(view._overlay.get_parent(), replay, [view._team_color(0), view._team_color(1)])
+
+
 func set_view(team: int) -> void:
 	view_team = team
 	_last_view = team
@@ -152,6 +161,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			next_turn()
 		KEY_R:
 			restart()
+		KEY_T:
+			show_report()
 		_:
 			for spec: Array in VIEWS:
 				if event.keycode == spec[2]:
@@ -201,6 +212,7 @@ func _build_ui() -> void:
 	_play_button.custom_minimum_size = Vector2(70, 0)
 	_button(row, "Next action", "Play the next order and pause (N)", step)
 	_button(row, "Next turn", "Skip to the start of the next turn (Enter)", next_turn)
+	_button(row, "Report", "The after-action report: shots, odds, luck, cover and losses (T)", show_report)
 	row.add_child(VSeparator.new())
 	var group := ButtonGroup.new()
 	for spec: Array in VIEWS:

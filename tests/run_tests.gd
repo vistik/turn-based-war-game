@@ -493,7 +493,7 @@ func test_hay_and_crates_burn() -> void:
 	var caught := 0
 	for seed in 10:
 		var units: Array[Unit] = [Unit.create(0, "U0", "Rifleman", 0, Vector2i(1, 1)), Unit.create(1, "U1", "Rifleman", 1, Vector2i(14, 14))]
-		var b := Battle.new(TacticalMap.new(16, 16), units, seed)
+		var b := Battle.new(TacticalMap.new(16, 16), units, seed + 1)
 		b.start()
 		b.map.set_object(Vector2i(7, 7), Cover.HALF, "hay")
 		b.map.set_terrain(Vector2i(6, 7), TacticalMap.Terrain.ROAD)
@@ -1778,6 +1778,75 @@ func test_replay_records_and_plays_back() -> void:
 	DirAccess.remove_absolute(Replay.folder())
 	DirAccess.remove_absolute(GameSession.save_dir)
 	GameSession.save_dir = saved_dir
+
+
+func test_battle_report_tallies_the_replay() -> void:
+	var battle: Battle = GameSession.build_skirmish({"map": "random", "size": 44, "seed": 321})[0]
+	battle.max_rounds = 6
+	var replay := Replay.begin(battle, "Report test", "skirmish", ["AI", "AI"])
+	replay.attach(battle)
+	battle.start()
+	play_ai(battle)
+	replay.finish(battle)
+	var report := BattleReport.from_replay(replay)
+	check_eq(report.error, "", "the report plays the replay through")
+	check_eq(report.winner, battle.winner, "the report knows who won")
+	var orders := 0
+	for command in replay.commands:
+		if command["cmd"] != "end_turn":
+			orders += 1
+	check_eq(report.sides[0]["orders"] + report.sides[1]["orders"], orders, "every order is counted for its side")
+	var losses := 0
+	for u in battle.units:
+		if not u.is_alive():
+			losses += 1
+	check_eq(report.sides[0]["losses"] + report.sides[1]["losses"], losses, "every death is counted")
+	for team in 2:
+		var side: Dictionary = report.sides[team]
+		check_eq(side["hits"] + side["grazes"] + side["misses"], side["shots"], "every shot hit, grazed or missed")
+		check(side["crits"] <= side["hits"], "crits are hits")
+		check(side["expected_hits"] <= side["shots"], "expected hits can't exceed the shots")
+		check(side["at_full"] + side["at_half"] <= side["aimed"], "cover is counted on aimed shots")
+	check(report.sides[0]["shots"] + report.sides[1]["shots"] > 0, "the AI battle has shots in it")
+	check(report.rows().size() > 10, "the report has its table")
+	var dealt := 0
+	var kills := 0
+	for team in 2:
+		dealt += report.sides[team]["damage_dealt"] + report.sides[team]["friendly_damage"] + report.sides[team]["damage_other"]
+		kills += report.sides[team]["kills"]
+	check_eq(dealt, report.sides[0]["damage_taken"] + report.sides[1]["damage_taken"], "all damage taken was dealt by someone or something")
+	check(kills <= losses, "no more kills than losses")
+	var soldiers := report.unit_rows(0).size() + report.unit_rows(1).size()
+	check_eq(soldiers, battle.units.size(), "every soldier has a row")
+
+
+## Luck from hand-made dice: hits against the odds.
+func test_battle_report_counts_luck() -> void:
+	var battle := make_battle([["Rifleman", 0, Vector2i(2, 2)], ["Rifleman", 1, Vector2i(9, 2)]])
+	var report := BattleReport.new()
+	for i in 10:
+		# The Allies hit all ten 50% shots, Germany hits half of its own.
+		report.tally(battle, {}, [{"type": "shot", "shooter": 0, "target": 1, "result": "hit", "chance": 50, "crit_chance": 10, "reaction": false, "cover": Cover.HALF, "flanked": false}])
+		report.tally(battle, {}, [{"type": "shot", "shooter": 1, "target": 0, "result": "hit" if i % 2 == 0 else "miss", "chance": 50, "crit_chance": 10, "reaction": false, "cover": Cover.NONE, "flanked": true}])
+	check_eq(report.luck(0), 5.0, "five hits beyond the odds")
+	check_eq(report.luck(1), 0.0, "right on the odds")
+	check_eq(report.avg_chance(0), 50.0, "the average hit chance")
+	check_eq(report.hit_rate(1), 50.0, "the share of shots that hit")
+	check_eq(report.sides[0]["at_half"], 10, "shots at half cover are counted")
+	check_eq(report.sides[1]["flanking"], 10, "flanking shots are counted")
+	check(is_equal_approx(report.sides[0]["expected_crits"], 0.5), "expected crits: hit chance times crit chance")
+	report.tally(battle, {"cmd": "move", "unit": 0}, [], 0)
+	check_eq(report.sides[0]["order_kinds"].get("Moves", 0), 1, "orders are counted by kind")
+	check_eq(report.sides[0]["bands"][1]["shots"], 10, "50% shots fall in the fair-odds band")
+	check_eq(report.units[0]["shots"], 10, "each soldier's shots are counted")
+	# Damage is credited to who dealt it, and the kill to who hurt the man last.
+	report.tally(battle, {}, [{"type": "damage", "unit": 1, "amount": 4, "by": 0}, {"type": "death", "unit": 1}])
+	report.tally(battle, {}, [{"type": "damage", "unit": 0, "amount": 2, "by": -1}])
+	check_eq(report.sides[0]["damage_dealt"], 4, "damage dealt by the side")
+	check_eq(report.sides[0]["kills"], 1, "the kill goes to the shooter's side")
+	check_eq(report.units[0]["kills"], 1, "and to the shooter")
+	check_eq(report.sides[1]["losses"], 1, "the loss to the other side")
+	check_eq(report.sides[0]["damage_other"], 2, "damage nobody dealt is kept apart")
 
 
 func test_saved_battles_keep_their_replay() -> void:

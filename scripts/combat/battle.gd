@@ -8,7 +8,10 @@ extends RefCounted
 ## wall or a collapse; it fills its tiles with smoke),
 ## and in Vietnam: tunnel, tunnels_spotted, tunnel_collapsed, trap_laid, napalm, kill_points; in Afghanistan
 ## and Iraq: ied (an IED set off by the bomb maker; one stepped on is a "mine" event of kind "ied").
-## A "shot" that went astray carries "stray" (the tile it ended up on) and, if it hit someone, "stray_unit".
+## A "shot" carries its odds: "chance" (hit, crits included), "crit_chance" (of a hit being a crit) and
+## "graze_chance", plus the target's "cover" and whether it was "flanked". One that went astray carries "stray"
+## (the tile it ended up on) and, if it hit someone, "stray_unit". A "damage" event names who dealt it ("by", -1 for
+## fire, collapses, mines and the like).
 ##
 ## Every command can also be given as data through execute(), which is how AI moves, saved replays
 ## and the online opponent's moves are applied: {"cmd": "move", "unit": id, "tile": Vector2i}, etc.
@@ -2333,7 +2336,8 @@ func _fire(shooter: Unit, target: Unit, reaction: bool, steady := false) -> Arra
 		result = "graze"
 	var events: Array = [{
 		"type": "shot", "shooter": shooter.id, "target": target.id,
-		"result": result, "chance": odds["hit"], "reaction": reaction,
+		"result": result, "chance": odds["hit"], "crit_chance": odds["crit"], "graze_chance": odds["graze"],
+		"cover": odds["cover"], "flanked": odds["flanked"], "reaction": reaction,
 	}]
 	var weapon := shooter.weapon
 	# What the round does to the target, shown after the blast it sets off (the dice are rolled in this order).
@@ -2427,7 +2431,8 @@ func _damage(target: Unit, amount: int, shred: int, attacker: Unit = null) -> Ar
 	target.hp = maxi(0, target.hp - dealt)
 	if dealt > 0 and target.is_alive():
 		target.wounded_turns = Unit.WOUND_TURNS
-	var events: Array = [{"type": "damage", "unit": target.id, "amount": dealt, "absorbed": absorbed, "hp": target.hp, "wounded": target.is_wounded()}]
+	var events: Array = [{"type": "damage", "unit": target.id, "amount": dealt, "absorbed": absorbed, "hp": target.hp, "wounded": target.is_wounded(),
+			"by": attacker.id if attacker != null else -1}]
 	if not target.is_alive():
 		target.overwatch = false
 		target.actions = 0

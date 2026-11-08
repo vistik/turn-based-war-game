@@ -116,6 +116,10 @@ order. The save folder is `~/Library/Application Support/Godot/app_userdata/Norm
 `%APPDATA%\Godot\app_userdata\Normandy 1944` on Windows. Without any tracks the game plays themes composed in
 code. Press M in battle to turn the music off, or set the volume in Settings.
 
+To play only your own music, put it in a `local_music/` folder (subfolders too): in the project when running
+from source, or beside the exported game (beside the `.app` on macOS). When that folder holds any tracks, only
+those play. It is git-ignored, and Godot never imports or exports it.
+
 ## Building from source
 
 You need [Godot 4.7](https://godotengine.org) (`Godot` below means its binary, e.g.

@@ -23,3 +23,7 @@
 # OS and log clutter
 .DS_Store
 *.log
+
+# Your own music: anything in here replaces the playlist, but stays out of git
+/local_music/*
+!/local_music/.gdignore

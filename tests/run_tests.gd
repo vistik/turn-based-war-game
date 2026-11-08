@@ -2256,6 +2256,18 @@ func test_overwatch_holds_fire_on_targets_it_cannot_hurt() -> void:
 	check_eq(events_of(events, "shot").size(), 1, "but fires at the rifleman")
 
 
+func test_quick_test_firing_line_on_other_maps() -> void:
+	# The quick test page can pick the map kind and size; the line must still give everyone a target.
+	var contact := {"flank": "contact", "posture": "normal"}
+	for setup: Dictionary in [{"theatre": "normandy", "map": "village"}, {"theatre": "modern", "map": "random", "size": 44, "style": "town"}]:
+		setup.merge({"seed": 99, "deployment": [contact, contact], "quick_test": true})
+		var battle: Battle = GameSession.build_skirmish(setup)[0]
+		for u in battle.units:
+			check(BattleFactory.opening_targets(battle, u) > 0, "%s %s: the %s has something to fire at" % [setup["theatre"], setup["map"], u.role])
+		var xs := battle.alive_units(0).map(func(u: Unit) -> int: return u.pos.x)
+		check(xs.max() < battle.map.width / 2, "%s %s: the first side keeps to its half" % [setup["theatre"], setup["map"]])
+
+
 func test_quick_test_battle_starts_in_contact() -> void:
 	var contact := {"flank": "contact", "posture": "normal"}
 	for theatre: String in ["normandy", "vietnam", "modern"]:

@@ -6,6 +6,11 @@ What changed in each release of Normandy 1944, written for players. The format f
 ## [Unreleased]
 
 ### Added
+- **After-action report.** The game-over screen and the replay controls (T) show both sides' orders, shots,
+  average hit chance, hits and crits against the hits and crits the odds promised (also split into long, fair
+  and good odds), how often they shot at cover or caught the enemy on the flank, damage dealt and taken, kills,
+  friendly fire, healing, times pinned, panics and tiles moved, plus a tab with every soldier's own numbers:
+  the numbers to judge whether the dice or the play decided it.
 - **High ground.** Maps have hills, grassy banks you can climb and cliffs nobody can, and buildings have
   several floors reached by stairs. Height gives better aim, sight and cover. The mouse wheel with Ctrl/Cmd
   (or Page Up / Page Down) moves the cursor up and down a floor, and buildings in the way turn see-through.

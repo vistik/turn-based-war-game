@@ -45,6 +45,11 @@ Get the latest build from the [Releases page](https://github.com/vistik/turn-bas
 - A fair AI with a game plan per battle (a flank hook, a pincer, an ambush, an all-out push and more), and
   **Suggest a move** (H), where the same AI advises you.
 - Replays of every battle, with the fog of war switchable between either side's view and the whole map.
+- An after-action report on the game-over screen and in every replay: per side, the orders given, shots taken,
+  average hit chance, hits and crits against what the odds promised (overall and at long, fair and good odds),
+  shots at cover and on the flank, damage dealt and taken, kills, healing, morale and movement; and per soldier,
+  shots, hits, odds, damage, kills and how he ended. The raw numbers to judge whether a battle was won on luck
+  or on play.
 - A map and scenario editor: terrain, walls, height and storeys, units and objectives.
 - An optional agent link that lets an AI agent such as Claude advise you, or play a side in a skirmish.
 
@@ -71,8 +76,8 @@ Every rule in detail: [docs/RULES.md](docs/RULES.md).
 | + / - | Playback speed |
 | M | Music on / off |
 
-While watching a replay: Space play / pause, N next action, Enter next turn, R restart, 1 / 2 / 3 the Allies'
-view, Germany's view, the whole map. The map editor lists its own keys in its panel.
+While watching a replay: Space play / pause, N next action, Enter next turn, R restart, T the after-action
+report, 1 / 2 / 3 the Allies' view, Germany's view, the whole map. The map editor lists its own keys in its panel.
 
 ## Online play
 
